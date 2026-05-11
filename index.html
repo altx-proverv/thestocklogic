@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Stock Logic — Algo-Powered Trade Intelligence</title>
+<meta name="description" content="Daily algo-generated trade signals for NSE stocks. Educational content only. Not SEBI registered advice.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:      #080c10;
+  --s1:      #0d1420;
+  --s2:      #121b2a;
+  --border:  rgba(56,189,248,0.1);
+  --border2: rgba(255,255,255,0.06);
+  --sky:     #38bdf8;
+  --sky2:    rgba(56,189,248,0.12);
+  --green:   #22d3a0;
+  --green2:  rgba(34,211,160,0.1);
+  --red:     #f43f5e;
+  --red2:    rgba(244,63,94,0.1);
+  --amber:   #fbbf24;
+  --purple:  #a78bfa;
+  --white:   #e2eeff;
+  --muted:   rgba(226,238,255,0.4);
+  --muted2:  rgba(226,238,255,0.15);
+  --font:    'Syne', sans-serif;
+  --mono:    'JetBrains Mono', monospace;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--white);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(56,189,248,0.012) 2px, rgba(56,189,248,0.012) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── NAV ── */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(8,12,16,0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-logo {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  background: linear-gradient(135deg, var(--sky), var(--green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  font-size: 12px;
+  font-family: var(--mono);
+  letter-spacing: 1px;
+}
+
+.nav-links a {
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.nav-links a:hover { color: var(--white); }
+
+.nav-chip {
+  background: var(--sky2);
+  border: 1px solid rgba(56,189,248,0.25);
+  color: var(--sky);
+  padding: 4px 12px;
+  font-size: 11px;
+  font-family: var(--mono);
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* ── HERO ── */
+.hero {
+  padding: 64px 32px 48px;
+  text-align: center;
+  position: relative;
+  border-bottom: 1px solid var(--border);
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(56,189,248,0.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-eyebrow {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 4px;
+  color: var(--sky);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.hero-eyebrow::before, .hero-eyebrow::after {
+  content: '';
+  width: 32px; height: 1px;
+  background: var(--sky);
+  opacity: 0.5;
+}
+
+.hero h1 {
+  font-size: clamp(32px, 5vw, 56px);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -1px;
+  margin-bottom: 16px;
+}
+
+.hero h1 span { color: var(--sky); }
+
+.hero-sub {
+  font-size: 15px;
+  color: var(--muted);
+  max-width: 480px;
+  margin: 0 auto 32px;
+  line-height: 1.7;
+}
+
+.hero-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--muted2);
+}
+
+/* ── MARKET CONTEXT BAR ── */
+.mkt-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mkt-bar::-webkit-scrollbar { display: none; }
+
+.mkt-item {
+  padding: 10px 20px;
+  border-right: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mkt-label { color: var(--muted); margin-right: 6px; }
+.mkt-val { font-weight: 600; }
+.mkt-bull { color: var(--green); }
+.mkt-bear { color: var(--red); }
+.mkt-side { color: var(--amber); }
+.mkt-neu  { color: var(--white); }
+
+/* ── MAIN CONTENT ── */
+.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+.section { padding: 36px 0; }
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border2);
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+/* ── SIGNAL CARDS ── */
+.signals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.signal-card {
+  background: var(--s1);
+  border: 1px solid var(--border);
+  padding: 0;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.signal-card:hover { border-color: rgba(56,189,248,0.3); }
+
+.sc-top {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border2);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.sc-sym {
+  font-size: 17px;
+  font-weight: 800;
+  font-family: var(--mono);
+  letter-spacing: 0.5px;
+}
+
+.sc-sub {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+
+.grade-ring {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: 2px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.grade-ap { border-color: var(--sky); color: var(--sky); background: rgba(56,189,248,0.08); }
+.grade-a  { border-color: var(--green); color: var(--green); background: rgba(34,211,160,0.08); }
+
+.sc-levels {
+  display: grid;
+  grid-template-columns: repeat(3,1fr);
+  gap: 1px;
+  background: var(--border2);
+  margin: 0;
+}
+
+.sc-level {
+  background: var(--s1);
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.sc-level-label {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.sc-level-val {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lv-entry { color: var(--sky); }
+.lv-target { color: var(--green); }
+.lv-sl { color: var(--red); }
+
+.sc-body { padding: 12px 16px; }
+
+.sc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.chip {
+  font-family: var(--mono);
+  font-size: 9px;
+  padding: 2px 7px;
+  border: 1px solid;
+  letter-spacing: 0.5px;
+}
+
+.chip-long  { background: var(--green2); color: var(--green); border-color: rgba(34,211,160,0.3); }
+.chip-short { background: var(--red2); color: var(--red); border-color: rgba(244,63,94,0.3); }
+.chip-neu   { background: rgba(56,189,248,0.08); color: var(--sky); border-color: rgba(56,189,248,0.2); }
+.chip-amber { background: rgba(251,191,36,0.08); color: var(--amber); border-color: rgba(251,191,36,0.2); }
+
+.sc-setup {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.sc-risk {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid var(--border2);
+}
+
+.sc-risk span { color: var(--white); }
+
+.sc-disclaimer {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--muted2);
+  padding: 6px 16px;
+  border-top: 1px solid var(--border2);
+  background: rgba(244,63,94,0.03);
+  line-height: 1.5;
+}
+
+/* ── SCORE BAR ── */
+.score-bar {
+  height: 3px;
+  background: var(--s2);
+  margin: 8px 0;
+}
+
+.score-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--sky), var(--green));
+  transition: width 1s ease;
+}
+
+/* ── NO SIGNALS ── */
+.no-signals {
+  text-align: center;
+  padding: 60px 20px;
+  border: 1px dashed var(--border);
+}
+
+.no-signals h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.no-signals p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ── STATS ── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4,1fr);
+  gap: 1px;
+  background: var(--border);
+  margin-bottom: 32px;
+}
+
+.stat-box {
+  background: var(--s1);
+  padding: 16px 20px;
+  text-align: center;
+}
+
+.stat-val {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+  display: block;
+}
+
+.stat-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: block;
+}
+
+/* ── LOADING ── */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--sky);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── DISCLAIMER ── */
+.disclaimer-bar {
+  background: rgba(244,63,94,0.05);
+  border-top: 1px solid rgba(244,63,94,0.15);
+  padding: 10px 32px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: rgba(244,63,94,0.5);
+  letter-spacing: 0.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ── FOOTER ── */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 24px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footer-logo {
+  font-size: 15px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--sky), var(--green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.footer-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  text-align: right;
+  line-height: 1.8;
+}
+
+@media (max-width: 700px) {
+  nav { padding: 0 16px; }
+  .hero { padding: 40px 16px 32px; }
+  .container { padding: 0 16px; }
+  .signals-grid { grid-template-columns: 1fr; }
+  .stats-row { grid-template-columns: repeat(2,1fr); }
+  footer { flex-direction: column; gap: 12px; text-align: center; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">The Stock Logic</div>
+  <div class="nav-links">
+    <a href="#signals">Signals</a>
+    <a href="#about">About</a>
+    <div class="nav-chip">
+      <span class="dot"></span>
+      <span id="navStatus">Loading...</span>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-eyebrow">ALGO-POWERED · NSE · EDUCATIONAL</div>
+  <h1>Daily Trade<br><span>Intelligence</span></h1>
+  <p class="hero-sub">
+    Institutional-grade signal detection for NSE stocks.
+    SMC-based setups with defined entry, SL and targets.
+    Educational only — you decide, you trade.
+  </p>
+  <div class="hero-meta" id="lastUpdated">Fetching latest signals...</div>
+</div>
+
+<!-- MARKET CONTEXT BAR -->
+<div class="mkt-bar" id="mktBar">
+  <div class="mkt-item"><span class="mkt-label">NIFTY</span><span class="mkt-val mkt-neu" id="mktNifty">—</span></div>
+  <div class="mkt-item"><span class="mkt-label">VIX</span><span class="mkt-val" id="mktVix">—</span></div>
+  <div class="mkt-item"><span class="mkt-label">REGIME</span><span class="mkt-val" id="mktRegime">—</span></div>
+  <div class="mkt-item"><span class="mkt-label">A/D</span><span class="mkt-val" id="mktAD">—</span></div>
+  <div class="mkt-item"><span class="mkt-label">SIGNALS</span><span class="mkt-val mkt-neu" id="mktCount">—</span></div>
+  <div class="mkt-item"><span class="mkt-label">A+ TODAY</span><span class="mkt-val mkt-bull" id="mktAP">—</span></div>
+</div>
+
+<!-- MAIN -->
+<div class="container">
+
+  <!-- SIGNALS SECTION -->
+  <div class="section" id="signals">
+    <div class="section-header">
+      <div class="section-title">
+        <span>Today's Signals</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);" id="signalDate"></span>
+      </div>
+      <div class="section-meta" id="signalMeta">A+ and A grade only</div>
+    </div>
+
+    <div id="signalsContainer">
+      <div class="loading">
+        <div class="spinner"></div>
+        <span>Fetching signals from engine...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABOUT SECTION -->
+  <div class="section" id="about" style="border-top:1px solid var(--border2);">
+    <div class="section-header">
+      <div class="section-title">How It Works</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;">
+      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
+        <div style="font-size:20px;margin-bottom:8px;">📡</div>
+        <div style="font-weight:700;margin-bottom:6px;">Daily Data</div>
+        <div style="font-size:12px;color:var(--muted);">NSE Bhavcopy downloaded every evening. Real OHLCV and delivery % for Nifty 100 stocks.</div>
+      </div>
+      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
+        <div style="font-size:20px;margin-bottom:8px;">🧠</div>
+        <div style="font-weight:700;margin-bottom:6px;">SMC Engine</div>
+        <div style="font-size:12px;color:var(--muted);">Order blocks, FVGs, liquidity sweeps, BOS and CHOCH detection on real price structure.</div>
+      </div>
+      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
+        <div style="font-size:20px;margin-bottom:8px;">🎯</div>
+        <div style="font-weight:700;margin-bottom:6px;">Scored 0–100</div>
+        <div style="font-size:12px;color:var(--muted);">Every setup scored across regime, SMC, technicals, volume and risk/reward. A+ only shown.</div>
+      </div>
+      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
+        <div style="font-size:20px;margin-bottom:8px;">⚖️</div>
+        <div style="font-weight:700;margin-bottom:6px;">Risk Defined</div>
+        <div style="font-size:12px;color:var(--muted);">Max ₹5,000 risk per trade. SL at structure. Targets at 2:1 and 3:1 RR. You decide.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- DISCLAIMER -->
+<div class="disclaimer-bar">
+  ⚠ EDUCATIONAL CONTENT ONLY · ALL SIGNALS ARE ALGO-GENERATED BASED ON TECHNICAL INDICATORS · NOT A SEBI-REGISTERED RESEARCH ANALYST ·
+  NOT A BUY/SELL RECOMMENDATION · INTRADAY MARKETS ARE HIGHLY VOLATILE · DO NOT TRADE SOLELY BASED ON THIS DATA ·
+  CONSULT YOUR SEBI-REGISTERED RESEARCH ANALYST · PAST PERFORMANCE DOES NOT GUARANTEE FUTURE RESULTS
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">The Stock Logic</div>
+  <div class="footer-meta">
+    thestocklogic.com · MVP v1.0<br>
+    Signals update daily after 6:30 PM IST
+  </div>
+</footer>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────
+const SUPABASE_URL  = 'https://eibdlcanpudjgmkjxrga.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
+
+const headers = {
+  'apikey':        SUPABASE_ANON,
+  'Authorization': `Bearer ${SUPABASE_ANON}`
+};
+
+// ── FETCH SIGNALS ──────────────────────────────────────────────
+async function fetchSignals() {
+  try {
+    // Get the latest signal date first
+    const dateRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/signals?select=signal_date&order=signal_date.desc&limit=1`,
+      { headers }
+    );
+    const dateData = await dateRes.json();
+
+    if (!dateData || dateData.length === 0) {
+      showNoSignals('No signals in database yet. Engine runs daily after 6:30 PM IST.');
+      return;
+    }
+
+    const latestDate = dateData[0].signal_date;
+
+    // Fetch all signals for that date
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/signals?signal_date=eq.${latestDate}&order=score.desc`,
+      { headers }
+    );
+    const signals = await res.json();
+
+    if (!signals || signals.length === 0) {
+      showNoSignals('No qualifying signals for today. Market conditions may be unfavorable.');
+      return;
+    }
+
+    renderSignals(signals, latestDate);
+
+  } catch(err) {
+    console.error(err);
+    showNoSignals('Could not load signals. Please try again shortly.');
+  }
+}
+
+// ── RENDER SIGNALS ──────────────────────────────────────────────
+function renderSignals(signals, date) {
+  const d = new Date(date);
+  const dateStr = d.toLocaleDateString('en-IN', {
+    weekday:'long', day:'numeric', month:'long', year:'numeric'
+  });
+
+  // Update header
+  document.getElementById('signalDate').textContent = dateStr;
+  document.getElementById('lastUpdated').textContent =
+    `Last updated: ${dateStr} · ${signals.length} signals generated`;
+  document.getElementById('navStatus').textContent = 'Live';
+
+  // Market context from first signal
+  const s0 = signals[0];
+  updateMarketBar(s0, signals);
+
+  // Build signal cards
+  const container = document.getElementById('signalsContainer');
+
+  const ap = signals.filter(s => s.grade === 'A+');
+  const a  = signals.filter(s => s.grade === 'A');
+
+  document.getElementById('signalMeta').textContent =
+    `${ap.length} A+  ·  ${a.length} A  ·  score ≥ 70`;
+
+  container.innerHTML = `<div class="signals-grid">${signals.map(renderCard).join('')}</div>`;
+}
+
+function renderCard(s) {
+  const isLong  = s.direction === 'LONG';
+  const gradeClass = s.grade === 'A+' ? 'grade-ap' : 'grade-a';
+  const regimeLabel = { bull:'🟢 BULL', bear:'🔴 BEAR', sideways:'🟡 SIDEWAYS' }[s.market_regime] || s.market_regime;
+  const tradeType   = s.trade_type || (isLong ? 'BTST LONG' : 'INTRADAY SHORT');
+  const scorePct    = Math.min(100, (s.score / 100) * 100);
+
+  return `
+  <div class="signal-card">
+    <div class="sc-top">
+      <div>
+        <div class="sc-sym">${s.symbol}</div>
+        <div class="sc-sub">${s.setup_name || 'Technical Setup'}</div>
+      </div>
+      <div class="grade-ring ${gradeClass}">${s.grade}</div>
+    </div>
+
+    <div class="sc-levels">
+      <div class="sc-level">
+        <div class="sc-level-label">ENTRY</div>
+        <div class="sc-level-val lv-entry">₹${fmt(s.entry_ref)}</div>
+      </div>
+      <div class="sc-level">
+        <div class="sc-level-label">TARGET 1</div>
+        <div class="sc-level-val lv-target">₹${fmt(s.target_1)}</div>
+      </div>
+      <div class="sc-level">
+        <div class="sc-level-label">STOP LOSS</div>
+        <div class="sc-level-val lv-sl">₹${fmt(s.sl)}</div>
+      </div>
+    </div>
+
+    <div class="sc-body">
+      <div class="sc-chips">
+        <span class="chip ${isLong ? 'chip-long':'chip-short'}">${isLong ? '↑':'↓'} ${s.direction}</span>
+        <span class="chip chip-neu">${tradeType}</span>
+        <span class="chip chip-amber">${regimeLabel}</span>
+        <span class="chip chip-neu">RR ${s.rr_1 || 2}:1</span>
+      </div>
+
+      <div class="score-bar"><div class="score-fill" style="width:${scorePct}%"></div></div>
+
+      <div class="sc-risk">
+        <span>Score <span>${s.score}/100</span></span>
+        <span>Qty <span>${s.qty || '—'}</span></span>
+        <span>Risk <span>₹${s.risk_inr ? Math.round(s.risk_inr).toLocaleString('en-IN') : '—'}</span></span>
+      </div>
+    </div>
+
+    <div class="sc-disclaimer">
+      ⚠ Educational only · Algo-generated · Not SEBI advice · Consult your RA
+    </div>
+  </div>`;
+}
+
+function updateMarketBar(s, signals) {
+  const regime   = s.market_regime || 'unknown';
+  const regClass = { bull:'mkt-bull', bear:'mkt-bear', sideways:'mkt-side' }[regime] || 'mkt-neu';
+  const regLabel = { bull:'🟢 BULL', bear:'🔴 BEAR', sideways:'🟡 SIDEWAYS' }[regime] || regime.toUpperCase();
+  const vix      = s.vix_close ? parseFloat(s.vix_close).toFixed(1) : '—';
+  const vixClass = s.vix_close < 15 ? 'mkt-bull' : s.vix_close < 22 ? 'mkt-side' : 'mkt-bear';
+  const ap       = signals.filter(s => s.grade === 'A+').length;
+
+  document.getElementById('mktRegime').className = `mkt-val ${regClass}`;
+  document.getElementById('mktRegime').textContent = regLabel;
+  document.getElementById('mktVix').className   = `mkt-val ${vixClass}`;
+  document.getElementById('mktVix').textContent = vix;
+  document.getElementById('mktCount').textContent = signals.length;
+  document.getElementById('mktAP').textContent  = ap;
+}
+
+function showNoSignals(msg) {
+  document.getElementById('navStatus').textContent = 'No signals';
+  document.getElementById('lastUpdated').textContent = 'Engine runs daily after 6:30 PM IST';
+  document.getElementById('signalsContainer').innerHTML = `
+    <div class="no-signals">
+      <div style="font-size:40px;margin-bottom:16px;opacity:0.3">📭</div>
+      <h3>No Signals Today</h3>
+      <p>${msg}</p>
+      <p style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--muted2);">
+        Check back after 6:30 PM IST on trading days
+      </p>
+    </div>`;
+}
+
+function fmt(n) {
+  if (!n) return '—';
+  return parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits:1, maximumFractionDigits:1 });
+}
+
+// ── INIT ────────────────────────────────────────────────────────
+fetchSignals();
+</script>
+</body>
+</html>
