@@ -56,7 +56,12 @@ def push_signals(target_date: str = None):
     if target_date:
         d = pd.Timestamp(target_date)
     else:
-        d = df["date"].max()
+        # Use latest date that has qualifying signals, not just latest data date
+        qualifying = df[df["qualifies"] == True]
+        if qualifying.empty:
+            log.warning("No qualifying signals found in dataset")
+            return
+        d = qualifying["date"].max()
 
     log.info(f"Pushing signals for: {d.date()}")
 
@@ -110,6 +115,14 @@ def push_signals(target_date: str = None):
             "score_volume":     float(row.get("volume_score", 0)),
             "score_rr":         float(row.get("rr_score", 0)),
         })
+
+    # Clean NaN/inf values from records
+    import math
+    def clean(v):
+        if v is None: return None
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
+        return v
+    records = [{k: clean(v) for k, v in r.items()} for r in records]
 
     # Delete existing signals for this date first (clean re-run)
     del_url = f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{d.strftime('%Y-%m-%d')}"

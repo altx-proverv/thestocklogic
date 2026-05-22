@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 # ── CONFIG ────────────────────────────────────────────────────────
 START_DATE    = date(2023, 1, 1)
-END_DATE      = date(2025, 5, 9)
+END_DATE      = date.today()
 RAW_DIR       = Path("data/raw/bhavcopy")
 PROCESSED_DIR = Path("data/processed")
 STOCKS_DIR    = Path("data/processed/stocks")
@@ -63,7 +63,7 @@ NSE_HOLIDAYS = {
 
 NIFTY100_SYMBOLS = {
     "RELIANCE","TCS","HDFCBANK","BHARTIARTL","ICICIBANK",
-    "INFOSYS","SBIN","HINDUNILVR","ITC","LT","KOTAKBANK",
+    "INFY","SBIN","HINDUNILVR","ITC","LT","KOTAKBANK",
     "AXISBANK","BAJFINANCE","ASIANPAINT","MARUTI","SUNPHARMA",
     "TITAN","ULTRACEMCO","WIPRO","HCLTECH","NESTLEIND","POWERGRID",
     "NTPC","TECHM","JSWSTEEL","TATAMOTORS","TATASTEEL","BAJAJFINSV",
@@ -99,43 +99,62 @@ def get_trading_days(start: date, end: date) -> list:
 
 def csv_filename(d: date) -> str:
     """jugaad-data saves files as cmDDMMMYYYYbhav.csv"""
-    return f"cm{d.strftime('%d%b%Y').capitalize()}bhav.csv"
+    return f"cm{d.strftime('%d%b%Y')}bhav.csv"
 
 
 def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
     """
-    Parses a jugaad-data Bhavcopy CSV into clean DataFrame.
-    Real NSE columns (with leading spaces):
-      SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE,
-      LOW_PRICE, LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY,
-      TURNOVER_LACS, NO_OF_TRADES, DELIV_QTY, DELIV_PER
+    Parses Bhavcopy CSV — handles both old and new NSE formats.
+    Old format (pre-2026): SYMBOL, SERIES, OPEN_PRICE, CLOSE_PRICE, DELIV_PER etc.
+    New format (2026+):    TckrSymb, SctySrs, OpnPric, ClsPric (no delivery %)
     """
     df = pd.read_csv(csv_path)
-
-    # Strip spaces from column names
     df.columns = [c.strip() for c in df.columns]
 
-    # Filter EQ series only
-    if "SERIES" in df.columns:
-        df = df[df["SERIES"].str.strip() == "EQ"].copy()
+    # Detect format
+    is_new_format = "TckrSymb" in df.columns
 
-    if len(df) == 0:
-        return pd.DataFrame()
+    if is_new_format:
+        # New 2026+ NSE format
+        series_col = "SctySrs"
+        if series_col in df.columns:
+            df = df[df[series_col].str.strip() == "EQ"].copy()
+        if len(df) == 0:
+            return pd.DataFrame()
+        col_map = {
+            "TckrSymb":       "symbol",
+            "OpnPric":        "open",
+            "HghPric":        "high",
+            "LwPric":         "low",
+            "ClsPric":        "close",
+            "PrvsClsgPric":   "prev_close",
+            "TtlTradgVol":    "volume",
+            "TtlNbOfTxsExctd":"trades",
+        }
+        df = df.rename(columns=col_map)
+        # No delivery % in new format
+        df["delivery_qty"] = np.nan
+        df["delivery_pct"] = np.nan
 
-    # Rename to standard names
-    col_map = {
-        "SYMBOL":       "symbol",
-        "PREV_CLOSE":   "prev_close",
-        "OPEN_PRICE":   "open",
-        "HIGH_PRICE":   "high",
-        "LOW_PRICE":    "low",
-        "CLOSE_PRICE":  "close",
-        "TTL_TRD_QNTY": "volume",
-        "NO_OF_TRADES": "trades",
-        "DELIV_QTY":    "delivery_qty",
-        "DELIV_PER":    "delivery_pct",
-    }
-    df = df.rename(columns=col_map)
+    else:
+        # Old format (pre-2026)
+        if "SERIES" in df.columns:
+            df = df[df["SERIES"].str.strip() == "EQ"].copy()
+        if len(df) == 0:
+            return pd.DataFrame()
+        col_map = {
+            "SYMBOL":       "symbol",
+            "PREV_CLOSE":   "prev_close",
+            "OPEN_PRICE":   "open",
+            "HIGH_PRICE":   "high",
+            "LOW_PRICE":    "low",
+            "CLOSE_PRICE":  "close",
+            "TTL_TRD_QNTY": "volume",
+            "NO_OF_TRADES": "trades",
+            "DELIV_QTY":    "delivery_qty",
+            "DELIV_PER":    "delivery_pct",
+        }
+        df = df.rename(columns=col_map)
 
     # Add date
     df["date"] = pd.Timestamp(d)
@@ -147,13 +166,10 @@ def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # delivery_pct: NSE uses "-" for missing — already NaN after to_numeric
-    # Sanity check: delivery_pct should be 0-100
     if "delivery_pct" in df.columns:
         df.loc[df["delivery_pct"] > 100, "delivery_pct"] = np.nan
         df.loc[df["delivery_pct"] < 0,   "delivery_pct"] = np.nan
 
-    # Drop rows with zero/missing close
     df = df[df["close"] > 0].copy()
 
     keep = ["date","symbol","open","high","low","close",
