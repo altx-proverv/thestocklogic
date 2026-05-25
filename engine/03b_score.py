@@ -57,7 +57,7 @@ MAX_SL_PCT    = 0.02
 MIN_RR        = 2.0
 TOP_N_LONG    = 5
 TOP_N_SHORT   = 2
-MIN_SCORE     = 65
+MIN_SCORE     = 70
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -76,7 +76,6 @@ def score_market_regime(row) -> float:
     regime = row.get("market_regime", "unknown")
     vix    = row.get("vix_close", 15.0)
     ad     = row.get("ad_ratio", 1.0)
-    direction = row.get("direction", "long")
 
     # Regime base score
     regime_pts = {"bull": 10.0, "sideways": 6.0,
@@ -92,16 +91,10 @@ def score_market_regime(row) -> float:
     # A/D breadth
     ad_pts = 0.0
     if pd.notna(ad):
-        if ad >= 2.0:   ad_pts = 2.0
+        if ad >= 2.0:   ad_pts = 2.0  # broad participation
         elif ad >= 1.2: ad_pts = 1.0
 
-    # Sector momentum bonus — if stock in strong sector, boost regime score
-    sector_bias = row.get("sector_bias", "avoid")
-    if direction == "long" and sector_bias == "long":
-        regime_pts = min(regime_pts + 3.0, 12.0)  # sector tailwind
-    elif direction == "short" and sector_bias == "short":
-        regime_pts = min(regime_pts + 3.0, 12.0)  # sector tailwind for shorts
-
+    # For LONG: regime bonus. For SHORT in bear: also bonus.
     return min(regime_pts + vix_pts + ad_pts, 15.0)
 
 
@@ -485,37 +478,9 @@ def process_all():
 
 def score_all(combined: pd.DataFrame) -> pd.DataFrame:
     log.info("Scoring all stock-days (long + short)...")
-
-    # Load sector momentum data if available
-    sector_bias_map = {}
-    sector_file = Path("data/processed/sector_momentum.parquet")
-    if sector_file.exists():
-        try:
-            sec_df = pd.read_parquet(sector_file)
-            # Build date -> sector -> bias map
-            for _, sr in sec_df.iterrows():
-                sector_bias_map[sr["sector"]] = sr["trade_bias"]
-            log.info(f"Sector bias loaded: {sector_bias_map}")
-        except Exception as e:
-            log.warning(f"Could not load sector momentum: {e}")
-
-    # Load symbol->sector map
-    try:
-        import sys as _sys
-        _sys.path.insert(0, str(Path(__file__).parent))
-        from universe import SYMBOL_SECTOR_MAP as _SECTOR_MAP
-    except:
-        _SECTOR_MAP = {}
-
     records = []
 
     for _, row in tqdm(combined.iterrows(), total=len(combined), desc="Scoring"):
-        # Add sector bias to row
-        sym = row.get("symbol", "")
-        sector = _SECTOR_MAP.get(sym, "OTHER")
-        row = row.copy()
-        row["sector"] = sector
-        row["sector_bias"] = sector_bias_map.get(sector, "avoid")
         base = {
             "date":           row["date"],
             "symbol":         row["symbol"],
