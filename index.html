@@ -3,772 +3,193 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The Stock Logic — Algo-Powered Trade Intelligence</title>
-<meta name="description" content="Daily algo-generated trade signals for NSE stocks. Educational content only. Not SEBI registered advice.">
+<title>The Stock Logic — Daily Trade Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
 <style>
-:root {
-  --bg:      #080c10;
-  --s1:      #0d1420;
-  --s2:      #121b2a;
-  --border:  rgba(56,189,248,0.1);
-  --border2: rgba(255,255,255,0.06);
-  --sky:     #38bdf8;
-  --sky2:    rgba(56,189,248,0.12);
-  --green:   #22d3a0;
-  --green2:  rgba(34,211,160,0.1);
-  --red:     #f43f5e;
-  --red2:    rgba(244,63,94,0.1);
-  --amber:   #fbbf24;
-  --purple:  #a78bfa;
-  --white:   #e2eeff;
-  --muted:   rgba(226,238,255,0.4);
-  --muted2:  rgba(226,238,255,0.15);
-  --font:    'Syne', sans-serif;
-  --mono:    'JetBrains Mono', monospace;
-}
-
-* { margin:0; padding:0; box-sizing:border-box; }
-html { scroll-behavior: smooth; }
-
-body {
-  background: var(--bg);
-  color: var(--white);
-  font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.6;
-  overflow-x: hidden;
-}
-
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  background: repeating-linear-gradient(
-    0deg, transparent, transparent 2px,
-    rgba(56,189,248,0.012) 2px, rgba(56,189,248,0.012) 4px
-  );
-  pointer-events: none;
-  z-index: 9999;
-}
-
-/* ── NAV ── */
-nav {
-  position: sticky; top: 0; z-index: 100;
-  background: rgba(8,12,16,0.92);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
-  padding: 0 32px;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.nav-logo {
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: -0.3px;
-  background: linear-gradient(135deg, var(--sky), var(--green));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.nav-links {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  font-size: 12px;
-  font-family: var(--mono);
-  letter-spacing: 1px;
-}
-
-.nav-links a {
-  color: var(--muted);
-  text-decoration: none;
-  transition: color 0.15s;
-}
-
-.nav-links a:hover { color: var(--white); }
-
-.nav-chip {
-  background: var(--sky2);
-  border: 1px solid rgba(56,189,248,0.25);
-  color: var(--sky);
-  padding: 4px 12px;
-  font-size: 11px;
-  font-family: var(--mono);
-  letter-spacing: 1px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.dot { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-
-/* ── HERO ── */
-.hero {
-  padding: 64px 32px 48px;
-  text-align: center;
-  position: relative;
-  border-bottom: 1px solid var(--border);
-}
-
-.hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(56,189,248,0.06) 0%, transparent 70%);
-  pointer-events: none;
-}
-
-.hero-eyebrow {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 4px;
-  color: var(--sky);
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.hero-eyebrow::before, .hero-eyebrow::after {
-  content: '';
-  width: 32px; height: 1px;
-  background: var(--sky);
-  opacity: 0.5;
-}
-
-.hero h1 {
-  font-size: clamp(32px, 5vw, 56px);
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: -1px;
-  margin-bottom: 16px;
-}
-
-.hero h1 span { color: var(--sky); }
-
-.hero-sub {
-  font-size: 15px;
-  color: var(--muted);
-  max-width: 480px;
-  margin: 0 auto 32px;
-  line-height: 1.7;
-}
-
-.hero-meta {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: var(--muted2);
-}
-
-/* ── MARKET CONTEXT BAR ── */
-.mkt-bar {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.mkt-bar::-webkit-scrollbar { display: none; }
-
-.mkt-item {
-  padding: 10px 20px;
-  border-right: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 11px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.mkt-label { color: var(--muted); margin-right: 6px; }
-.mkt-val { font-weight: 600; }
-.mkt-bull { color: var(--green); }
-.mkt-bear { color: var(--red); }
-.mkt-side { color: var(--amber); }
-.mkt-neu  { color: var(--white); }
-
-/* ── MAIN CONTENT ── */
-.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
-
-.section { padding: 36px 0; }
-
-.section-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border2);
-}
-
-.section-title {
-  font-size: 14px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.section-meta {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  letter-spacing: 1px;
-}
-
-/* ── SIGNAL CARDS ── */
-.signals-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
-}
-
-.signal-card {
-  background: var(--s1);
-  border: 1px solid var(--border);
-  padding: 0;
-  overflow: hidden;
-  transition: border-color 0.2s;
-}
-
-.signal-card:hover { border-color: rgba(56,189,248,0.3); }
-
-.sc-top {
-  padding: 14px 16px 12px;
-  border-bottom: 1px solid var(--border2);
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.sc-sym {
-  font-size: 17px;
-  font-weight: 800;
-  font-family: var(--mono);
-  letter-spacing: 0.5px;
-}
-
-.sc-sub {
-  font-size: 10px;
-  color: var(--muted);
-  font-family: var(--mono);
-  margin-top: 2px;
-}
-
-.grade-ring {
-  width: 40px; height: 40px;
-  border-radius: 50%;
-  border: 2px solid;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.grade-ap { border-color: var(--sky); color: var(--sky); background: rgba(56,189,248,0.08); }
-.grade-a  { border-color: var(--green); color: var(--green); background: rgba(34,211,160,0.08); }
-
-.sc-levels {
-  display: grid;
-  grid-template-columns: repeat(3,1fr);
-  gap: 1px;
-  background: var(--border2);
-  margin: 0;
-}
-
-.sc-level {
-  background: var(--s1);
-  padding: 8px 10px;
-  text-align: center;
-}
-
-.sc-level-label {
-  font-family: var(--mono);
-  font-size: 8px;
-  letter-spacing: 1.5px;
-  color: var(--muted);
-  margin-bottom: 3px;
-}
-
-.sc-level-val {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.lv-entry { color: var(--sky); }
-.lv-target { color: var(--green); }
-.lv-sl { color: var(--red); }
-
-.sc-body { padding: 12px 16px; }
-
-.sc-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.chip {
-  font-family: var(--mono);
-  font-size: 9px;
-  padding: 2px 7px;
-  border: 1px solid;
-  letter-spacing: 0.5px;
-}
-
-.chip-long  { background: var(--green2); color: var(--green); border-color: rgba(34,211,160,0.3); }
-.chip-short { background: var(--red2); color: var(--red); border-color: rgba(244,63,94,0.3); }
-.chip-neu   { background: rgba(56,189,248,0.08); color: var(--sky); border-color: rgba(56,189,248,0.2); }
-.chip-amber { background: rgba(251,191,36,0.08); color: var(--amber); border-color: rgba(251,191,36,0.2); }
-
-.sc-setup {
-  font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 8px;
-  line-height: 1.4;
-}
-
-.sc-risk {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  display: flex;
-  justify-content: space-between;
-  padding-top: 8px;
-  border-top: 1px solid var(--border2);
-}
-
-.sc-risk span { color: var(--white); }
-
-.sc-disclaimer {
-  font-family: var(--mono);
-  font-size: 8px;
-  color: var(--muted2);
-  padding: 6px 16px;
-  border-top: 1px solid var(--border2);
-  background: rgba(244,63,94,0.03);
-  line-height: 1.5;
-}
-
-/* ── SCORE BAR ── */
-.score-bar {
-  height: 3px;
-  background: var(--s2);
-  margin: 8px 0;
-}
-
-.score-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--sky), var(--green));
-  transition: width 1s ease;
-}
-
-/* ── NO SIGNALS ── */
-.no-signals {
-  text-align: center;
-  padding: 60px 20px;
-  border: 1px dashed var(--border);
-}
-
-.no-signals h3 {
-  font-size: 18px;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-
-.no-signals p {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* ── STATS ── */
-.stats-row {
-  display: grid;
-  grid-template-columns: repeat(4,1fr);
-  gap: 1px;
-  background: var(--border);
-  margin-bottom: 32px;
-}
-
-.stat-box {
-  background: var(--s1);
-  padding: 16px 20px;
-  text-align: center;
-}
-
-.stat-val {
-  font-size: 26px;
-  font-weight: 800;
-  line-height: 1;
-  display: block;
-}
-
-.stat-label {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 2px;
-  color: var(--muted);
-  margin-top: 4px;
-  display: block;
-}
-
-/* ── LOADING ── */
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 48px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-.spinner {
-  width: 16px; height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--sky);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── DISCLAIMER ── */
-.disclaimer-bar {
-  background: rgba(244,63,94,0.05);
-  border-top: 1px solid rgba(244,63,94,0.15);
-  padding: 10px 32px;
-  font-family: var(--mono);
-  font-size: 9px;
-  color: rgba(244,63,94,0.5);
-  letter-spacing: 0.5px;
-  line-height: 1.6;
-  text-align: center;
-}
-
-/* ── FOOTER ── */
-footer {
-  border-top: 1px solid var(--border);
-  padding: 24px 32px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.footer-logo {
-  font-size: 15px;
-  font-weight: 800;
-  background: linear-gradient(135deg, var(--sky), var(--green));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.footer-meta {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  text-align: right;
-  line-height: 1.8;
-}
-
-@media (max-width: 700px) {
-  nav { padding: 0 16px; }
-  .hero { padding: 40px 16px 32px; }
-  .container { padding: 0 16px; }
-  .signals-grid { grid-template-columns: 1fr; }
-  .stats-row { grid-template-columns: repeat(2,1fr); }
-  footer { flex-direction: column; gap: 12px; text-align: center; }
-}
+:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--s3:#161e28;--line:rgba(255,255,255,0.06);--line2:rgba(255,255,255,0.03);--sky:#4db8ff;--sky2:rgba(77,184,255,0.1);--green:#00d68f;--green2:rgba(0,214,143,0.08);--red:#ff4d6d;--red2:rgba(255,77,109,0.08);--amber:#ffb347;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.15);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;line-height:1.6;min-height:100vh}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.008) 3px,rgba(77,184,255,0.008) 4px);pointer-events:none;z-index:9999}
+nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.9);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px}
+.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.nav-right{display:flex;align-items:center;gap:20px;font-size:10px;letter-spacing:2px;color:var(--muted)}
+.live-dot{display:flex;align-items:center;gap:6px;color:var(--green);font-size:10px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.hero{padding:40px 28px 28px;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:600px;height:300px;background:radial-gradient(ellipse,rgba(77,184,255,0.05) 0%,transparent 70%);pointer-events:none}
+.hero-label{font-size:9px;letter-spacing:4px;color:var(--sky);margin-bottom:10px;display:flex;align-items:center;gap:10px}
+.hero-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--sky),transparent);opacity:.3}
+.hero h1{font-family:var(--display);font-size:clamp(36px,6vw,64px);letter-spacing:2px;line-height:.95;margin-bottom:12px}
+.hero h1 em{font-family:var(--serif);font-style:italic;color:var(--sky);font-size:.85em}
+.hero-sub{font-size:12px;color:var(--muted);max-width:420px;line-height:1.7}
+.mkt-bar{display:flex;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.mkt-bar::-webkit-scrollbar{display:none}
+.mkt-pill{padding:8px 20px;border-right:1px solid var(--line);white-space:nowrap;flex-shrink:0;font-size:11px}
+.mkt-key{color:var(--muted);margin-right:6px;letter-spacing:1px}
+.mkt-val{font-weight:600}
+.bull{color:var(--green)}.bear{color:var(--red)}.side{color:var(--amber)}.neut{color:var(--white)}
+.main{max-width:1100px;margin:0 auto;padding:0 20px}
+.day-header{display:flex;align-items:center;gap:12px;padding:20px 0 10px}
+.day-badge{font-family:var(--display);font-size:11px;letter-spacing:3px;padding:3px 10px;border:1px solid}
+.day-badge.today{color:var(--sky);border-color:rgba(77,184,255,0.4);background:var(--sky2)}
+.day-badge.recent{color:var(--muted);border-color:var(--line)}
+.day-date{font-size:11px;color:var(--muted);letter-spacing:1px}
+.day-count{font-size:10px;color:var(--muted2);margin-left:auto}
+.signal-rows{margin-bottom:4px}
+.signal-row{display:grid;grid-template-columns:110px 68px 52px 48px 88px 88px 88px 1fr 20px;align-items:center;padding:9px 12px;border:1px solid var(--line2);border-bottom:none;cursor:pointer;transition:background .12s;background:var(--s1)}
+.signal-row:first-child{border-radius:4px 4px 0 0}
+.signal-row:last-child{border-bottom:1px solid var(--line2);border-radius:0 0 4px 4px}
+.signal-row:only-child{border-radius:4px;border-bottom:1px solid var(--line2)}
+.signal-row:hover{background:var(--s2);border-color:rgba(77,184,255,0.2)}
+.sr-sym{font-weight:700;font-size:13px}
+.sr-dir{font-size:10px;font-weight:600}
+.sr-long{color:var(--green)}.sr-short{color:var(--red)}
+.sr-grade{font-size:10px;font-weight:700;padding:2px 6px;border:1px solid;display:inline-block}
+.grade-ap{color:var(--sky);border-color:rgba(77,184,255,0.4);background:var(--sky2)}
+.grade-a{color:var(--green);border-color:rgba(0,214,143,0.3);background:var(--green2)}
+.grade-b{color:var(--muted);border-color:var(--line)}
+.sr-score{font-size:11px;color:var(--muted)}
+.sr-level{font-size:11px}
+.sr-entry{color:var(--sky)}.sr-sl{color:var(--red)}.sr-t1{color:var(--green)}
+.sr-setup{font-size:10px;color:var(--muted2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:8px}
+.sr-arrow{font-size:10px;color:var(--muted2);text-align:right}
+.no-day{padding:14px 12px;background:var(--s1);border:1px solid var(--line2);border-radius:4px;font-size:11px;color:var(--muted2)}
+.archive-toggle{display:flex;align-items:center;gap:10px;padding:14px 0 8px;cursor:pointer;color:var(--muted);font-size:10px;letter-spacing:2px;border-top:1px solid var(--line2);margin-top:12px;user-select:none;transition:color .15s}
+.archive-toggle:hover{color:var(--white)}
+.at-icon{font-size:14px;transition:transform .2s}
+.archive-toggle.open .at-icon{transform:rotate(180deg)}
+.archive-body{display:none}
+.archive-body.open{display:block}
+.archive-day{display:flex;align-items:center;gap:10px;padding:7px 12px;border:1px solid var(--line2);border-bottom:none;cursor:pointer;transition:background .12s;background:var(--s1)}
+.archive-day:first-child{border-radius:4px 4px 0 0}
+.archive-day:last-child{border-bottom:1px solid var(--line2);border-radius:0 0 4px 4px}
+.archive-day:hover{background:var(--s2)}
+.ad-date{font-size:10px;color:var(--muted);letter-spacing:1px;width:90px;flex-shrink:0}
+.ad-chips{display:flex;gap:5px;flex-wrap:wrap;flex:1}
+.ad-chip{font-size:9px;padding:1px 7px;border:1px solid var(--line);color:var(--muted);background:var(--s2)}
+.ad-chip.long-chip{color:var(--green);border-color:rgba(0,214,143,0.2);background:var(--green2)}
+.ad-chip.short-chip{color:var(--red);border-color:rgba(255,77,109,0.2);background:var(--red2)}
+.ad-count{font-size:9px;color:var(--muted2);flex-shrink:0}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);z-index:500;display:none;align-items:center;justify-content:center;padding:20px}
+.modal-bg.open{display:flex}
+.modal{background:var(--s1);border:1px solid rgba(77,184,255,0.25);width:100%;max-width:420px;max-height:90vh;overflow-y:auto;animation:popIn .18s ease}
+@keyframes popIn{from{transform:scale(.95);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-top{padding:16px 18px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start}
+.modal-sym{font-family:var(--display);font-size:26px;letter-spacing:1px}
+.modal-meta{font-size:10px;color:var(--muted);margin-top:2px;letter-spacing:1px}
+.modal-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:2px 6px;transition:color .15s}
+.modal-close:hover{color:var(--white)}
+.modal-levels{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line2)}
+.ml-item{background:var(--s1);padding:10px 12px;text-align:center}
+.ml-label{font-size:8px;letter-spacing:2px;color:var(--muted);margin-bottom:4px}
+.ml-val{font-size:14px;font-weight:600}
+.ml-entry{color:var(--sky)}.ml-sl{color:var(--red)}.ml-t1{color:var(--green)}
+.modal-body{padding:14px 18px}
+.modal-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line2);font-size:12px}
+.modal-row:last-child{border-bottom:none}
+.modal-row-key{color:var(--muted)}
+.modal-row-val{font-weight:600;text-align:right}
+.score-bar-wrap{padding:12px 18px;border-top:1px solid var(--line2)}
+.score-bar-label{font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px}
+.score-bar-bg{height:3px;background:var(--s3);border-radius:2px;overflow:hidden}
+.score-bar-fill{height:100%;background:linear-gradient(90deg,var(--sky),var(--green));transition:width .5s ease}
+.modal-disclaimer{padding:8px 18px 14px;font-size:9px;color:var(--muted2);line-height:1.6;border-top:1px solid var(--line2)}
+.loading{display:flex;align-items:center;gap:10px;padding:40px 0;color:var(--muted);font-size:11px;letter-spacing:1px}
+.spinner{width:14px;height:14px;border:1.5px solid var(--line);border-top-color:var(--sky);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.how-section{border-top:1px solid var(--line);padding:28px 0 40px;margin-top:28px}
+.how-title{font-family:var(--display);font-size:13px;letter-spacing:3px;color:var(--muted);margin-bottom:16px}
+.how-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.how-card{background:var(--s1);border:1px solid var(--line2);padding:14px 16px}
+.how-icon{font-size:18px;margin-bottom:6px}
+.how-name{font-size:12px;font-weight:700;margin-bottom:4px}
+.how-desc{font-size:11px;color:var(--muted);line-height:1.5}
+.disc-bar{border-top:1px solid rgba(255,77,109,.1);background:rgba(255,77,109,.03);padding:8px 28px;font-size:9px;color:rgba(255,77,109,.4);letter-spacing:.5px;line-height:1.7;text-align:center}
+footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-content:space-between;align-items:center}
+.footer-logo{font-family:var(--display);font-size:16px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.footer-meta{font-size:10px;color:var(--muted2);text-align:right;line-height:1.8}
+@media(max-width:700px){nav{padding:0 16px}.hero{padding:28px 16px 20px}.main{padding:0 14px}.signal-row{grid-template-columns:1fr 68px 52px 48px}.sr-t1,.sr-setup{display:none}footer{flex-direction:column;gap:8px}}
 </style>
 </head>
 <body>
-
-<!-- NAV -->
 <nav>
-  <div class="nav-logo">The Stock Logic</div>
-  <div class="nav-links">
-    <a href="#signals">Signals</a>
-    <a href="#about">About</a>
-    <div class="nav-chip">
-      <span class="dot"></span>
-      <span id="navStatus">Loading...</span>
-    </div>
+  <div class="logo">THE STOCK LOGIC</div>
+  <div class="nav-right">
+    <div class="live-dot"><span class="dot"></span><span id="liveLabel">LOADING</span></div>
+    <span style="color:var(--muted2)">NSE · EDUCATIONAL</span>
   </div>
 </nav>
-
-<!-- HERO -->
 <div class="hero">
-  <div class="hero-eyebrow">ALGO-POWERED · NSE · EDUCATIONAL</div>
-  <h1>Daily Trade<br><span>Intelligence</span></h1>
-  <p class="hero-sub">
-    Institutional-grade signal detection for NSE stocks.
-    SMC-based setups with defined entry, SL and targets.
-    Educational only — you decide, you trade.
-  </p>
-  <div class="hero-meta" id="lastUpdated">Fetching latest signals...</div>
+  <div class="hero-label">ALGO-POWERED · SMC-BASED · DAILY SIGNALS</div>
+  <h1>TRADE <em>Intelligence</em><br>DAILY</h1>
+  <p class="hero-sub">Institutional-grade signal detection across 243 NSE stocks. Entry, SL and targets defined. You decide — you trade.</p>
 </div>
-
-<!-- MARKET CONTEXT BAR -->
-<div class="mkt-bar" id="mktBar">
-  <div class="mkt-item"><span class="mkt-label">NIFTY</span><span class="mkt-val mkt-neu" id="mktNifty">—</span></div>
-  <div class="mkt-item"><span class="mkt-label">VIX</span><span class="mkt-val" id="mktVix">—</span></div>
-  <div class="mkt-item"><span class="mkt-label">REGIME</span><span class="mkt-val" id="mktRegime">—</span></div>
-  <div class="mkt-item"><span class="mkt-label">A/D</span><span class="mkt-val" id="mktAD">—</span></div>
-  <div class="mkt-item"><span class="mkt-label">SIGNALS</span><span class="mkt-val mkt-neu" id="mktCount">—</span></div>
-  <div class="mkt-item"><span class="mkt-label">A+ TODAY</span><span class="mkt-val mkt-bull" id="mktAP">—</span></div>
+<div class="mkt-bar">
+  <div class="mkt-pill"><span class="mkt-key">REGIME</span><span class="mkt-val neut" id="mRegime">—</span></div>
+  <div class="mkt-pill"><span class="mkt-key">VIX</span><span class="mkt-val neut" id="mVix">—</span></div>
+  <div class="mkt-pill"><span class="mkt-key">TOP SECTORS</span><span class="mkt-val bull" id="mTop">—</span></div>
+  <div class="mkt-pill"><span class="mkt-key">WEAK SECTORS</span><span class="mkt-val bear" id="mBot">—</span></div>
+  <div class="mkt-pill"><span class="mkt-key">SIGNALS TODAY</span><span class="mkt-val neut" id="mCount">—</span></div>
+  <div class="mkt-pill"><span class="mkt-key">UPDATED</span><span class="mkt-val neut" id="mUpdated">—</span></div>
 </div>
-
-<!-- MAIN -->
-<div class="container">
-
-  <!-- SIGNALS SECTION -->
-  <div class="section" id="signals">
-    <div class="section-header">
-      <div class="section-title">
-        <span>Today's Signals</span>
-        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);" id="signalDate"></span>
-      </div>
-      <div class="section-meta" id="signalMeta">A+ and A grade only</div>
-    </div>
-
-    <div id="signalsContainer">
-      <div class="loading">
-        <div class="spinner"></div>
-        <span>Fetching signals from engine...</span>
-      </div>
+<div class="main">
+  <div id="signalContainer"><div class="loading"><div class="spinner"></div>FETCHING SIGNALS...</div></div>
+  <div class="how-section">
+    <div class="how-title">HOW IT WORKS</div>
+    <div class="how-grid">
+      <div class="how-card"><div class="how-icon">📡</div><div class="how-name">Daily NSE Data</div><div class="how-desc">Bhavcopy downloaded every evening after 6:30 PM. Real OHLCV for 243 stocks.</div></div>
+      <div class="how-card"><div class="how-icon">🔭</div><div class="how-name">Sector Heatmap</div><div class="how-desc">11 NSE sectors ranked by momentum. Signals only from top and bottom sectors.</div></div>
+      <div class="how-card"><div class="how-icon">🧠</div><div class="how-name">SMC Engine</div><div class="how-desc">Order blocks, FVGs, liquidity sweeps, BOS and CHOCH on daily price structure.</div></div>
+      <div class="how-card"><div class="how-icon">⚖️</div><div class="how-name">Risk Defined</div><div class="how-desc">Max ₹5,000 risk per trade. SL at structure. 2:1 and 3:1 targets. You decide.</div></div>
     </div>
   </div>
-
-  <!-- ABOUT SECTION -->
-  <div class="section" id="about" style="border-top:1px solid var(--border2);">
-    <div class="section-header">
-      <div class="section-title">How It Works</div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;">
-      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
-        <div style="font-size:20px;margin-bottom:8px;">📡</div>
-        <div style="font-weight:700;margin-bottom:6px;">Daily Data</div>
-        <div style="font-size:12px;color:var(--muted);">NSE Bhavcopy downloaded every evening. Real OHLCV and delivery % for Nifty 100 stocks.</div>
-      </div>
-      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
-        <div style="font-size:20px;margin-bottom:8px;">🧠</div>
-        <div style="font-weight:700;margin-bottom:6px;">SMC Engine</div>
-        <div style="font-size:12px;color:var(--muted);">Order blocks, FVGs, liquidity sweeps, BOS and CHOCH detection on real price structure.</div>
-      </div>
-      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
-        <div style="font-size:20px;margin-bottom:8px;">🎯</div>
-        <div style="font-weight:700;margin-bottom:6px;">Scored 0–100</div>
-        <div style="font-size:12px;color:var(--muted);">Every setup scored across regime, SMC, technicals, volume and risk/reward. A+ only shown.</div>
-      </div>
-      <div style="background:var(--s1);border:1px solid var(--border);padding:18px 20px;">
-        <div style="font-size:20px;margin-bottom:8px;">⚖️</div>
-        <div style="font-weight:700;margin-bottom:6px;">Risk Defined</div>
-        <div style="font-size:12px;color:var(--muted);">Max ₹5,000 risk per trade. SL at structure. Targets at 2:1 and 3:1 RR. You decide.</div>
-      </div>
-    </div>
-  </div>
-
 </div>
-
-<!-- DISCLAIMER -->
-<div class="disclaimer-bar">
-  ⚠ EDUCATIONAL CONTENT ONLY · ALL SIGNALS ARE ALGO-GENERATED BASED ON TECHNICAL INDICATORS · NOT A SEBI-REGISTERED RESEARCH ANALYST ·
-  NOT A BUY/SELL RECOMMENDATION · INTRADAY MARKETS ARE HIGHLY VOLATILE · DO NOT TRADE SOLELY BASED ON THIS DATA ·
-  CONSULT YOUR SEBI-REGISTERED RESEARCH ANALYST · PAST PERFORMANCE DOES NOT GUARANTEE FUTURE RESULTS
-</div>
-
-<!-- FOOTER -->
+<div class="disc-bar">⚠ EDUCATIONAL CONTENT ONLY · ALGO-GENERATED · NOT SEBI-REGISTERED · NOT A BUY/SELL RECOMMENDATION · CONSULT YOUR SEBI RA</div>
 <footer>
-  <div class="footer-logo">The Stock Logic</div>
-  <div class="footer-meta">
-    thestocklogic.com · MVP v1.0<br>
-    Signals update daily after 6:30 PM IST
-  </div>
+  <div class="footer-logo">THE STOCK LOGIC</div>
+  <div class="footer-meta">thestocklogic.com · v2.0<br>Signals update daily after 6:35 PM IST</div>
 </footer>
-
+<div class="modal-bg" id="modal"><div class="modal" id="modalCard"></div></div>
 <script>
-// ── CONFIG ──────────────────────────────────────────────────────
-const SUPABASE_URL  = 'https://eibdlcanpudjgmkjxrga.supabase.co';
-const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
-
-const headers = {
-  'apikey':        SUPABASE_ANON,
-  'Authorization': `Bearer ${SUPABASE_ANON}`
-};
-
-// ── FETCH SIGNALS ──────────────────────────────────────────────
-async function fetchSignals() {
-  try {
-    // Get the latest signal date first
-    const dateRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/signals?select=signal_date&order=signal_date.desc&limit=1`,
-      { headers }
-    );
-    const dateData = await dateRes.json();
-
-    if (!dateData || dateData.length === 0) {
-      showNoSignals('No signals in database yet. Engine runs daily after 6:30 PM IST.');
-      return;
-    }
-
-    const latestDate = dateData[0].signal_date;
-
-    // Fetch all signals for that date
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/signals?signal_date=eq.${latestDate}&order=score.desc`,
-      { headers }
-    );
-    const signals = await res.json();
-
-    if (!signals || signals.length === 0) {
-      showNoSignals('No qualifying signals for today. Market conditions may be unfavorable.');
-      return;
-    }
-
-    renderSignals(signals, latestDate);
-
-  } catch(err) {
-    console.error(err);
-    showNoSignals('Could not load signals. Please try again shortly.');
-  }
+const SB='https://eibdlcanpudjgmkjxrga.supabase.co';
+const AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
+const H={'apikey':AK,'Authorization':'Bearer '+AK};
+const HOLS=new Set(['2026-01-26','2026-03-18','2026-04-02','2026-04-06','2026-04-14','2026-04-17','2026-05-01','2026-08-15','2026-10-02','2026-10-21','2026-10-22','2026-11-05','2026-11-20','2026-12-25']);
+function isTD(d){const w=d.getDay();if(w===0||w===6)return false;return!HOLS.has(d.toISOString().split('T')[0])}
+function prevTD(n){const r=[];const d=new Date();d.setDate(d.getDate()-1);while(r.length<n){if(isTD(d))r.push(d.toISOString().split('T')[0]);d.setDate(d.getDate()-1);if(r.length>100)break;}return r;}
+function fmt(n){if(!n&&n!==0)return'—';return parseFloat(n).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1})}
+function gc(g){return g==='A+'?'grade-ap':g==='A'?'grade-a':'grade-b'}
+async function fSig(){const s=new Date();s.setDate(s.getDate()-30);const r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,score.desc&select=*',{headers:H});return r.json()}
+async function fSec(){const r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:H});return r.json()}
+function srRow(s){const isL=s.direction==='LONG';const q=JSON.stringify(s).replace(/"/g,'&quot;');return'<div class="signal-row" onclick="openModal('+q+')"><div class="sr-sym">'+s.symbol+'</div><div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div><div><span class="sr-grade '+gc(s.grade)+'">'+(s.grade||'B')+'</span></div><div class="sr-score">'+s.score+'/100</div><div class="sr-level sr-entry">&#8377;'+fmt(s.entry_ref)+'</div><div class="sr-level sr-sl">&#8377;'+fmt(s.sl)+'</div><div class="sr-level sr-t1">&#8377;'+fmt(s.target_1)+'</div><div class="sr-setup">'+(s.setup_name||'')+'</div><div class="sr-arrow">&#8250;</div></div>'}
+function daySection(dt,sigs,lbl){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const bc=lbl==='TODAY'?'today':'recent';const body=(!sigs||!sigs.length)?'<div class="no-day">No qualifying setups — Stay Cash</div>':'<div class="signal-rows">'+sigs.map(srRow).join('')+'</div>';return'<div class="day-header"><span class="day-badge '+bc+'">'+lbl+'</span><span class="day-date">'+ds+'</span><span class="day-count">'+(sigs&&sigs.length?sigs.length+' SIGNAL'+(sigs.length>1?'S':''):'—')+'</span></div>'+body}
+function archDay(dt,sigs){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});const chips=sigs.map(s=>'<span class="ad-chip '+(s.direction==='LONG'?'long-chip':'short-chip')+'">'+s.symbol+'</span>').join('');return'<div class="archive-day" onclick="openArchDay(\''+dt+'\')"><div class="ad-date">'+ds+'</div><div class="ad-chips">'+chips+'</div><div class="ad-count">'+sigs.length+'</div><div>&#8250;</div></div>'}
+function toggleArch(){document.getElementById('archToggle').classList.toggle('open');document.getElementById('archBody').classList.toggle('open')}
+function openArchDay(dt){const sigs=window._S&&window._S[dt]||[];if(!sigs.length)return;if(sigs.length===1){openModal(sigs[0]);return;}const d=new Date(dt).toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+d+'</div><div class="modal-meta">'+sigs.length+' SIGNALS &middot; TAP TO VIEW</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div style="padding:12px 18px;">'+sigs.map(s=>srRow(s)).join('')+'</div>';document.getElementById('modal').classList.add('open')}
+function openModal(s){if(typeof s==='string')s=JSON.parse(s);const isL=s.direction==='LONG';const sp=Math.min(100,(s.score/100)*100);const ds=new Date(s.signal_date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const dep=s.qty&&s.entry_ref?Math.round(s.qty*s.entry_ref).toLocaleString('en-IN'):'—';document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div><div class="modal-meta"><span class="'+(isL?'bull':'bear')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; <span class="'+gc(s.grade)+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span> &middot; '+s.score+'/100 &middot; '+ds+'</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div class="modal-levels"><div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div><div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="modal-body"><div class="modal-row"><span class="modal-row-key">Setup</span><span class="modal-row-val">'+(s.setup_name||'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Target 2</span><span class="modal-row-val bull">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div><div class="modal-row"><span class="modal-row-key">Entry zone</span><span class="modal-row-val">&#8377;'+fmt(s.entry_low)+' – &#8377;'+fmt(s.entry_high)+'</span></div><div class="modal-row"><span class="modal-row-key">SL distance</span><span class="modal-row-val bear">'+(s.sl_pct||'—')+'%</span></div><div class="modal-row"><span class="modal-row-key">Risk / Reward</span><span class="modal-row-val">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div><div class="modal-row"><span class="modal-row-key">Quantity</span><span class="modal-row-val">'+(s.qty||'—')+' shares</span></div><div class="modal-row"><span class="modal-row-key">Capital deployed</span><span class="modal-row-val">&#8377;'+dep+'</span></div><div class="modal-row"><span class="modal-row-key">Max risk</span><span class="modal-row-val bear">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Market regime</span><span class="modal-row-val">'+(s.market_regime||'—').toUpperCase()+'</span></div><div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">'+(s.trade_type||(isL?'BTST LONG':'INTRADAY SHORT'))+'</span></div></div><div class="score-bar-wrap"><div class="score-bar-label">CONVICTION SCORE — '+s.score+'/100</div><div class="score-bar-bg"><div class="score-bar-fill" style="width:'+sp+'%"></div></div></div><div class="modal-disclaimer">&#9888; Educational only &middot; Algo-generated &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';document.getElementById('modal').classList.add('open')}
+function closeModal(){document.getElementById('modal').classList.remove('open')}
+document.getElementById('modal').addEventListener('click',e=>{if(e.target===document.getElementById('modal'))closeModal()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+async function render(){
+  const[sigs,secs]=await Promise.all([fSig(),fSec()]);
+  if(secs&&secs.length){const top=secs.filter(s=>s.trade_bias==='long').slice(0,2).map(s=>s.sector).join(' · ');const bot=secs.filter(s=>s.trade_bias==='short').slice(0,2).map(s=>s.sector).join(' · ');const reg=secs[0].market_direction?.toUpperCase()||'—';const rc=reg==='BULLISH'?'bull':reg==='BEARISH'?'bear':'side';document.getElementById('mRegime').textContent=reg;document.getElementById('mRegime').className='mkt-val '+rc;document.getElementById('mTop').textContent=top||'—';document.getElementById('mBot').textContent=bot||'—';}
+  if(!sigs||!sigs.length){document.getElementById('liveLabel').textContent='NO DATA';document.getElementById('signalContainer').innerHTML='<div class="loading">No signals found. Engine runs after 6:35 PM IST.</div>';return;}
+  const byD={};sigs.forEach(s=>{if(!byD[s.signal_date])byD[s.signal_date]=[];byD[s.signal_date].push(s);});
+  window._S=byD;
+  const allD=Object.keys(byD).sort().reverse();
+  const r3=prevTD(3);
+  document.getElementById('liveLabel').textContent='LIVE';
+  document.getElementById('mCount').textContent=byD[allD[0]]?.length||0;
+  document.getElementById('mUpdated').textContent=new Date(allD[0]).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+  const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
+  let html=r3.map((d,i)=>daySection(d,byD[d]||null,lbls[i]||i+'D AGO')).join('');
+  const rSet=new Set(r3);const archD=allD.filter(d=>!rSet.has(d));
+  if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
+  document.getElementById('signalContainer').innerHTML=html;
 }
-
-// ── RENDER SIGNALS ──────────────────────────────────────────────
-function renderSignals(signals, date) {
-  const d = new Date(date);
-  const dateStr = d.toLocaleDateString('en-IN', {
-    weekday:'long', day:'numeric', month:'long', year:'numeric'
-  });
-
-  // Update header
-  document.getElementById('signalDate').textContent = dateStr;
-  document.getElementById('lastUpdated').textContent =
-    `Last updated: ${dateStr} · ${signals.length} signals generated`;
-  document.getElementById('navStatus').textContent = 'Live';
-
-  // Market context from first signal
-  const s0 = signals[0];
-  updateMarketBar(s0, signals);
-
-  // Build signal cards
-  const container = document.getElementById('signalsContainer');
-
-  const ap = signals.filter(s => s.grade === 'A+');
-  const a  = signals.filter(s => s.grade === 'A');
-
-  document.getElementById('signalMeta').textContent =
-    `${ap.length} A+  ·  ${a.length} A  ·  score ≥ 70`;
-
-  container.innerHTML = `<div class="signals-grid">${signals.map(renderCard).join('')}</div>`;
-}
-
-function renderCard(s) {
-  const isLong  = s.direction === 'LONG';
-  const gradeClass = s.grade === 'A+' ? 'grade-ap' : 'grade-a';
-  const regimeLabel = { bull:'🟢 BULL', bear:'🔴 BEAR', sideways:'🟡 SIDEWAYS' }[s.market_regime] || s.market_regime;
-  const tradeType   = s.trade_type || (isLong ? 'BTST LONG' : 'INTRADAY SHORT');
-  const scorePct    = Math.min(100, (s.score / 100) * 100);
-
-  return `
-  <div class="signal-card">
-    <div class="sc-top">
-      <div>
-        <div class="sc-sym">${s.symbol}</div>
-        <div class="sc-sub">${s.setup_name || 'Technical Setup'}</div>
-      </div>
-      <div class="grade-ring ${gradeClass}">${s.grade}</div>
-    </div>
-
-    <div class="sc-levels">
-      <div class="sc-level">
-        <div class="sc-level-label">ENTRY</div>
-        <div class="sc-level-val lv-entry">₹${fmt(s.entry_ref)}</div>
-      </div>
-      <div class="sc-level">
-        <div class="sc-level-label">TARGET 1</div>
-        <div class="sc-level-val lv-target">₹${fmt(s.target_1)}</div>
-      </div>
-      <div class="sc-level">
-        <div class="sc-level-label">STOP LOSS</div>
-        <div class="sc-level-val lv-sl">₹${fmt(s.sl)}</div>
-      </div>
-    </div>
-
-    <div class="sc-body">
-      <div class="sc-chips">
-        <span class="chip ${isLong ? 'chip-long':'chip-short'}">${isLong ? '↑':'↓'} ${s.direction}</span>
-        <span class="chip chip-neu">${tradeType}</span>
-        <span class="chip chip-amber">${regimeLabel}</span>
-        <span class="chip chip-neu">RR ${s.rr_1 || 2}:1</span>
-      </div>
-
-      <div class="score-bar"><div class="score-fill" style="width:${scorePct}%"></div></div>
-
-      <div class="sc-risk">
-        <span>Score <span>${s.score}/100</span></span>
-        <span>Qty <span>${s.qty || '—'}</span></span>
-        <span>Risk <span>₹${s.risk_inr ? Math.round(s.risk_inr).toLocaleString('en-IN') : '—'}</span></span>
-      </div>
-    </div>
-
-    <div class="sc-disclaimer">
-      ⚠ Educational only · Algo-generated · Not SEBI advice · Consult your RA
-    </div>
-  </div>`;
-}
-
-function updateMarketBar(s, signals) {
-  const regime   = s.market_regime || 'unknown';
-  const regClass = { bull:'mkt-bull', bear:'mkt-bear', sideways:'mkt-side' }[regime] || 'mkt-neu';
-  const regLabel = { bull:'🟢 BULL', bear:'🔴 BEAR', sideways:'🟡 SIDEWAYS' }[regime] || regime.toUpperCase();
-  const vix      = s.vix_close ? parseFloat(s.vix_close).toFixed(1) : '—';
-  const vixClass = s.vix_close < 15 ? 'mkt-bull' : s.vix_close < 22 ? 'mkt-side' : 'mkt-bear';
-  const ap       = signals.filter(s => s.grade === 'A+').length;
-
-  document.getElementById('mktRegime').className = `mkt-val ${regClass}`;
-  document.getElementById('mktRegime').textContent = regLabel;
-  document.getElementById('mktVix').className   = `mkt-val ${vixClass}`;
-  document.getElementById('mktVix').textContent = vix;
-  document.getElementById('mktCount').textContent = signals.length;
-  document.getElementById('mktAP').textContent  = ap;
-}
-
-function showNoSignals(msg) {
-  document.getElementById('navStatus').textContent = 'No signals';
-  document.getElementById('lastUpdated').textContent = 'Engine runs daily after 6:30 PM IST';
-  document.getElementById('signalsContainer').innerHTML = `
-    <div class="no-signals">
-      <div style="font-size:40px;margin-bottom:16px;opacity:0.3">📭</div>
-      <h3>No Signals Today</h3>
-      <p>${msg}</p>
-      <p style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--muted2);">
-        Check back after 6:30 PM IST on trading days
-      </p>
-    </div>`;
-}
-
-function fmt(n) {
-  if (!n) return '—';
-  return parseFloat(n).toLocaleString('en-IN', { minimumFractionDigits:1, maximumFractionDigits:1 });
-}
-
-// ── INIT ────────────────────────────────────────────────────────
-fetchSignals();
+render().catch(e=>{console.error(e);document.getElementById('signalContainer').innerHTML='<div class="loading">Could not load signals.</div>';});
 </script>
 </body>
 </html>
