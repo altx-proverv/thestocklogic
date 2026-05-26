@@ -225,6 +225,12 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     df["total_score"]     = total
     df["qualifies"]       = (~df["disqualified"]) & (total >= MIN_SCORE)
 
+    # Assign grade based on score
+    df["grade"] = "skip"
+    df.loc[df["qualifies"] & (total >= 80), "grade"] = "A+"
+    df.loc[df["qualifies"] & (total >= 75) & (total < 80), "grade"] = "A"
+    df.loc[df["qualifies"] & (total >= 65) & (total < 75), "grade"] = "B"
+
     return df
 
 
