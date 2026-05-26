@@ -255,12 +255,18 @@ async function render(){
   document.getElementById('liveLabel').textContent='LIVE';
   document.getElementById('mCount').textContent=byD[allD[0]]?.length||0;
   document.getElementById('mUpdated').textContent=new Date(allD[0]).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+  // Find last 3 trading days that actually have signals
+  const allDatesWithSigs = allD.filter(d => byD[d] && byD[d].length > 0);
+  const activeDays = allDatesWithSigs.slice(0, 3);
+  // Pad with empty trading days if less than 3 signal days
+  const r3WithSigs = activeDays.length >= 3 ? activeDays : r3;
+  
   const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
-  // TODAY: full signal cards
-  let html = todayCards(r3[0], byD[r3[0]]||null);
+  // TODAY: full signal cards (most recent signal day)
+  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null);
   // YESTERDAY + 2 DAYS AGO: summary rows
-  html += r3.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
-  const rSet=new Set(r3);const archD=allD.filter(d=>!rSet.has(d));
+  html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
+  const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
   if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
   document.getElementById('signalContainer').innerHTML=html;
 }
