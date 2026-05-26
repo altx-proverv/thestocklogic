@@ -401,23 +401,33 @@ def main():
     log.info("\n── Step 1: Loading SMC data ──")
     combined = load_all_smc()
 
-    # Score both directions — drop non-qualifying immediately to save RAM
-    log.info("\n── Step 2: Scoring (vectorized) ──")
-    log.info("Processing LONG signals...")
-    longs = process_direction(combined, "long", sector_bias, symbol_sector)
-    longs_q = longs[longs["qualifies"]].copy()
-    del longs
-    log.info(f"Long qualifying: {len(longs_q):,}")
+    # Score in batches of 100 stocks to avoid OOM on t2.micro
+    log.info("\n── Step 2: Scoring (vectorized — batched) ──")
+    symbols = combined["symbol"].unique().tolist()
+    batch_size = 100
+    all_qualifying = []
 
-    log.info("Processing SHORT signals...")
-    shorts = process_direction(combined, "short", sector_bias, symbol_sector)
-    shorts_q = shorts[shorts["qualifies"]].copy()
-    del shorts
-    log.info(f"Short qualifying: {len(shorts_q):,}")
+    for i in range(0, len(symbols), batch_size):
+        batch_syms = symbols[i:i+batch_size]
+        batch = combined[combined["symbol"].isin(batch_syms)].copy()
+        log.info(f"Batch {i//batch_size+1}/{(len(symbols)-1)//batch_size+1}: {len(batch_syms)} stocks, {len(batch):,} rows")
+
+        longs = process_direction(batch, "long", sector_bias, symbol_sector)
+        longs_q = longs[longs["qualifies"]].copy()
+        del longs
+
+        shorts = process_direction(batch, "short", sector_bias, symbol_sector)
+        shorts_q = shorts[shorts["qualifies"]].copy()
+        del shorts
+        del batch
+
+        batch_q = pd.concat([longs_q, shorts_q], ignore_index=True)
+        del longs_q, shorts_q
+        all_qualifying.append(batch_q)
+
     del combined
-
-    scored = pd.concat([longs_q, shorts_q], ignore_index=True)
-    del longs_q, shorts_q
+    scored = pd.concat(all_qualifying, ignore_index=True)
+    del all_qualifying
     log.info(f"Total qualifying: {len(scored):,}")
     scored.to_parquet(SIGNALS_DIR / "all_scores_v2.parquet", index=False)
 
