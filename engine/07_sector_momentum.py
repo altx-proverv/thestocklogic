@@ -129,16 +129,22 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> pd.DataFrame:
     sector_df.loc[top3, "classification"] = "strong"
     sector_df.loc[bot3, "classification"] = "weak"
 
-    # Market direction based on top vs bottom sectors
-    top_avg = sector_df.head(3)["momentum_score"].mean()
-    bot_avg = sector_df.tail(3)["momentum_score"].mean()
-    all_pos = (sector_df["momentum_score"] > 0).all()
-    all_neg = (sector_df["momentum_score"] < 0).all()
+    # Market direction — uses today's actual returns + signal mix
+    # NOT just historical momentum (which lags by 5-20 days)
+    
+    all_pos = (sector_df["ret_1d_median"] > 0).all()
+    all_neg = (sector_df["ret_1d_median"] < 0).all()
+    top3_1d = sector_df.head(3)["ret_1d_median"].mean()
+    bot3_1d = sector_df.tail(3)["ret_1d_median"].mean()
+    adv_total = sector_df["advancing"].sum()
+    dec_total = sector_df["declining"].sum()
+    adv_ratio = adv_total / max(adv_total + dec_total, 1)
 
-    if all_pos or top_avg > 1.0:
-        market_direction = "bullish"
-    elif all_neg or bot_avg < -1.0:
+    # Hard override: if majority stocks declining today = bearish
+    if adv_ratio < 0.35 or (all_neg and bot3_1d < -0.5):
         market_direction = "bearish"
+    elif adv_ratio > 0.65 and top3_1d > 0.3:
+        market_direction = "bullish"
     else:
         market_direction = "mixed"
 

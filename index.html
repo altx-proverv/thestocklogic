@@ -158,7 +158,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   <div class="mkt-pill"><span class="mkt-key">VIX</span><span class="mkt-val neut" id="mVix">—</span></div>
   <div class="mkt-pill"><span class="mkt-key">TOP SECTORS</span><span class="mkt-val bull" id="mTop">—</span></div>
   <div class="mkt-pill"><span class="mkt-key">WEAK SECTORS</span><span class="mkt-val bear" id="mBot">—</span></div>
-  <div class="mkt-pill"><span class="mkt-key">SIGNALS TODAY</span><span class="mkt-val neut" id="mCount">—</span></div>
+  <div class="mkt-pill"><span class="mkt-key">TODAY</span><span class="mkt-val neut" id="mCount">—</span></div>
   <div class="mkt-pill"><span class="mkt-key">UPDATED</span><span class="mkt-val neut" id="mUpdated">—</span></div>
 </div>
 <div class="main">
@@ -253,7 +253,10 @@ async function render(){
   const allD=Object.keys(byD).sort().reverse();
   const r3=prevTD(3);
   document.getElementById('liveLabel').textContent='LIVE';
-  document.getElementById('mCount').textContent=byD[allD[0]]?.length||0;
+  const todaySigs = byD[allD[0]]||[];
+  const longCount = todaySigs.filter(s=>s.direction==='LONG').length;
+  const shortCount = todaySigs.filter(s=>s.direction==='SHORT').length;
+  document.getElementById('mCount').textContent = longCount+' ↑  '+shortCount+' ↓';
   document.getElementById('mUpdated').textContent=new Date(allD[0]).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
   // Find last 3 trading days that actually have signals
   const allDatesWithSigs = allD.filter(d => byD[d] && byD[d].length > 0);
