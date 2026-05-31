@@ -256,7 +256,10 @@ async function render(){
   const todaySigs = byD[allD[0]]||[];
   const longCount = todaySigs.filter(s=>s.direction==='LONG').length;
   const shortCount = todaySigs.filter(s=>s.direction==='SHORT').length;
-  document.getElementById('mCount').textContent = longCount+' ↑  '+shortCount+' ↓';
+  document.getElementById('mCount').innerHTML = 
+    '<span style="color:var(--green)">'+longCount+' ↑</span>' +
+    '<span style="color:var(--muted)"> | </span>' +
+    '<span style="color:var(--red)">'+shortCount+' ↓</span>';
   document.getElementById('mUpdated').textContent=new Date(allD[0]).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
   // Find last 3 trading days that actually have signals
   const allDatesWithSigs = allD.filter(d => byD[d] && byD[d].length > 0);
