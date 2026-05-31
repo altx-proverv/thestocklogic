@@ -298,6 +298,62 @@ def push_live_signals(signals: list, session: str):
         log.error(f"Push failed: {r.status_code} — {r.text[:100]}")
 
 
+
+def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
+    """Push live sector heatmap + regime to Supabase after each session."""
+    supabase_url = os.environ.get("SUPABASE_URL","https://eibdlcanpudjgmkjxrga.supabase.co")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY","")
+    if not supabase_key or sector_df.empty:
+        return
+
+    today = date.today().isoformat()
+    now   = datetime.now().strftime("%H:%M")
+
+    headers = {
+        "apikey":        supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type":  "application/json",
+        "Prefer":        "resolution=merge-duplicates",
+    }
+
+    # Delete existing live sector data for today's session
+    requests.delete(
+        f"{supabase_url}/rest/v1/sector_heatmap?signal_date=eq.{today}",
+        headers=headers
+    )
+
+    records = []
+    for _, row in sector_df.iterrows():
+        records.append({
+            "signal_date":      today,
+            "sector":           row["sector"],
+            "rank":             int(row["rank"]),
+            "momentum_score":   round(float(row.get("ret_median", 0)), 2),
+            "ret_1d":           round(float(row.get("ret_median", 0)), 2),
+            "ret_5d":           0.0,
+            "ret_20d":          0.0,
+            "stock_count":      int(row.get("stock_count", 0)),
+            "advancing":        int(row.get("advancing", 0)),
+            "declining":        int(row.get("declining", 0)),
+            "classification":   row.get("classification", "neutral"),
+            "trade_bias":       row.get("trade_bias", "avoid"),
+            "market_direction": row.get("market_direction", "mixed"),
+        })
+
+    r = requests.post(
+        f"{supabase_url}/rest/v1/sector_heatmap",
+        headers=headers, json=records
+    )
+    if r.status_code in (200, 201):
+        log.info(f"Live regime pushed to Supabase — session: {session}")
+        regime = sector_df.iloc[0].get("market_direction","mixed").upper()
+        top2   = sector_df[sector_df["trade_bias"]=="long"]["sector"].tolist()[:2]
+        bot2   = sector_df[sector_df["trade_bias"]=="short"]["sector"].tolist()[:2]
+        log.info(f"Regime: {regime} | Long: {top2} | Short: {bot2}")
+    else:
+        log.warning(f"Live regime push failed: {r.status_code}")
+
+
 def run_session_update():
     """Run one complete session update cycle."""
     sys.path.insert(0, str(Path(__file__).parent))
@@ -370,6 +426,9 @@ def run_session_update():
         # Save candidates
         top_candidates.to_parquet(DATA_DIR / f"live_longs_{session}.parquet", index=False)
         short_candidates.to_parquet(DATA_DIR / f"live_shorts_{session}.parquet", index=False)
+
+    # Push live regime to Supabase
+    push_live_regime(sector_df, session)
 
     log.info(f"\nSession update complete: {session}")
 
