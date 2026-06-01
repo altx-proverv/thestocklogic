@@ -326,9 +326,46 @@ function openModal(s){
       })()
     )
     +'<div class="score-wrap"><div class="score-label">'+(isORB?'RVOL STRENGTH &mdash; '+rvol+'x':'CONVICTION &mdash; '+(s.score||'&mdash;')+'/100')+'</div><div class="score-bg"><div class="score-fill'+(isORB?' orb-sfill':'')+'" style="width:'+sp+'%"></div></div></div>'
+    +(isORB?'':'<div style="padding:12px 18px;border-top:1px solid var(--line2)"><div style="margin-bottom:8px"><select id="tradeReason" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:6px 10px;font-family:var(--font);font-size:11px;margin-bottom:6px"><option value="">Select reason for taking trade...</option><option value="Setup quality">Setup quality</option><option value="Sector alignment">Sector alignment</option><option value="RVOL confirmation">RVOL confirmation</option><option value="Grade A+ signal">Grade A+ signal</option><option value="Trend alignment">Trend alignment</option><option value="Gut feel">Gut feel</option></select><input id="tradeNotes" placeholder="Notes (optional)" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:6px 10px;font-family:var(--font);font-size:11px"></div><button id="logTradeBtn" onclick="logTrade('+sj(s)+')" style="width:100%;background:rgba(0,214,143,0.08);border:1px solid rgba(0,214,143,0.3);color:var(--green);padding:8px;font-family:var(--font);font-size:10px;letter-spacing:2px;cursor:pointer">+ LOG THIS TRADE</button></div>')
     +'<div class="modal-disc">&#9888; Educational only &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';
   document.getElementById('modal').classList.add('open');
 }
+function logTrade(s){
+  if(typeof s==='string')s=JSON.parse(s);
+  var reason=document.getElementById('tradeReason')?.value||'';
+  var notes=document.getElementById('tradeNotes')?.value||'';
+  var record={
+    signal_id:   s.id||null,
+    symbol:      s.symbol,
+    signal_date: s.signal_date,
+    direction:   s.direction,
+    grade:       s.grade||'B',
+    score:       s.score||0,
+    sector:      s.sector||'',
+    setup_name:  s.setup_name||'',
+    entry_ref:   parseFloat(s.entry_ref||0),
+    target_1:    parseFloat(s.target_1||0),
+    target_2:    parseFloat(s.target_2||0),
+    sl:          parseFloat(s.sl||0),
+    risk_inr:    parseFloat(s.risk_inr||0),
+    qty:         parseInt(s.qty||0),
+    reason:      reason,
+    notes:       notes,
+  };
+  fetch(SB+'/rest/v1/paper_trades',{
+    method:'POST',
+    headers:{...HDR,'Content-Type':'application/json','Prefer':'return=representation'},
+    body:JSON.stringify(record)
+  }).then(function(r){
+    if(r.ok){
+      var btn=document.getElementById('logTradeBtn');
+      if(btn){btn.innerHTML='&#10003; LOGGED';btn.style.color='var(--green)';btn.style.borderColor='rgba(0,214,143,0.4)';btn.disabled=true;}
+    } else {
+      alert('Failed to log trade. Try again.');
+    }
+  }).catch(function(e){console.error(e);});
+}
+
 function closeModal(){document.getElementById('modal').classList.remove('open');}
 document.getElementById('modal').addEventListener('click',function(e){if(e.target===document.getElementById('modal'))closeModal();});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
