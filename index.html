@@ -292,7 +292,10 @@ async function render(){
   
   const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
   // TODAY: full signal cards (most recent signal day)
-  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null, live||[]);
+  // Live signals are always today's regardless of EOD date
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayLive = (live||[]).filter(s => s.signal_date === todayStr);
+  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null, todayLive);
   // YESTERDAY + 2 DAYS AGO: summary rows
   html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
   const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
