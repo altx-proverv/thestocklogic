@@ -210,6 +210,8 @@ def push_orb_signals(signals: list):
         "target_2":    s["target_2"],
         "ltp":         s["ltp"],
         "signal_time": s["signal_time"],
+        "rvol":        s.get("rvol", 0),
+        "orb_range_pct": s.get("orb_range_pct", 0),
     } for s in signals]
 
     r = requests.post(
