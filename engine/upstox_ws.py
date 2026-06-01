@@ -430,6 +430,9 @@ def run_session_update():
     # Push live regime to Supabase
     push_live_regime(sector_df, session)
 
+    # Push live prices to Supabase
+    push_live_prices(quotes, INSTRUMENT_KEYS)
+
     log.info(f"\nSession update complete: {session}")
 
 
@@ -454,3 +457,50 @@ if __name__ == "__main__":
         print("Usage:")
         print("  python3 engine/upstox_ws.py --update   # run session update")
         print("  python3 engine/upstox_ws.py --test     # test quotes")
+
+
+def push_live_prices(quotes: dict, instrument_keys: dict):
+    """Push latest LTP for all stocks to live_prices table."""
+    supabase_url = os.environ.get("SUPABASE_URL", "https://eibdlcanpudjgmkjxrga.supabase.co")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not supabase_key:
+        return
+
+    headers = {
+        "apikey":        supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type":  "application/json",
+        "Prefer":        "resolution=merge-duplicates",
+    }
+
+    records = []
+    for key, data in quotes.items():
+        # Quote keys are "NSE_EQ:SYMBOL" format
+        symbol = key.split(":")[-1] if ":" in key else key
+        if not symbol:
+            continue
+        ltp        = data.get("last_price", 0)
+        close      = data.get("ohlc", {}).get("close", ltp) or ltp
+        change_pct = round((ltp - close) / close * 100, 2) if close else 0
+        records.append({
+            "symbol":     symbol,
+            "ltp":        round(float(ltp), 2),
+            "change_pct": change_pct,
+            "updated_at": datetime.now().isoformat(),
+        })
+
+    if not records:
+        return
+
+    # Push in batches of 200
+    for i in range(0, len(records), 200):
+        batch = records[i:i+200]
+        r = requests.post(
+            f"{supabase_url}/rest/v1/live_prices",
+            headers=headers,
+            json=batch,
+        )
+        if r.status_code not in (200, 201):
+            log.warning(f"live_prices push failed: {r.status_code}")
+
+    log.info(f"Live prices updated: {len(records)} stocks")
