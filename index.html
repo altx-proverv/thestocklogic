@@ -202,16 +202,105 @@ function toggleArch(){document.getElementById('archToggle').classList.toggle('op
 function openArchDay(dt){const sigs=window._S&&window._S[dt]||[];if(!sigs.length)return;if(sigs.length===1){openModal(sigs[0]);return;}const d=new Date(dt).toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+d+'</div><div class="modal-meta">'+sigs.length+' SIGNALS &middot; TAP TO VIEW</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div style="padding:12px 18px;">'+sigs.map(s=>srRow(s)).join('')+'</div>';document.getElementById('modal').classList.add('open')}
 function openModal(s){if(typeof s==='string')s=JSON.parse(s);const isL=s.direction==='LONG';const sp=Math.min(100,(s.score/100)*100);const ds=new Date(s.signal_date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const dep=s.qty&&s.entry_ref?Math.round(s.qty*s.entry_ref).toLocaleString('en-IN'):'—';document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div><div class="modal-meta"><span class="'+(isL?'bull':'bear')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; <span class="'+gc(s.grade)+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span> &middot; '+s.score+'/100 &middot; '+ds+'</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div class="modal-levels"><div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div><div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="modal-body"><div class="modal-row"><span class="modal-row-key">Setup</span><span class="modal-row-val">'+(s.setup_name||'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Target 2</span><span class="modal-row-val bull">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div><div class="modal-row"><span class="modal-row-key">Entry zone</span><span class="modal-row-val">&#8377;'+fmt(s.entry_low)+' – &#8377;'+fmt(s.entry_high)+'</span></div><div class="modal-row"><span class="modal-row-key">SL distance</span><span class="modal-row-val bear">'+(s.sl_pct||'—')+'%</span></div><div class="modal-row"><span class="modal-row-key">Risk / Reward</span><span class="modal-row-val">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div><div class="modal-row"><span class="modal-row-key">Quantity</span><span class="modal-row-val">'+(s.qty||'—')+' shares</span></div><div class="modal-row"><span class="modal-row-key">Capital deployed</span><span class="modal-row-val">&#8377;'+dep+'</span></div><div class="modal-row"><span class="modal-row-key">Max risk</span><span class="modal-row-val bear">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Market regime</span><span class="modal-row-val">'+(s.market_regime||'—').toUpperCase()+'</span></div><div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">'+(s.trade_type||(isL?'BTST LONG':'INTRADAY SHORT'))+'</span></div></div><div class="score-bar-wrap"><div class="score-bar-label">CONVICTION SCORE — '+s.score+'/100</div><div class="score-bar-bg"><div class="score-bar-fill" style="width:'+sp+'%"></div></div></div><div class="modal-disclaimer">&#9888; Educational only &middot; Algo-generated &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';document.getElementById('modal').classList.add('open')}
 
-function todayCards(dt, sigs) {
-  const d = new Date(dt);
+function todayCards(dt, eodSigs, orbSigs) {
+  const d  = new Date(dt);
   const ds = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-  let body;
-  if (!sigs || !sigs.length) {
-    body = '<div class="no-day" style="padding:28px;text-align:center;"><div style="font-size:24px;margin-bottom:8px;opacity:.3">📭</div><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:4px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No A/A+ grade setups today</div></div>';
-  } else {
-    body = '<div class="today-grid">' + sigs.map(scCard).join('') + '</div>';
+  const eod = eodSigs || [];
+  const orb = orbSigs || [];
+
+  // Build lookup maps
+  const eodMap = {};
+  eod.forEach(s => { eodMap[s.symbol] = s; });
+  const orbSyms = new Set(orb.map(s => s.symbol));
+
+  // --- INTRADAY (ORB) section — top 5 by RVOL ---
+  const orbList = [...orb].sort((a,b) => (b.rvol||0) - (a.rvol||0));
+
+  // --- POSITIONAL (EOD) section ---
+  // EOD+ORB: same direction confluence → use ORB levels, show EOD+ORB badge
+  // EOD only: stock not in ORB
+  // Conflict: opposite direction → remove entirely
+  const conflicts = new Set();
+  const eodOrb = [];
+  const eodOnly = [];
+
+  eod.forEach(es => {
+    const os = orb.find(o => o.symbol === es.symbol);
+    if (os) {
+      if (os.direction === es.direction) {
+        eodOrb.push({...os, badge:'EOD+ORB', score: es.score, grade: es.grade});
+      } else {
+        conflicts.add(es.symbol);
+      }
+    } else {
+      eodOnly.push({...es, badge:'EOD'});
+    }
+  });
+
+  eodOrb.sort((a,b) => (b.rvol||0) - (a.rvol||0));
+  eodOnly.sort((a,b) => (b.score||0) - (a.score||0));
+
+  const positional = [...eodOrb, ...eodOnly];
+  const orbTop5  = orbList.slice(0, 5);
+  const orbRest  = orbList.slice(5);
+  const posTop5  = positional.slice(0, 5);
+  const posRest  = positional.slice(5);
+
+  const hasOrb = orbTop5.length > 0;
+  const hasPos = posTop5.length > 0;
+  const totalCount = orbList.length + positional.length;
+
+  if (!hasOrb && !hasPos) {
+    return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">' + ds + '</span><span class="day-count">STAY CASH</span></div>' +
+      '<div class="no-day" style="padding:28px;text-align:center;"><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:4px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No qualifying setups today</div></div>';
   }
-  return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">' + ds + '</span><span class="day-count">' + (sigs&&sigs.length ? sigs.length+' SIGNAL'+(sigs.length>1?'S':'') : 'STAY CASH') + '</span></div>' + body;
+
+  const longC  = [...orbList,...positional].filter(s=>s.direction==='LONG').length;
+  const shortC = [...orbList,...positional].filter(s=>s.direction==='SHORT').length;
+  const countStr = '<span style="color:var(--green)">'+longC+' &#8593;</span> <span style="color:var(--muted2)">|</span> <span style="color:var(--red)">'+shortC+' &#8595;</span>';
+
+  let html = '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">' + ds + '</span><span class="day-count">' + countStr + '</span></div>';
+
+  // INTRADAY section
+  if (hasOrb) {
+    html += '<div style="font-size:9px;letter-spacing:3px;color:#ffb347;padding:14px 4px 6px;border-bottom:1px solid rgba(255,179,71,0.15)">INTRADAY · ORB CONFIRMED · ACT NOW</div>';
+    html += '<div class="today-grid">' + orbTop5.map(s => scCard({...s, badge:'ORB'})).join('') + '</div>';
+    if (orbRest.length) {
+      html += '<div style="text-align:center;padding:8px 0">' +
+        '<span id="orbMoreBtn" onclick="toggleSection('orbMore','orbMoreBtn','+orbRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+orbRest.length+' MORE ORB &#9660;</span></div>';
+      html += '<div id="orbMore" style="display:none"><div class="today-grid">' + orbRest.map(s => scCard({...s, badge:'ORB'})).join('') + '</div></div>';
+    }
+  }
+
+  // POSITIONAL section
+  if (hasPos) {
+    html += '<div style="font-size:9px;letter-spacing:3px;color:var(--sky);padding:14px 4px 6px;border-bottom:1px solid rgba(77,184,255,0.1);margin-top:8px">POSITIONAL · BTST · ENTER AT OPEN</div>';
+    html += '<div class="today-grid">' + posTop5.map(s => scCard(s)).join('') + '</div>';
+    if (posRest.length) {
+      html += '<div style="text-align:center;padding:8px 0">' +
+        '<span id="posMoreBtn" onclick="toggleSection('posMore','posMoreBtn','+posRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+posRest.length+' MORE POSITIONAL &#9660;</span></div>';
+      html += '<div id="posMore" style="display:none"><div class="today-grid">' + posRest.map(s => scCard(s)).join('') + '</div></div>';
+    }
+  }
+
+  if (conflicts.size) {
+    html += '<div style="padding:8px 12px;font-size:10px;color:var(--muted2);border-top:1px solid var(--line2);margin-top:8px">&#9889; '+conflicts.size+' conflict'+(conflicts.size>1?'s':'')+' removed (ORB vs EOD opposing): '+[...conflicts].join(', ')+'</div>';
+  }
+
+  return html;
+}
+
+function toggleSection(id, btnId, count) {
+  const el  = document.getElementById(id);
+  const btn = document.getElementById(btnId);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    btn.innerHTML = 'SHOW LESS &#9650;';
+  } else {
+    el.style.display = 'none';
+    btn.innerHTML = 'SHOW ' + count + ' MORE &#9660;';
+  }
 }
 
 function scCard(s) {
