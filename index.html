@@ -266,6 +266,65 @@ function openModal(s){
     '<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div><div class="modal-meta"><span style="color:'+(isL?'var(--green)':'var(--red)')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; '+(isORB?'<span style="color:var(--amber)">INTRADAY</span>':'<span class="'+gc(s.grade||'B')+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span>')+' &middot; '+(isORB?rvol+'x RVOL':(s.score||'&mdash;')+'/100')+' &middot; '+ds+'</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div>'
     +'<div class="modal-levels"><div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(entry)+'</div></div><div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div><div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div></div>'
     +'<div class="modal-body"><div class="mrow"><span class="mrow-k">Setup</span><span class="mrow-v">'+(s.setup_name||'&mdash;')+'</span></div><div class="mrow"><span class="mrow-k">Target 2</span><span class="mrow-v" style="color:var(--green)">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div><div class="mrow"><span class="mrow-k">Entry zone</span><span class="mrow-v">'+eZone+'</span></div><div class="mrow"><span class="mrow-k">SL distance</span><span class="mrow-v" style="color:var(--red)">'+slDist+'</span></div>'+specRows+'</div>'
+    +(isORB?'':
+      (function(){
+        var isL2=s.direction==='LONG';
+        var entry2=parseFloat(s.entry_ref||0);
+        var t1=parseFloat(s.target_1||0);
+        var t2=parseFloat(s.target_2||0);
+        var sl2=parseFloat(s.sl||0);
+        var qty=parseInt(s.qty||0);
+        var qty_half=Math.floor(qty/2);
+        var risk=parseFloat(s.risk_inr||0);
+        var pnl_t1=qty_half*Math.abs(t1-entry2);
+        var pnl_t2=pnl_t1+qty_half*Math.abs(t2-entry2);
+        if(!entry2||!t1||!qty)return'';
+        return '<div style="border-top:1px solid var(--line);padding:14px 18px">'+
+          '<div style="font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:10px">TRADE MANAGEMENT</div>'+
+          '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">'+
+            '<div style="background:var(--s2);padding:8px;text-align:center">'+
+              '<div style="font-size:8px;color:var(--muted);margin-bottom:4px">ENTRY</div>'+
+              '<div style="font-size:12px;font-weight:600;color:var(--sky)">&#8377;'+fmt(entry2)+'</div>'+
+              '<div style="font-size:8px;color:var(--muted);margin-top:3px">Full position ('+qty+' shares)</div>'+
+            '</div>'+
+            '<div style="background:rgba(0,214,143,0.06);padding:8px;text-align:center;border:1px solid rgba(0,214,143,0.15)">'+
+              '<div style="font-size:8px;color:var(--muted);margin-bottom:4px">TARGET 1</div>'+
+              '<div style="font-size:12px;font-weight:600;color:var(--green)">&#8377;'+fmt(t1)+'</div>'+
+              '<div style="font-size:8px;color:var(--green);margin-top:3px;opacity:.7">Exit '+qty_half+' shares</div>'+
+            '</div>'+
+            '<div style="background:rgba(0,214,143,0.03);padding:8px;text-align:center">'+
+              '<div style="font-size:8px;color:var(--muted);margin-bottom:4px">TARGET 2</div>'+
+              '<div style="font-size:12px;font-weight:600;color:var(--green)">&#8377;'+fmt(t2)+'</div>'+
+              '<div style="font-size:8px;color:var(--green);margin-top:3px;opacity:.7">Exit '+qty_half+' shares</div>'+
+            '</div>'+
+          '</div>'+
+          '<div style="background:var(--s2);padding:8px 10px;margin-bottom:6px;font-size:11px">'+
+            '<div style="display:flex;justify-content:space-between;margin-bottom:4px">'+
+              '<span style="color:var(--muted)">&#9654; At T1 hit</span>'+
+              '<span>Exit 50% &middot; Move SL to &#8377;'+fmt(entry2)+' (breakeven)</span>'+
+            '</div>'+
+            '<div style="display:flex;justify-content:space-between">'+
+              '<span style="color:var(--muted)">&#9654; At T2 hit</span>'+
+              '<span>Exit remaining 50% &middot; Trade complete</span>'+
+            '</div>'+
+          '</div>'+
+          '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">'+
+            '<div style="text-align:center;padding:6px;background:rgba(255,77,109,0.06);border:1px solid rgba(255,77,109,0.15)">'+
+              '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">MAX LOSS</div>'+
+              '<div style="font-size:12px;font-weight:600;color:var(--red)">&#8377;'+(risk?Math.round(risk).toLocaleString('en-IN'):'&mdash;')+'</div>'+
+            '</div>'+
+            '<div style="text-align:center;padding:6px;background:rgba(0,214,143,0.06)">'+
+              '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">AT T1</div>'+
+              '<div style="font-size:12px;font-weight:600;color:var(--green)">+&#8377;'+Math.round(pnl_t1).toLocaleString('en-IN')+'</div>'+
+            '</div>'+
+            '<div style="text-align:center;padding:6px;background:rgba(0,214,143,0.06)">'+
+              '<div style="font-size:8px;color:var(--muted);margin-bottom:2px">AT T1+T2</div>'+
+              '<div style="font-size:12px;font-weight:600;color:var(--green)">+&#8377;'+Math.round(pnl_t2).toLocaleString('en-IN')+'</div>'+
+            '</div>'+
+          '</div>'+
+        '</div>';
+      })()
+    )
     +'<div class="score-wrap"><div class="score-label">'+(isORB?'RVOL STRENGTH &mdash; '+rvol+'x':'CONVICTION &mdash; '+(s.score||'&mdash;')+'/100')+'</div><div class="score-bg"><div class="score-fill'+(isORB?' orb-sfill':'')+'" style="width:'+sp+'%"></div></div></div>'
     +'<div class="modal-disc">&#9888; Educational only &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';
   document.getElementById('modal').classList.add('open');
