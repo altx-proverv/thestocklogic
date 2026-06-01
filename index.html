@@ -151,7 +151,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 <div class="hero">
   <div class="hero-label">ALGO-POWERED · SMC-BASED · DAILY SIGNALS</div>
   <h1>TRADE <em>Intelligence</em><br>DAILY</h1>
-  <p class="hero-sub">Institutional-grade signal detection across 243 NSE stocks. Entry, SL and targets defined. You decide — you trade.</p>
+  <p class="hero-sub">Institutional-grade signal detection across 500 NSE stocks. Entry, SL and targets defined. You decide — you trade.</p>
 </div>
 <div class="mkt-bar">
   <div class="mkt-pill"><span class="mkt-key">REGIME</span><span class="mkt-val neut" id="mRegime">—</span></div>
@@ -350,28 +350,6 @@ async function render(){
   html += todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null);
   // YESTERDAY + 2 DAYS AGO: summary rows
   html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
-  // Live ORB signals section
-  if(live&&live.length){
-    const longs=live.filter(s=>s.direction==='LONG');
-    const shorts=live.filter(s=>s.direction==='SHORT');
-    html+='<div class="day-header"><span class="day-badge today" style="background:rgba(255,179,71,0.1);color:#ffb347;border-color:rgba(255,179,71,0.4)">ORB LIVE</span><span class="day-date">Opening Range Breakout — Today</span><span class="day-count" style="color:#ffb347">'+live.length+' SIGNALS</span></div>';
-    html+='<div class="signal-rows">'+live.map(s=>{
-      const isL=s.direction==='LONG';
-      const q=JSON.stringify(s).replace(/"/g,"&quot;");
-      return '<div class="signal-row" onclick="openModal('+q+')">'+
-        '<div class="sr-sym">'+s.symbol+'</div>'+
-        '<div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div>'+
-        '<div><span class="sr-grade grade-b" style="color:#ffb347;border-color:rgba(255,179,71,0.4);background:rgba(255,179,71,0.08)">ORB</span></div>'+
-        '<div class="sr-score">'+s.signal_time+'</div>'+
-        '<div class="sr-level sr-entry">&#8377;'+fmt(s.entry)+'</div>'+
-        '<div class="sr-level sr-sl">&#8377;'+fmt(s.sl)+'</div>'+
-        '<div class="sr-level sr-t1">&#8377;'+fmt(s.target_1)+'</div>'+
-        '<div class="sr-setup">'+s.setup_name+'</div>'+
-        '<div class="sr-arrow">&#8250;</div>'+
-      '</div>';
-    }).join('')+'</div>';
-  }
-
   const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
   if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
   document.getElementById('signalContainer').innerHTML=html;
