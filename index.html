@@ -200,70 +200,59 @@ function daySection(dt,sigs,lbl){const d=new Date(dt);const ds=d.toLocaleDateStr
 function archDay(dt,sigs){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});const chips=sigs.map(s=>'<span class="ad-chip '+(s.direction==='LONG'?'long-chip':'short-chip')+'">'+s.symbol+'</span>').join('');return'<div class="archive-day" onclick="openArchDay(\''+dt+'\')"><div class="ad-date">'+ds+'</div><div class="ad-chips">'+chips+'</div><div class="ad-count">'+sigs.length+'</div><div>&#8250;</div></div>'}
 function toggleArch(){document.getElementById('archToggle').classList.toggle('open');document.getElementById('archBody').classList.toggle('open')}
 function openArchDay(dt){const sigs=window._S&&window._S[dt]||[];if(!sigs.length)return;if(sigs.length===1){openModal(sigs[0]);return;}const d=new Date(dt).toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+d+'</div><div class="modal-meta">'+sigs.length+' SIGNALS &middot; TAP TO VIEW</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div style="padding:12px 18px;">'+sigs.map(s=>srRow(s)).join('')+'</div>';document.getElementById('modal').classList.add('open')}
-function openModal(s){if(typeof s==='string')s=JSON.parse(s);const isL=s.direction==='LONG';const sp=Math.min(100,(s.score/100)*100);const ds=new Date(s.signal_date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const dep=s.qty&&s.entry_ref?Math.round(s.qty*s.entry_ref).toLocaleString('en-IN'):'—';document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div><div class="modal-meta"><span class="'+(isL?'bull':'bear')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; <span class="'+gc(s.grade)+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span> &middot; '+s.score+'/100 &middot; '+ds+'</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div class="modal-levels"><div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div><div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="modal-body"><div class="modal-row"><span class="modal-row-key">Setup</span><span class="modal-row-val">'+(s.setup_name||'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Target 2</span><span class="modal-row-val bull">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div><div class="modal-row"><span class="modal-row-key">Entry zone</span><span class="modal-row-val">&#8377;'+fmt(s.entry_low)+' – &#8377;'+fmt(s.entry_high)+'</span></div><div class="modal-row"><span class="modal-row-key">SL distance</span><span class="modal-row-val bear">'+(s.sl_pct||'—')+'%</span></div><div class="modal-row"><span class="modal-row-key">Risk / Reward</span><span class="modal-row-val">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div><div class="modal-row"><span class="modal-row-key">Quantity</span><span class="modal-row-val">'+(s.qty||'—')+' shares</span></div><div class="modal-row"><span class="modal-row-key">Capital deployed</span><span class="modal-row-val">&#8377;'+dep+'</span></div><div class="modal-row"><span class="modal-row-key">Max risk</span><span class="modal-row-val bear">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Market regime</span><span class="modal-row-val">'+(s.market_regime||'—').toUpperCase()+'</span></div><div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">'+(s.trade_type||(isL?'BTST LONG':'INTRADAY SHORT'))+'</span></div></div><div class="score-bar-wrap"><div class="score-bar-label">CONVICTION SCORE — '+s.score+'/100</div><div class="score-bar-bg"><div class="score-bar-fill" style="width:'+sp+'%"></div></div></div><div class="modal-disclaimer">&#9888; Educational only &middot; Algo-generated &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';document.getElementById('modal').classList.add('open')}
+function openModal(s){
+  if(typeof s==='string')s=JSON.parse(s);
+  const isL=s.direction==='LONG';
+  const isORB=s.session==='morning'||s.badge==='ORB'||s.badge==='EOD+ORB';
+  const entry=isORB?(s.entry||s.entry_ref):s.entry_ref;
+  const rvol=parseFloat(s.rvol||0).toFixed(1);
+  const sp=isORB?Math.min(100,(s.rvol||0)/3*100):Math.min(100,((s.score||0)/100)*100);
+  const ds=new Date(s.signal_date||new Date()).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+  const dep=s.qty&&entry?Math.round(s.qty*entry).toLocaleString('en-IN'):'—';
+  const slDist=isORB&&entry&&s.sl?fmt(Math.abs(entry-s.sl)/entry*100)+'%':(s.sl_pct||'—')+'%';
+  const entryLow=isORB&&entry?fmt(entry*0.999):fmt(s.entry_low);
+  const entryHigh=isORB&&entry?fmt(entry*1.001):fmt(s.entry_high);
 
-function todayCards(dt, sigs) {
-  const d = new Date(dt);
-  const ds = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-  if (!sigs || !sigs.length) {
-    return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">'+ds+'</span><span class="day-count">STAY CASH</span></div>'+
-      '<div class="no-day" style="padding:28px;text-align:center;"><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:4px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No qualifying setups today</div></div>';
-  }
-  const top10 = sigs.slice(0,10);
-  const rest  = sigs.slice(10);
-  let body = '<div class="today-grid">' + top10.map(scCard).join('') + '</div>';
-  if (rest.length) {
-    body += '<div style="text-align:center;padding:10px 0">'+
-      '<span id="seeMoreBtn" onclick="toggleSeeMore()" style="cursor:pointer;font-size:10px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:6px 18px">SEE '+rest.length+' MORE &#9660;</span></div>';
-    body += '<div id="seeMoreCards" style="display:none"><div class="today-grid">'+rest.map(scCard).join('')+'</div></div>';
-  }
-  return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">'+ds+'</span><span class="day-count">'+sigs.length+' SIGNAL'+(sigs.length>1?'S':'')+'</span></div>'+body;
-}
-
-function toggleSeeMore(){
-  const el=document.getElementById('seeMoreCards');
-  const btn=document.getElementById('seeMoreBtn');
-  if(!el)return;
-  if(el.style.display==='none'){
-    el.style.display='block';
-    btn.innerHTML='SHOW LESS &#9650;';
-  } else {
-    el.style.display='none';
-    const n=el.querySelectorAll('.sc-card').length;
-    btn.innerHTML='SEE '+n+' MORE &#9660;';
-  }
-}
-
-function scCard(s) {
-  const isL = s.direction === 'LONG';
-  const q = JSON.stringify(s).replace(/"/g,'&quot;');
-  const sp = Math.min(100,(s.score/100)*100);
-  const rr1 = s.rr_1||2; const rr2 = s.rr_2||3;
-  const tt = s.trade_type||(isL?'BTST':'INTRADAY');
-  const dep = s.qty&&s.entry_ref ? '&#8377;'+Math.round(s.qty*s.entry_ref).toLocaleString('en-IN') : '—';
-  return '<div class="sc-card" onclick="openModal('+q+')">' +
-    '<div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-sub">'+(s.setup_name||'—')+'</div></div>' +
-    '<div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div>' +
-    '<div class="sc-levels">' +
-      '<div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val" style="color:var(--sky)">&#8377;'+fmt(s.entry_ref)+'</div></div>' +
-      '<div class="sc-lv"><div class="sc-lv-label">TARGET 1</div><div class="sc-lv-val" style="color:var(--green)">&#8377;'+fmt(s.target_1)+'</div></div>' +
-      '<div class="sc-lv"><div class="sc-lv-label">STOP LOSS</div><div class="sc-lv-val" style="color:var(--red)">&#8377;'+fmt(s.sl)+'</div></div>' +
-    '</div>' +
-    '<div class="sc-body">' +
-      '<div class="sc-chips">' +
-        '<span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+s.direction+'</span>' +
-        '<span class="chip chip-neu">'+tt+'</span>' +
-        '<span class="chip chip-amb">RR '+rr1+':1</span>' +
-      '</div>' +
-      '<div class="sc-sbar"><div class="sc-sbar-fill" style="width:'+sp+'%"></div></div>' +
-      '<div class="sc-risk" style="margin-top:8px">'+
-        '<span>Score <span>'+s.score+'/100</span></span>' +
-        '<span>Qty <span>'+(s.qty||'—')+'</span></span>' +
-        '<span>Risk <span>'+(s.risk_inr?'&#8377;'+Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></span>' +
-      '</div>' +
-    '</div>' +
-    '<div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for full details</div>' +
-  '</div>';
+  document.getElementById('modalCard').innerHTML=
+    '<div class="modal-top">'+
+      '<div>'+
+        '<div class="modal-sym">'+s.symbol+'</div>'+
+        '<div class="modal-meta">'+
+          '<span class="'+(isL?'bull':'bear')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; '+
+          (isORB?'<span style="color:#ffb347">INTRADAY</span>':'<span class="'+gc(s.grade||'B')+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span>')+
+          ' &middot; '+(isORB?rvol+'x RVOL':(s.score||'—')+'/100')+' &middot; '+ds+
+        '</div>'+
+      '</div>'+
+      '<button class="modal-close" onclick="closeModal()">&#215;</button>'+
+    '</div>'+
+    '<div class="modal-levels">'+
+      '<div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(entry)+'</div></div>'+
+      '<div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div>'+
+      '<div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div>'+
+    '</div>'+
+    '<div class="modal-body">'+
+      '<div class="modal-row"><span class="modal-row-key">Setup</span><span class="modal-row-val">'+(s.setup_name||'—')+'</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Target 2</span><span class="modal-row-val bull">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Entry zone</span><span class="modal-row-val">&#8377;'+entryLow+' &#8211; &#8377;'+entryHigh+'</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">SL distance</span><span class="modal-row-val bear">'+slDist+'</span></div>'+
+      (isORB?
+        '<div class="modal-row"><span class="modal-row-key">ORB range</span><span class="modal-row-val">'+(s.orb_range_pct||'—')+'%</span></div>'+
+        '<div class="modal-row"><span class="modal-row-key">Signal time</span><span class="modal-row-val">'+(s.signal_time||'—')+'</span></div>'+
+        '<div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">INTRADAY</span></div>'
+        :
+        '<div class="modal-row"><span class="modal-row-key">Risk / Reward</span><span class="modal-row-val">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div>'+
+        '<div class="modal-row"><span class="modal-row-key">Quantity</span><span class="modal-row-val">'+(s.qty||'—')+' shares</span></div>'+
+        '<div class="modal-row"><span class="modal-row-key">Capital deployed</span><span class="modal-row-val">&#8377;'+dep+'</span></div>'+
+        '<div class="modal-row"><span class="modal-row-key">Max risk</span><span class="modal-row-val bear">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></div>'+
+        '<div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">'+(s.trade_type||(isL?'BTST LONG':'INTRADAY SHORT'))+'</span></div>'
+      )+
+    '</div>'+
+    '<div class="score-bar-wrap">'+
+      '<div class="score-bar-label">'+(isORB?'RVOL STRENGTH &mdash; '+rvol+'x':'CONVICTION &mdash; '+(s.score||'—')+'/100')+'</div>'+
+      '<div class="score-bar-bg"><div class="score-bar-fill" style="width:'+sp+'%;'+(isORB?'background:#ffb347':'')+'"></div></div>'+
+    '</div>'+
+    '<div class="modal-disclaimer">&#9888; Educational only &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';
+  document.getElementById('modal').classList.add('open');
 }
 
 function closeModal(){document.getElementById('modal').classList.remove('open')}
