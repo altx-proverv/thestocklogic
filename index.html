@@ -138,6 +138,10 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 .sc-sbar-fill{height:100%;background:linear-gradient(90deg,var(--sky),var(--green))}
 .sc-disc{font-size:8px;color:var(--muted2);padding:5px 14px;border-top:1px solid var(--line2);background:rgba(255,77,109,.02)}
 .today-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:8px}
+
+.hcard{background:var(--s1);border:1px solid var(--line2);padding:14px;cursor:pointer;transition:background .12s,border-color .12s;scroll-snap-align:start;min-width:200px;max-width:200px;flex-shrink:0}
+.hcard:hover{background:var(--s2);border-color:rgba(77,184,255,0.2)}
+#intradayScroll::-webkit-scrollbar,#positionalScroll::-webkit-scrollbar{display:none}
 </style>
 </head>
 <body>
@@ -173,229 +177,200 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
     </div>
   </div>
 </div>
-<div class="disc-bar">⚠ EDUCATIONAL CONTENT ONLY · ALGO-GENERATED · NOT SEBI-REGISTERED · NOT A BUY/SELL RECOMMENDATION · CONSULT YOUR SEBI RA</div>
-<footer>
-  <div class="footer-logo">THE STOCK LOGIC</div>
-  <div class="footer-meta">thestocklogic.com · v2.0<br>Signals update daily after 6:35 PM IST</div>
-</footer>
-<div class="modal-bg" id="modal"><div class="modal" id="modalCard"></div></div>
-<script>
+<div class="disc-bar">⚠ EDUCATIONAL CON<script>
 const SB='https://eibdlcanpudjgmkjxrga.supabase.co';
 const AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
 const H={'apikey':AK,'Authorization':'Bearer '+AK};
 const HOLS=new Set(['2026-01-26','2026-03-18','2026-04-02','2026-04-06','2026-04-14','2026-04-17','2026-05-01','2026-08-15','2026-10-02','2026-10-21','2026-10-22','2026-11-05','2026-11-20','2026-12-25']);
 function isTD(d){const w=d.getDay();if(w===0||w===6)return false;return!HOLS.has(d.toISOString().split('T')[0])}
-function prevTD(n){const r=[];const d=new Date();while(r.length<n){if(isTD(d))r.push(d.toISOString().split('T')[0]);d.setDate(d.getDate()-1);if(r.length>100)break;}return r;}
 function fmt(n){if(!n&&n!==0)return'—';return parseFloat(n).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1})}
 function gc(g){return g==='A+'?'grade-ap':g==='A'?'grade-a':'grade-b'}
+function todayLabel(){return new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})}
 async function fSig(){const s=new Date();s.setDate(s.getDate()-30);const r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,score.desc&select=*',{headers:H});return r.json()}
 async function fSec(){const r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:H});return r.json()}
-async function fLive(){
-  const today=new Date().toISOString().split('T')[0];
-  const r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+today+'&order=signal_time.asc',{headers:H});
-  return r.json();
-}
-function srRow(s){const isL=s.direction==='LONG';const q=JSON.stringify(s).replace(/"/g,'&quot;');return'<div class="signal-row" onclick="openModal('+q+')"><div class="sr-sym">'+s.symbol+'</div><div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div><div><span class="sr-grade '+gc(s.grade)+'">'+(s.grade||'B')+'</span></div><div class="sr-score">'+s.score+'/100</div><div class="sr-level sr-entry">&#8377;'+fmt(s.entry_ref)+'</div><div class="sr-level sr-sl">&#8377;'+fmt(s.sl)+'</div><div class="sr-level sr-t1">&#8377;'+fmt(s.target_1)+'</div><div class="sr-setup">'+(s.setup_name||'')+'</div><div class="sr-arrow">&#8250;</div></div>'}
-function daySection(dt,sigs,lbl){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const bc=lbl==='TODAY'?'today':'recent';const body=(!sigs||!sigs.length)?'<div class="no-day">No qualifying setups — Stay Cash</div>':'<div class="signal-rows">'+sigs.map(srRow).join('')+'</div>';return'<div class="day-header"><span class="day-badge '+bc+'">'+lbl+'</span><span class="day-date">'+ds+'</span><span class="day-count">'+(sigs&&sigs.length?sigs.length+' SIGNAL'+(sigs.length>1?'S':''):'—')+'</span></div>'+body}
-function archDay(dt,sigs){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});const chips=sigs.map(s=>'<span class="ad-chip '+(s.direction==='LONG'?'long-chip':'short-chip')+'">'+s.symbol+'</span>').join('');return'<div class="archive-day" onclick="openArchDay(\''+dt+'\')"><div class="ad-date">'+ds+'</div><div class="ad-chips">'+chips+'</div><div class="ad-count">'+sigs.length+'</div><div>&#8250;</div></div>'}
-function toggleArch(){document.getElementById('archToggle').classList.toggle('open');document.getElementById('archBody').classList.toggle('open')}
-function openArchDay(dt){const sigs=window._S&&window._S[dt]||[];if(!sigs.length)return;if(sigs.length===1){openModal(sigs[0]);return;}const d=new Date(dt).toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+d+'</div><div class="modal-meta">'+sigs.length+' SIGNALS &middot; TAP TO VIEW</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div style="padding:12px 18px;">'+sigs.map(s=>srRow(s)).join('')+'</div>';document.getElementById('modal').classList.add('open')}
-function openModal(s){if(typeof s==='string')s=JSON.parse(s);const isL=s.direction==='LONG';const sp=Math.min(100,(s.score/100)*100);const ds=new Date(s.signal_date).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const dep=s.qty&&s.entry_ref?Math.round(s.qty*s.entry_ref).toLocaleString('en-IN'):'—';document.getElementById('modalCard').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div><div class="modal-meta"><span class="'+(isL?'bull':'bear')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; <span class="'+gc(s.grade)+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span> &middot; '+s.score+'/100 &middot; '+ds+'</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div class="modal-levels"><div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div><div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="modal-body"><div class="modal-row"><span class="modal-row-key">Setup</span><span class="modal-row-val">'+(s.setup_name||'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Target 2</span><span class="modal-row-val bull">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div><div class="modal-row"><span class="modal-row-key">Entry zone</span><span class="modal-row-val">&#8377;'+fmt(s.entry_low)+' – &#8377;'+fmt(s.entry_high)+'</span></div><div class="modal-row"><span class="modal-row-key">SL distance</span><span class="modal-row-val bear">'+(s.sl_pct||'—')+'%</span></div><div class="modal-row"><span class="modal-row-key">Risk / Reward</span><span class="modal-row-val">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div><div class="modal-row"><span class="modal-row-key">Quantity</span><span class="modal-row-val">'+(s.qty||'—')+' shares</span></div><div class="modal-row"><span class="modal-row-key">Capital deployed</span><span class="modal-row-val">&#8377;'+dep+'</span></div><div class="modal-row"><span class="modal-row-key">Max risk</span><span class="modal-row-val bear">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></div><div class="modal-row"><span class="modal-row-key">Market regime</span><span class="modal-row-val">'+(s.market_regime||'—').toUpperCase()+'</span></div><div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">'+(s.trade_type||(isL?'BTST LONG':'INTRADAY SHORT'))+'</span></div></div><div class="score-bar-wrap"><div class="score-bar-label">CONVICTION SCORE — '+s.score+'/100</div><div class="score-bar-bg"><div class="score-bar-fill" style="width:'+sp+'%"></div></div></div><div class="modal-disclaimer">&#9888; Educational only &middot; Algo-generated &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';document.getElementById('modal').classList.add('open')}
+async function fLive(){const today=new Date().toISOString().split('T')[0];const r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+today+'&order=signal_time.asc',{headers:H});return r.json();}
 
-function todayCards(dt, eodSigs, orbSigs) {
-  const d  = new Date(dt);
-  const ds = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-  const eod = eodSigs || [];
-  const orb = orbSigs || [];
-
-  // Build lookup maps
-  const eodMap = {};
-  eod.forEach(s => { eodMap[s.symbol] = s; });
-  const orbSyms = new Set(orb.map(s => s.symbol));
-
-  // --- INTRADAY (ORB) section — top 5 by RVOL ---
-  const orbList = [...orb].sort((a,b) => (b.rvol||0) - (a.rvol||0));
-
-  // --- POSITIONAL (EOD) section ---
-  // EOD+ORB: same direction confluence → use ORB levels, show EOD+ORB badge
-  // EOD only: stock not in ORB
-  // Conflict: opposite direction → remove entirely
-  const conflicts = new Set();
-  const eodOrb = [];
-  const eodOnly = [];
-
-  eod.forEach(es => {
-    const os = orb.find(o => o.symbol === es.symbol);
-    if (os) {
-      if (os.direction === es.direction) {
-        eodOrb.push({...os, badge:'EOD+ORB', score: es.score, grade: es.grade});
-      } else {
-        conflicts.add(es.symbol);
-      }
-    } else {
-      eodOnly.push({...es, badge:'EOD'});
-    }
-  });
-
-  eodOrb.sort((a,b) => (b.rvol||0) - (a.rvol||0));
-  eodOnly.sort((a,b) => (b.score||0) - (a.score||0));
-
-  const positional = [...eodOrb, ...eodOnly];
-  const orbTop5  = orbList.slice(0, 5);
-  const orbRest  = orbList.slice(5);
-  const posTop5  = positional.slice(0, 5);
-  const posRest  = positional.slice(5);
-
-  const hasOrb = orbTop5.length > 0;
-  const hasPos = posTop5.length > 0;
-  const totalCount = orbList.length + positional.length;
-
-  if (!hasOrb && !hasPos) {
-    return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">' + ds + '</span><span class="day-count">STAY CASH</span></div>' +
-      '<div class="no-day" style="padding:28px;text-align:center;"><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:4px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No qualifying setups today</div></div>';
-  }
-
-  const longC  = [...orbList,...positional].filter(s=>s.direction==='LONG').length;
-  const shortC = [...orbList,...positional].filter(s=>s.direction==='SHORT').length;
-  const countStr = '<span style="color:var(--green)">'+longC+' &#8593;</span> <span style="color:var(--muted2)">|</span> <span style="color:var(--red)">'+shortC+' &#8595;</span>';
-
-  let html = '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">' + ds + '</span><span class="day-count">' + countStr + '</span></div>';
-
-  // INTRADAY section
-  if (hasOrb) {
-    html += '<div style="font-size:9px;letter-spacing:3px;color:#ffb347;padding:14px 4px 6px;border-bottom:1px solid rgba(255,179,71,0.15)">INTRADAY · ORB CONFIRMED · ACT NOW</div>';
-    html += '<div class="today-grid">' + orbTop5.map(s => scCard({...s, badge:'ORB'})).join('') + '</div>';
-    if (orbRest.length) {
-      html += '<div style="text-align:center;padding:8px 0">' +
-        '<span id="orbMoreBtn" onclick="toggleSection(this,&quot;orbMore&quot;,'+orbRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+orbRest.length+' MORE ORB &#9660;</span>';
-      html += '<div id="orbMore" style="display:none"><div class="today-grid">' + orbRest.map(s => scCard({...s, badge:'ORB'})).join('') + '</div></div>';
-    }
-  }
-
-  // POSITIONAL section
-  if (hasPos) {
-    html += '<div style="font-size:9px;letter-spacing:3px;color:var(--sky);padding:14px 4px 6px;border-bottom:1px solid rgba(77,184,255,0.1);margin-top:8px">POSITIONAL · BTST · ENTER AT OPEN</div>';
-    html += '<div class="today-grid">' + posTop5.map(s => scCard(s)).join('') + '</div>';
-    if (posRest.length) {
-      html += '<div style="text-align:center;padding:8px 0">' +
-        '<span id="posMoreBtn" onclick="toggleSection(this,&quot;posMore&quot;,'+posRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+posRest.length+' MORE POSITIONAL &#9660;</span>';
-      html += '<div id="posMore" style="display:none"><div class="today-grid">' + posRest.map(s => scCard(s)).join('') + '</div></div>';
-    }
-  }
-
-  if (conflicts.size) {
-    html += '<div style="padding:8px 12px;font-size:10px;color:var(--muted2);border-top:1px solid var(--line2);margin-top:8px">&#9889; '+conflicts.size+' conflict'+(conflicts.size>1?'s':'')+' removed (ORB vs EOD opposing): '+[...conflicts].join(', ')+'</div>';
-  }
-
-  return html;
-}
-
-function toggleSection(btn, id, count) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (el.style.display === 'none') {
-    el.style.display = 'block';
-    btn.innerHTML = 'SHOW LESS &#9650;';
-  } else {
-    el.style.display = 'none';
-    btn.innerHTML = 'SHOW ' + count + ' MORE &#9660;';
-  }
-}
-
-function scCard(s) {
-  const isL = s.direction === 'LONG';
-  const q = JSON.stringify(s).replace(/"/g,'&quot;');
-  const sp = Math.min(100,((s.score||0)/100)*100);
-  const rr1 = s.rr_1||2; const rr2 = s.rr_2||3;
-  const isORB = s.badge==='ORB'||s.badge==='EOD+ORB';
-  const tt = isORB ? 'INTRADAY' : (s.trade_type||(isL?'BTST':'INTRADAY'));
-  const entry = isORB ? s.entry : s.entry_ref;
-  const sl    = isORB ? s.sl    : s.sl;
-  const t1    = isORB ? s.target_1 : s.target_1;
-  const dep = s.qty&&entry ? '&#8377;'+Math.round(s.qty*entry).toLocaleString('en-IN') : '—';
-
-  // Badge styling
-  let badgeHtml = '';
-  if(s.badge==='EOD+ORB') badgeHtml='<span style="font-size:9px;padding:2px 6px;background:rgba(0,214,143,0.15);color:var(--green);border:1px solid rgba(0,214,143,0.3);margin-left:6px">EOD+ORB ✓</span>';
-  else if(s.badge==='ORB') badgeHtml='<span style="font-size:9px;padding:2px 6px;background:rgba(255,179,71,0.1);color:#ffb347;border:1px solid rgba(255,179,71,0.3);margin-left:6px">ORB</span>';
-
-  // Ring — grade for EOD, RVOL for ORB
-  let ringHtml = '';
-  if(isORB){
-    ringHtml='<div style="text-align:center;flex-shrink:0"><div style="font-size:10px;font-weight:700;color:#ffb347">'+fmt(s.rvol||0)+'x</div><div style="font-size:8px;color:var(--muted2)">RVOL</div></div>';
-  } else {
-    ringHtml='<div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div>';
-  }
-
-  return '<div class="sc-card" onclick="openModal('+q+')">' +
-    '<div class="sc-top"><div><div class="sc-sym">'+s.symbol+badgeHtml+'</div><div class="sc-sub">'+(s.setup_name||'—')+'</div></div>' +
-    ringHtml+'</div>' +
-    '<div class="sc-levels">' +
-      '<div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val" style="color:var(--sky)">&#8377;'+fmt(entry)+'</div></div>' +
-      '<div class="sc-lv"><div class="sc-lv-label">TARGET 1</div><div class="sc-lv-val" style="color:var(--green)">&#8377;'+fmt(t1)+'</div></div>' +
-      '<div class="sc-lv"><div class="sc-lv-label">STOP LOSS</div><div class="sc-lv-val" style="color:var(--red)">&#8377;'+fmt(sl)+'</div></div>' +
-    '</div>' +
-    '<div class="sc-body">' +
-      '<div class="sc-chips">' +
-        '<span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+s.direction+'</span>' +
-        '<span class="chip chip-neu">'+tt+'</span>' +
-        '<span class="chip chip-amb">RR '+rr1+':1</span>' +
-      '</div>' +
-      '<div class="sc-sbar"><div class="sc-sbar-fill" style="width:'+sp+'%;background:'+(isORB?'#ffb347':'')+'"></div></div>' +
-      '<div class="sc-risk" style="margin-top:8px">'+
-        '<span>'+(isORB?'RVOL <span>'+fmt(s.rvol||0)+'x</span>':'Score <span>'+(s.score||'—')+'/100</span>')+'</span>' +
-        '<span>'+tt+'</span>' +
-        '<span>Risk <span>'+(s.risk_inr?'&#8377;'+Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></span>' +
-      '</div>' +
-    '</div>' +
-    '<div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for full details</div>' +
+function hCard(s){
+  const isL=s.direction==='LONG';
+  const isORB=s.badge==='ORB'||s.badge==='EOD+ORB';
+  const entry=isORB?(s.entry||s.entry_ref):s.entry_ref;
+  const q=JSON.stringify(s).replace(/"/g,'&quot;');
+  let badgeHtml='';
+  if(s.badge==='EOD+ORB')badgeHtml='<span style="font-size:8px;padding:1px 5px;background:rgba(0,214,143,0.12);color:var(--green);border:1px solid rgba(0,214,143,0.3);margin-left:5px">EOD+ORB</span>';
+  let metaHtml=isORB?'<span style="font-size:10px;color:#ffb347">'+fmt(s.rvol||0)+'x RVOL</span>':'<span style="font-size:10px;color:var(--muted)">'+(s.score||'—')+'/100 &middot; '+(s.grade||'B')+'</span>';
+  return '<div class="hcard" onclick="openModal('+q+')">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'+
+      '<div><div style="font-size:14px;font-weight:700">'+s.symbol+badgeHtml+'</div>'+
+      '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+(s.setup_name||'—')+'</div></div>'+
+      '<div class="sr-dir '+(isL?'sr-long':'sr-short')+'" style="font-size:11px">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:8px">'+
+      '<div style="text-align:center;background:var(--s2);padding:6px 4px;border-radius:3px"><div style="font-size:8px;color:var(--muted);margin-bottom:2px">ENTRY</div><div style="font-size:11px;font-weight:600;color:var(--sky)">&#8377;'+fmt(entry)+'</div></div>'+
+      '<div style="text-align:center;background:var(--s2);padding:6px 4px;border-radius:3px"><div style="font-size:8px;color:var(--muted);margin-bottom:2px">TARGET</div><div style="font-size:11px;font-weight:600;color:var(--green)">&#8377;'+fmt(s.target_1)+'</div></div>'+
+      '<div style="text-align:center;background:var(--s2);padding:6px 4px;border-radius:3px"><div style="font-size:8px;color:var(--muted);margin-bottom:2px">SL</div><div style="font-size:11px;font-weight:600;color:var(--red)">&#8377;'+fmt(s.sl)+'</div></div>'+
+    '</div>'+
+    '<div style="display:flex;justify-content:space-between;align-items:center">'+metaHtml+'<span style="font-size:10px;color:var(--muted2)">&#8250;</span></div>'+
   '</div>';
+}
+
+function hScroller(id,label,sublabel,color,signals){
+  if(!signals||!signals.length)return'';
+  return '<div style="margin-bottom:20px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:14px 0 8px">'+
+      '<div><span style="font-size:9px;letter-spacing:3px;font-weight:600;color:'+color+'">'+label+'</span>'+
+      '<span style="font-size:10px;color:var(--muted);margin-left:10px">'+sublabel+'</span></div>'+
+      '<div style="display:flex;gap:6px">'+
+        '<button onclick="scrollH(''+id+'',-1)" style="background:var(--s2);border:1px solid var(--line);color:var(--muted);width:26px;height:26px;cursor:pointer;font-size:14px;line-height:1">&#8249;</button>'+
+        '<button onclick="scrollH(''+id+'',1)" style="background:var(--s2);border:1px solid var(--line);color:var(--muted);width:26px;height:26px;cursor:pointer;font-size:14px;line-height:1">&#8250;</button>'+
+      '</div>'+
+    '</div>'+
+    '<div id="'+id+'" style="display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch">'+
+      signals.map(s=>hCard(s)).join('')+
+    '</div>'+
+  '</div>';
+}
+
+function scrollH(id,dir){const el=document.getElementById(id);if(el)el.scrollBy({left:dir*220,behavior:'smooth'});}
+
+function archDay(dateStr,signals,label){
+  const d=new Date(dateStr);
+  const ds=label||d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+  const chips=signals.map(s=>'<span class="ad-chip '+(s.direction==='LONG'?'long-chip':'short-chip')+'">'+s.symbol+'</span>').join('');
+  return '<div class="archive-day" onclick="openArchDay(''+dateStr+'')">'+
+    '<div class="ad-date">'+ds+'</div><div class="ad-chips">'+chips+'</div>'+
+    '<div class="ad-count">'+signals.length+'</div><div>&#8250;</div></div>';
+}
+
+function openArchDay(dateStr){
+  const signals=window._S&&window._S[dateStr]||[];
+  if(!signals.length)return;
+  if(signals.length===1){openModal(signals[0]);return;}
+  const d=new Date(dateStr).toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});
+  document.getElementById('modalCard').innerHTML=
+    '<div class="modal-top"><div><div class="modal-sym">'+d+'</div>'+
+    '<div class="modal-meta">'+signals.length+' SIGNALS</div></div>'+
+    '<button class="modal-close" onclick="closeModal()">&#215;</button></div>'+
+    '<div style="padding:12px 18px;">'+signals.map(s=>{
+      const isL=s.direction==='LONG';const q=JSON.stringify(s).replace(/"/g,'&quot;');
+      return'<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line2);cursor:pointer" onclick="openModal('+q+')">'+
+        '<div style="font-weight:700;width:110px">'+s.symbol+'</div>'+
+        '<div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div>'+
+        '<span class="sr-grade '+gc(s.grade||'B')+'">'+(s.grade||'B')+'</span>'+
+        '<div style="font-size:11px;color:var(--muted)">'+s.score+'/100</div>'+
+        '<div style="font-size:11px;color:var(--sky)">&#8377;'+fmt(s.entry_ref)+'</div>'+
+        '<div style="margin-left:auto;color:var(--muted2)">&#8250;</div>'+
+      '</div>';
+    }).join('')+'</div>';
+  document.getElementById('modal').classList.add('open');
+}
+
+async function render(){
+  const[sigs,secs,live]=await Promise.all([fSig(),fSec(),fLive()]);
+  if(secs&&secs.length){
+    const top=secs.filter(s=>s.trade_bias==='long').slice(0,2).map(s=>s.sector).join(' · ');
+    const bot=secs.filter(s=>s.trade_bias==='short').slice(0,2).map(s=>s.sector).join(' · ');
+    const reg=secs[0].market_direction?.toUpperCase()||'—';
+    const rc=reg==='BULLISH'?'bull':reg==='BEARISH'?'bear':'side';
+    document.getElementById('mRegime').textContent=reg;
+    document.getElementById('mRegime').className='mkt-val '+rc;
+    document.getElementById('mTop').textContent=top||'—';
+    document.getElementById('mBot').textContent=bot||'—';
+  }
+  if(!sigs||!sigs.length){document.getElementById('liveLabel').textContent='NO DATA';document.getElementById('signalContainer').innerHTML='<div class="loading">No signals found.</div>';return;}
+  const byDate={};sigs.forEach(s=>{if(!byDate[s.signal_date])byDate[s.signal_date]=[];byDate[s.signal_date].push(s);});
+  window._S=byDate;
+  const allDates=Object.keys(byDate).sort().reverse();
+  const latestEOD=allDates[0];
+  const latestSigs=byDate[latestEOD]||[];
+  const todayStr=new Date().toISOString().split('T')[0];
+  const todayLive=(live||[]).filter(s=>s.signal_date===todayStr);
+  document.getElementById('liveLabel').textContent='LIVE';
+  const allToday=[...todayLive,...latestSigs];
+  const lc=allToday.filter(s=>s.direction==='LONG').length;
+  const sc=allToday.filter(s=>s.direction==='SHORT').length;
+  document.getElementById('mCount').innerHTML='<span style="color:var(--green)">'+lc+' &#8593;</span><span style="color:var(--muted2)"> | </span><span style="color:var(--red)">'+sc+' &#8595;</span>';
+  document.getElementById('mUpdated').textContent=new Date(latestEOD).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+
+  const eodMap={};latestSigs.forEach(s=>{eodMap[s.symbol]=s;});
+  const conflicts=new Set();
+  const orbList=[];
+  todayLive.forEach(os=>{
+    const es=eodMap[os.symbol];
+    if(es){if(es.direction===os.direction)orbList.push({...os,badge:'EOD+ORB',score:es.score,grade:es.grade});else conflicts.add(os.symbol);}
+    else orbList.push({...os,badge:'ORB'});
+  });
+  const eodOnly=[];
+  latestSigs.forEach(es=>{
+    if(!todayLive.find(o=>o.symbol===es.symbol)&&!conflicts.has(es.symbol))eodOnly.push({...es,badge:'EOD'});
+  });
+  orbList.sort((a,b)=>(b.rvol||0)-(a.rvol||0));
+  eodOnly.sort((a,b)=>(b.score||0)-(a.score||0));
+
+  let html='';
+  if(orbList.length)html+=hScroller('intradayScroll','INTRADAY','Today &middot; '+todayLabel(),'#ffb347',orbList);
+  if(eodOnly.length)html+=hScroller('positionalScroll','BTST / SWING','Next open &middot; '+new Date(latestEOD).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}),'var(--sky)',eodOnly);
+  if(!orbList.length&&!eodOnly.length)html='<div style="padding:40px;text-align:center"><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:6px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No qualifying setups today</div></div>';
+  if(conflicts.size)html+='<div style="padding:6px 12px;font-size:10px;color:var(--muted2)">&#9889; '+[...conflicts].join(', ')+' removed (direction conflict)</div>';
+
+  const archiveDates=allDates.slice(1);
+  if(archiveDates.length){
+    html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE</span><span style="margin-left:auto;color:var(--muted2)">'+archiveDates.length+' DAYS</span></div>'+
+    '<div class="archive-body" id="archBody">';
+    const yest=archiveDates[0];const twoDays=archiveDates[1];const older=archiveDates.slice(2);
+    if(yest&&byDate[yest]){html+='<div style="font-size:9px;letter-spacing:2px;color:var(--muted2);padding:10px 12px 4px">YESTERDAY</div>'+archDay(yest,byDate[yest]);}
+    if(twoDays&&byDate[twoDays]){html+='<div style="font-size:9px;letter-spacing:2px;color:var(--muted2);padding:10px 12px 4px">2 DAYS AGO</div>'+archDay(twoDays,byDate[twoDays]);}
+    if(older.length){html+='<div style="font-size:9px;letter-spacing:2px;color:var(--muted2);padding:10px 12px 4px">OLDER</div>';older.forEach(d=>{if(byDate[d])html+=archDay(d,byDate[d]);});}
+    html+='</div>';
+  }
+  document.getElementById('signalContainer').innerHTML=html;
+}
+
+function toggleArch(){document.getElementById('archToggle').classList.toggle('open');document.getElementById('archBody').classList.toggle('open');}
+
+function openModal(s){
+  if(typeof s==='string')s=JSON.parse(s);
+  const isL=s.direction==='LONG';
+  const isORB=s.badge==='ORB'||s.badge==='EOD+ORB';
+  const entry=isORB?(s.entry||s.entry_ref):s.entry_ref;
+  const sp=Math.min(100,((s.score||0)/100)*100);
+  const ds=new Date(s.signal_date||new Date()).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+  const dep=s.qty&&entry?Math.round(s.qty*entry).toLocaleString('en-IN'):'—';
+  document.getElementById('modalCard').innerHTML=
+    '<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div>'+
+    '<div class="modal-meta"><span class="'+(isL?'bull':'bear')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; '+
+    (isORB?'<span style="color:#ffb347">INTRADAY</span>':'<span class="'+gc(s.grade||'B')+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span>')+
+    ' &middot; '+(s.score||'—')+'/100 &middot; '+ds+'</div></div>'+
+    '<button class="modal-close" onclick="closeModal()">&#215;</button></div>'+
+    '<div class="modal-levels">'+
+      '<div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(entry)+'</div></div>'+
+      '<div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div>'+
+      '<div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div>'+
+    '</div>'+
+    '<div class="modal-body">'+
+      '<div class="modal-row"><span class="modal-row-key">Setup</span><span class="modal-row-val">'+(s.setup_name||'—')+'</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Target 2</span><span class="modal-row-val bull">&#8377;'+fmt(s.target_2)+' (RR '+(s.rr_2||3)+':1)</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Entry zone</span><span class="modal-row-val">&#8377;'+fmt(s.entry_low)+' &#8211; &#8377;'+fmt(s.entry_high)+'</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">SL distance</span><span class="modal-row-val bear">'+(s.sl_pct||'—')+'%</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Risk / Reward</span><span class="modal-row-val">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Quantity</span><span class="modal-row-val">'+(s.qty||'—')+' shares</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Capital deployed</span><span class="modal-row-val">&#8377;'+dep+'</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Max risk</span><span class="modal-row-val bear">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></div>'+
+      '<div class="modal-row"><span class="modal-row-key">Trade type</span><span class="modal-row-val">'+(isORB?'INTRADAY':(s.trade_type||(isL?'BTST LONG':'INTRADAY SHORT')))+'</span></div>'+
+    '</div>'+
+    '<div class="score-bar-wrap">'+
+      '<div class="score-bar-label">CONVICTION — '+(isORB?fmt(s.rvol||0)+'x RVOL':(s.score||'—')+'/100')+'</div>'+
+      '<div class="score-bar-bg"><div class="score-bar-fill" style="width:'+sp+'%;'+(isORB?'background:#ffb347':'')+'"></div></div>'+
+    '</div>'+
+    '<div class="modal-disclaimer">&#9888; Educational only &middot; Not SEBI advice &middot; Decisions are solely yours</div>';
+  document.getElementById('modal').classList.add('open');
 }
 
 function closeModal(){document.getElementById('modal').classList.remove('open')}
 document.getElementById('modal').addEventListener('click',e=>{if(e.target===document.getElementById('modal'))closeModal()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
-async function render(){
-  const[sigs,secs,live]=await Promise.all([fSig(),fSec(),fLive()]);
-  if(secs&&secs.length){const top=secs.filter(s=>s.trade_bias==='long').slice(0,2).map(s=>s.sector).join(' · ');const bot=secs.filter(s=>s.trade_bias==='short').slice(0,2).map(s=>s.sector).join(' · ');const reg=secs[0].market_direction?.toUpperCase()||'—';const rc=reg==='BULLISH'?'bull':reg==='BEARISH'?'bear':'side';document.getElementById('mRegime').textContent=reg;document.getElementById('mRegime').className='mkt-val '+rc;document.getElementById('mTop').textContent=top||'—';document.getElementById('mBot').textContent=bot||'—';}
-  if(!sigs||!sigs.length){document.getElementById('liveLabel').textContent='NO DATA';document.getElementById('signalContainer').innerHTML='<div class="loading">No signals found. Engine runs after 6:35 PM IST.</div>';return;}
-  const byD={};sigs.forEach(s=>{if(!byD[s.signal_date])byD[s.signal_date]=[];byD[s.signal_date].push(s);});
-  window._S=byD;
-  const allD=Object.keys(byD).sort().reverse();
-  const r3=prevTD(3);
-  document.getElementById('liveLabel').textContent='LIVE';
-  const todaySigs = byD[allD[0]]||[];
-  const longCount = todaySigs.filter(s=>s.direction==='LONG').length;
-  const shortCount = todaySigs.filter(s=>s.direction==='SHORT').length;
-  document.getElementById('mCount').innerHTML = 
-    '<span style="color:var(--green)">'+longCount+' ↑</span>' +
-    '<span style="color:var(--muted)"> | </span>' +
-    '<span style="color:var(--red)">'+shortCount+' ↓</span>';
-  document.getElementById('mUpdated').textContent=new Date(allD[0]).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
-  // Find last 3 trading days that actually have signals
-  const allDatesWithSigs = allD.filter(d => byD[d] && byD[d].length > 0);
-  const activeDays = allDatesWithSigs.slice(0, 3);
-  // Pad with empty trading days if less than 3 signal days
-  const r3WithSigs = activeDays.length >= 3 ? activeDays : r3;
-  
-  const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
-  // TODAY: full signal cards (most recent signal day)
-  // Always use actual today as the TODAY slot
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todayLive = (live||[]).filter(s => s.signal_date === todayStr);
-  
-  // If today has live signals but no EOD signals yet, insert today as first slot
-  let displayDays = [...r3WithSigs];
-  if(todayLive.length > 0 && displayDays[0] !== todayStr) {
-    displayDays = [todayStr, ...r3WithSigs.slice(0,2)];
-  }
-  
-  let html = todayCards(displayDays[0], byD[displayDays[0]]||null, todayLive);
-  // YESTERDAY + 2 DAYS AGO use remaining display days
-  html += displayDays.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
-
-  const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
-  if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
+render().catch(e=>{console.error(e);document.getElementById('signalContainer').innerHTML='<div class="loading">Could not load signals.</div>';});
+setInterval(()=>{render().catch(e=>console.error(e));},5*60*1000);
+</script>rchBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
   document.getElementById('signalContainer').innerHTML=html;
 }
 render().catch(e=>{console.error(e);document.getElementById('signalContainer').innerHTML='<div class="loading">Could not load signals.</div>';});
