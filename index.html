@@ -267,7 +267,7 @@ function todayCards(dt, eodSigs, orbSigs) {
     html += '<div class="today-grid">' + orbTop5.map(s => scCard({...s, badge:'ORB'})).join('') + '</div>';
     if (orbRest.length) {
       html += '<div style="text-align:center;padding:8px 0">' +
-        '<span id="orbMoreBtn" onclick="toggleSection('orbMore','orbMoreBtn','+orbRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+orbRest.length+' MORE ORB &#9660;</span></div>';
+        '<span id="orbMoreBtn" onclick="toggleSection(this,&quot;orbMore&quot;,'+orbRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+orbRest.length+' MORE ORB &#9660;</span>';
       html += '<div id="orbMore" style="display:none"><div class="today-grid">' + orbRest.map(s => scCard({...s, badge:'ORB'})).join('') + '</div></div>';
     }
   }
@@ -278,7 +278,7 @@ function todayCards(dt, eodSigs, orbSigs) {
     html += '<div class="today-grid">' + posTop5.map(s => scCard(s)).join('') + '</div>';
     if (posRest.length) {
       html += '<div style="text-align:center;padding:8px 0">' +
-        '<span id="posMoreBtn" onclick="toggleSection('posMore','posMoreBtn','+posRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+posRest.length+' MORE POSITIONAL &#9660;</span></div>';
+        '<span id="posMoreBtn" onclick="toggleSection(this,&quot;posMore&quot;,'+posRest.length+')" style="cursor:pointer;font-size:9px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:5px 14px">SHOW '+posRest.length+' MORE POSITIONAL &#9660;</span>';
       html += '<div id="posMore" style="display:none"><div class="today-grid">' + posRest.map(s => scCard(s)).join('') + '</div></div>';
     }
   }
@@ -290,9 +290,8 @@ function todayCards(dt, eodSigs, orbSigs) {
   return html;
 }
 
-function toggleSection(id, btnId, count) {
-  const el  = document.getElementById(id);
-  const btn = document.getElementById(btnId);
+function toggleSection(btn, id, count) {
+  const el = document.getElementById(id);
   if (!el) return;
   if (el.style.display === 'none') {
     el.style.display = 'block';
