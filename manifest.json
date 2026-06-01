@@ -1,0 +1,32 @@
+{
+  "name": "The Stock Logic",
+  "short_name": "Stock Logic",
+  "description": "Daily NSE trade signals — SMC-based setups with entry, SL and targets",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#06080a",
+  "theme_color": "#06080a",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "business"],
+  "screenshots": [
+    {
+      "src": "/screenshot.png",
+      "sizes": "390x844",
+      "type": "image/png"
+    }
+  ]
+}
