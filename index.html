@@ -220,8 +220,8 @@ function hScroller(id,label,sublabel,color,signals){
       '<div><span style="font-size:9px;letter-spacing:3px;font-weight:600;color:'+color+'">'+label+'</span>'+
       '<span style="font-size:10px;color:var(--muted);margin-left:10px">'+sublabel+'</span></div>'+
       '<div style="display:flex;gap:6px">'+
-        '<button onclick="scrollH(''+id+'',-1)" style="background:var(--s2);border:1px solid var(--line);color:var(--muted);width:26px;height:26px;cursor:pointer;font-size:14px;line-height:1">&#8249;</button>'+
-        '<button onclick="scrollH(''+id+'',1)" style="background:var(--s2);border:1px solid var(--line);color:var(--muted);width:26px;height:26px;cursor:pointer;font-size:14px;line-height:1">&#8250;</button>'+
+        '<button onclick="scrollH(this.dataset.id,-1)" data-id='+JSON.stringify(id)+' style="background:var(--s2);border:1px solid var(--line);color:var(--muted);width:26px;height:26px;cursor:pointer;font-size:14px;line-height:1">&#8249;</button>'+
+        '<button onclick="scrollH(this.dataset.id,1)" data-id='+JSON.stringify(id)+' style="background:var(--s2);border:1px solid var(--line);color:var(--muted);width:26px;height:26px;cursor:pointer;font-size:14px;line-height:1">&#8250;</button>'+
       '</div>'+
     '</div>'+
     '<div id="'+id+'" style="display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch">'+
@@ -236,7 +236,7 @@ function archDay(dateStr,signals,label){
   const d=new Date(dateStr);
   const ds=label||d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
   const chips=signals.map(s=>'<span class="ad-chip '+(s.direction==='LONG'?'long-chip':'short-chip')+'">'+s.symbol+'</span>').join('');
-  return '<div class="archive-day" onclick="openArchDay(''+dateStr+'')">'+
+  return '<div class="archive-day" onclick="openArchDay(\'"+dateStr+"\')">'+
     '<div class="ad-date">'+ds+'</div><div class="ad-chips">'+chips+'</div>'+
     '<div class="ad-count">'+signals.length+'</div><div>&#8250;</div></div>';
 }
