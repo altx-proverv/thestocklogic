@@ -370,14 +370,6 @@ document.getElementById('modal').addEventListener('click',e=>{if(e.target===docu
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
 render().catch(e=>{console.error(e);document.getElementById('signalContainer').innerHTML='<div class="loading">Could not load signals.</div>';});
 setInterval(()=>{render().catch(e=>console.error(e));},5*60*1000);
-</script>rchBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
-  document.getElementById('signalContainer').innerHTML=html;
-}
-render().catch(e=>{console.error(e);document.getElementById('signalContainer').innerHTML='<div class="loading">Could not load signals.</div>';});
-
-setInterval(()=>{
-  render().catch(e=>console.error(e));
-}, 5 * 60 * 1000);
 </script>
 </body>
 </html>
