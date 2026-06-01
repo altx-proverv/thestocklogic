@@ -310,15 +310,16 @@ def run_orb_scan(max_stocks: int = 500):
 if __name__ == "__main__":
     os.chdir(Path(__file__).parent.parent)
 
-    now = datetime.now()
+    from datetime import timezone, timedelta
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST)
     hour_min = now.hour * 60 + now.minute
 
-    # Market hours check
     if hour_min < 9*60+30:
-        log.info("Before 9:30 AM — ORB window not complete yet")
-        log.info("Run after 9:30 AM IST")
+        log.info(f"Before 9:30 AM IST ({now.strftime('%H:%M')}) — ORB window not complete")
     elif hour_min > 15*60+30:
-        log.info("Market closed. Running in analysis mode...")
+        log.info(f"Market closed ({now.strftime('%H:%M IST')}). Analysis mode...")
         run_orb_scan()
     else:
+        log.info(f"Market open ({now.strftime('%H:%M IST')}). Running ORB scan...")
         run_orb_scan()
