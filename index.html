@@ -292,12 +292,20 @@ async function render(){
   
   const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
   // TODAY: full signal cards (most recent signal day)
-  // Live signals are always today's regardless of EOD date
+  // Always use actual today as the TODAY slot
   const todayStr = new Date().toISOString().split('T')[0];
   const todayLive = (live||[]).filter(s => s.signal_date === todayStr);
-  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null, todayLive);
-  // YESTERDAY + 2 DAYS AGO: summary rows
-  html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
+  
+  // If today has live signals but no EOD signals yet, insert today as first slot
+  let displayDays = [...r3WithSigs];
+  if(todayLive.length > 0 && displayDays[0] !== todayStr) {
+    displayDays = [todayStr, ...r3WithSigs.slice(0,2)];
+  }
+  
+  let html = todayCards(displayDays[0], byD[displayDays[0]]||null, todayLive);
+  // YESTERDAY + 2 DAYS AGO use remaining display days
+  html += displayDays.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
+
   const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
   if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
   document.getElementById('signalContainer').innerHTML=html;
