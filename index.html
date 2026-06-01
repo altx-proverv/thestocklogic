@@ -190,6 +190,11 @@ function fmt(n){if(!n&&n!==0)return'—';return parseFloat(n).toLocaleString('en
 function gc(g){return g==='A+'?'grade-ap':g==='A'?'grade-a':'grade-b'}
 async function fSig(){const s=new Date();s.setDate(s.getDate()-30);const r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,score.desc&select=*',{headers:H});return r.json()}
 async function fSec(){const r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:H});return r.json()}
+async function fLive(){
+  const today=new Date().toISOString().split('T')[0];
+  const r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+today+'&order=signal_time.asc',{headers:H});
+  return r.json();
+}
 function srRow(s){const isL=s.direction==='LONG';const q=JSON.stringify(s).replace(/"/g,'&quot;');return'<div class="signal-row" onclick="openModal('+q+')"><div class="sr-sym">'+s.symbol+'</div><div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div><div><span class="sr-grade '+gc(s.grade)+'">'+(s.grade||'B')+'</span></div><div class="sr-score">'+s.score+'/100</div><div class="sr-level sr-entry">&#8377;'+fmt(s.entry_ref)+'</div><div class="sr-level sr-sl">&#8377;'+fmt(s.sl)+'</div><div class="sr-level sr-t1">&#8377;'+fmt(s.target_1)+'</div><div class="sr-setup">'+(s.setup_name||'')+'</div><div class="sr-arrow">&#8250;</div></div>'}
 function daySection(dt,sigs,lbl){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});const bc=lbl==='TODAY'?'today':'recent';const body=(!sigs||!sigs.length)?'<div class="no-day">No qualifying setups — Stay Cash</div>':'<div class="signal-rows">'+sigs.map(srRow).join('')+'</div>';return'<div class="day-header"><span class="day-badge '+bc+'">'+lbl+'</span><span class="day-date">'+ds+'</span><span class="day-count">'+(sigs&&sigs.length?sigs.length+' SIGNAL'+(sigs.length>1?'S':''):'—')+'</span></div>'+body}
 function archDay(dt,sigs){const d=new Date(dt);const ds=d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});const chips=sigs.map(s=>'<span class="ad-chip '+(s.direction==='LONG'?'long-chip':'short-chip')+'">'+s.symbol+'</span>').join('');return'<div class="archive-day" onclick="openArchDay(\''+dt+'\')"><div class="ad-date">'+ds+'</div><div class="ad-chips">'+chips+'</div><div class="ad-count">'+sigs.length+'</div><div>&#8250;</div></div>'}
@@ -245,7 +250,7 @@ function closeModal(){document.getElementById('modal').classList.remove('open')}
 document.getElementById('modal').addEventListener('click',e=>{if(e.target===document.getElementById('modal'))closeModal()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
 async function render(){
-  const[sigs,secs]=await Promise.all([fSig(),fSec()]);
+  const[sigs,secs,live]=await Promise.all([fSig(),fSec(),fLive()]);
   if(secs&&secs.length){const top=secs.filter(s=>s.trade_bias==='long').slice(0,2).map(s=>s.sector).join(' · ');const bot=secs.filter(s=>s.trade_bias==='short').slice(0,2).map(s=>s.sector).join(' · ');const reg=secs[0].market_direction?.toUpperCase()||'—';const rc=reg==='BULLISH'?'bull':reg==='BEARISH'?'bear':'side';document.getElementById('mRegime').textContent=reg;document.getElementById('mRegime').className='mkt-val '+rc;document.getElementById('mTop').textContent=top||'—';document.getElementById('mBot').textContent=bot||'—';}
   if(!sigs||!sigs.length){document.getElementById('liveLabel').textContent='NO DATA';document.getElementById('signalContainer').innerHTML='<div class="loading">No signals found. Engine runs after 6:35 PM IST.</div>';return;}
   const byD={};sigs.forEach(s=>{if(!byD[s.signal_date])byD[s.signal_date]=[];byD[s.signal_date].push(s);});
@@ -272,6 +277,28 @@ async function render(){
   let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null);
   // YESTERDAY + 2 DAYS AGO: summary rows
   html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
+  // Live ORB signals section
+  if(live&&live.length){
+    const longs=live.filter(s=>s.direction==='LONG');
+    const shorts=live.filter(s=>s.direction==='SHORT');
+    html+='<div class="day-header"><span class="day-badge today" style="background:rgba(255,179,71,0.1);color:#ffb347;border-color:rgba(255,179,71,0.4)">ORB LIVE</span><span class="day-date">Opening Range Breakout — Today</span><span class="day-count" style="color:#ffb347">'+live.length+' SIGNALS</span></div>';
+    html+='<div class="signal-rows">'+live.map(s=>{
+      const isL=s.direction==='LONG';
+      const q=JSON.stringify(s).replace(/"/g,"&quot;");
+      return '<div class="signal-row" onclick="openModal('+q+')">'+
+        '<div class="sr-sym">'+s.symbol+'</div>'+
+        '<div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div>'+
+        '<div><span class="sr-grade grade-b" style="color:#ffb347;border-color:rgba(255,179,71,0.4);background:rgba(255,179,71,0.08)">ORB</span></div>'+
+        '<div class="sr-score">'+s.signal_time+'</div>'+
+        '<div class="sr-level sr-entry">&#8377;'+fmt(s.entry)+'</div>'+
+        '<div class="sr-level sr-sl">&#8377;'+fmt(s.sl)+'</div>'+
+        '<div class="sr-level sr-t1">&#8377;'+fmt(s.target_1)+'</div>'+
+        '<div class="sr-setup">'+s.setup_name+'</div>'+
+        '<div class="sr-arrow">&#8250;</div>'+
+      '</div>';
+    }).join('')+'</div>';
+  }
+
   const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
   if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
   document.getElementById('signalContainer').innerHTML=html;
