@@ -217,17 +217,35 @@ function todayCards(dt, sigs) {
 function scCard(s) {
   const isL = s.direction === 'LONG';
   const q = JSON.stringify(s).replace(/"/g,'&quot;');
-  const sp = Math.min(100,(s.score/100)*100);
+  const sp = Math.min(100,((s.score||0)/100)*100);
   const rr1 = s.rr_1||2; const rr2 = s.rr_2||3;
-  const tt = s.trade_type||(isL?'BTST':'INTRADAY');
-  const dep = s.qty&&s.entry_ref ? '&#8377;'+Math.round(s.qty*s.entry_ref).toLocaleString('en-IN') : '—';
+  const isORB = s.badge==='ORB'||s.badge==='EOD+ORB';
+  const tt = isORB ? 'INTRADAY' : (s.trade_type||(isL?'BTST':'INTRADAY'));
+  const entry = isORB ? s.entry : s.entry_ref;
+  const sl    = isORB ? s.sl    : s.sl;
+  const t1    = isORB ? s.target_1 : s.target_1;
+  const dep = s.qty&&entry ? '&#8377;'+Math.round(s.qty*entry).toLocaleString('en-IN') : '—';
+
+  // Badge styling
+  let badgeHtml = '';
+  if(s.badge==='EOD+ORB') badgeHtml='<span style="font-size:9px;padding:2px 6px;background:rgba(0,214,143,0.15);color:var(--green);border:1px solid rgba(0,214,143,0.3);margin-left:6px">EOD+ORB ✓</span>';
+  else if(s.badge==='ORB') badgeHtml='<span style="font-size:9px;padding:2px 6px;background:rgba(255,179,71,0.1);color:#ffb347;border:1px solid rgba(255,179,71,0.3);margin-left:6px">ORB</span>';
+
+  // Ring — grade for EOD, RVOL for ORB
+  let ringHtml = '';
+  if(isORB){
+    ringHtml='<div style="text-align:center;flex-shrink:0"><div style="font-size:10px;font-weight:700;color:#ffb347">'+fmt(s.rvol||0)+'x</div><div style="font-size:8px;color:var(--muted2)">RVOL</div></div>';
+  } else {
+    ringHtml='<div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div>';
+  }
+
   return '<div class="sc-card" onclick="openModal('+q+')">' +
-    '<div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-sub">'+(s.setup_name||'—')+'</div></div>' +
-    '<div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div>' +
+    '<div class="sc-top"><div><div class="sc-sym">'+s.symbol+badgeHtml+'</div><div class="sc-sub">'+(s.setup_name||'—')+'</div></div>' +
+    ringHtml+'</div>' +
     '<div class="sc-levels">' +
-      '<div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val" style="color:var(--sky)">&#8377;'+fmt(s.entry_ref)+'</div></div>' +
-      '<div class="sc-lv"><div class="sc-lv-label">TARGET 1</div><div class="sc-lv-val" style="color:var(--green)">&#8377;'+fmt(s.target_1)+'</div></div>' +
-      '<div class="sc-lv"><div class="sc-lv-label">STOP LOSS</div><div class="sc-lv-val" style="color:var(--red)">&#8377;'+fmt(s.sl)+'</div></div>' +
+      '<div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val" style="color:var(--sky)">&#8377;'+fmt(entry)+'</div></div>' +
+      '<div class="sc-lv"><div class="sc-lv-label">TARGET 1</div><div class="sc-lv-val" style="color:var(--green)">&#8377;'+fmt(t1)+'</div></div>' +
+      '<div class="sc-lv"><div class="sc-lv-label">STOP LOSS</div><div class="sc-lv-val" style="color:var(--red)">&#8377;'+fmt(sl)+'</div></div>' +
     '</div>' +
     '<div class="sc-body">' +
       '<div class="sc-chips">' +
@@ -235,10 +253,10 @@ function scCard(s) {
         '<span class="chip chip-neu">'+tt+'</span>' +
         '<span class="chip chip-amb">RR '+rr1+':1</span>' +
       '</div>' +
-      '<div class="sc-sbar"><div class="sc-sbar-fill" style="width:'+sp+'%"></div></div>' +
+      '<div class="sc-sbar"><div class="sc-sbar-fill" style="width:'+sp+'%;background:'+(isORB?'#ffb347':'')+'"></div></div>' +
       '<div class="sc-risk" style="margin-top:8px">'+
-        '<span>Score <span>'+s.score+'/100</span></span>' +
-        '<span>Qty <span>'+(s.qty||'—')+'</span></span>' +
+        '<span>'+(isORB?'RVOL <span>'+fmt(s.rvol||0)+'x</span>':'Score <span>'+(s.score||'—')+'/100</span>')+'</span>' +
+        '<span>'+tt+'</span>' +
         '<span>Risk <span>'+(s.risk_inr?'&#8377;'+Math.round(s.risk_inr).toLocaleString('en-IN'):'—')+'</span></span>' +
       '</div>' +
     '</div>' +
@@ -274,31 +292,9 @@ async function render(){
   
   const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
   // TODAY: full signal cards (most recent signal day)
-  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null);
+  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null, live||[]);
   // YESTERDAY + 2 DAYS AGO: summary rows
   html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
-  // Live ORB signals section
-  if(live&&live.length){
-    const longs=live.filter(s=>s.direction==='LONG');
-    const shorts=live.filter(s=>s.direction==='SHORT');
-    html+='<div class="day-header"><span class="day-badge today" style="background:rgba(255,179,71,0.1);color:#ffb347;border-color:rgba(255,179,71,0.4)">ORB LIVE</span><span class="day-date">Opening Range Breakout — Today</span><span class="day-count" style="color:#ffb347">'+live.length+' SIGNALS</span></div>';
-    html+='<div class="signal-rows">'+live.map(s=>{
-      const isL=s.direction==='LONG';
-      const q=JSON.stringify(s).replace(/"/g,"&quot;");
-      return '<div class="signal-row" onclick="openModal('+q+')">'+
-        '<div class="sr-sym">'+s.symbol+'</div>'+
-        '<div class="sr-dir '+(isL?'sr-long':'sr-short')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div>'+
-        '<div><span class="sr-grade grade-b" style="color:#ffb347;border-color:rgba(255,179,71,0.4);background:rgba(255,179,71,0.08)">ORB</span></div>'+
-        '<div class="sr-score">'+s.signal_time+'</div>'+
-        '<div class="sr-level sr-entry">&#8377;'+fmt(s.entry)+'</div>'+
-        '<div class="sr-level sr-sl">&#8377;'+fmt(s.sl)+'</div>'+
-        '<div class="sr-level sr-t1">&#8377;'+fmt(s.target_1)+'</div>'+
-        '<div class="sr-setup">'+s.setup_name+'</div>'+
-        '<div class="sr-arrow">&#8250;</div>'+
-      '</div>';
-    }).join('')+'</div>';
-  }
-
   const rSet=new Set(r3WithSigs);const archD=allD.filter(d=>!rSet.has(d));
   if(archD.length){html+='<div class="archive-toggle" id="archToggle" onclick="toggleArch()"><span class="at-icon">&#9660;</span><span>ARCHIVE — LAST 30 DAYS</span><span style="margin-left:auto;color:var(--muted2)">'+archD.length+' DAYS</span></div><div class="archive-body" id="archBody">'+archD.map(d=>archDay(d,byD[d])).join('')+'</div>';}
   document.getElementById('signalContainer').innerHTML=html;
