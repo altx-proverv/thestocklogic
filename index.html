@@ -205,13 +205,33 @@ function openModal(s){if(typeof s==='string')s=JSON.parse(s);const isL=s.directi
 function todayCards(dt, sigs) {
   const d = new Date(dt);
   const ds = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-  let body;
   if (!sigs || !sigs.length) {
-    body = '<div class="no-day" style="padding:28px;text-align:center;"><div style="font-size:24px;margin-bottom:8px;opacity:.3">📭</div><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:4px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No A/A+ grade setups today</div></div>';
-  } else {
-    body = '<div class="today-grid">' + sigs.map(scCard).join('') + '</div>';
+    return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">'+ds+'</span><span class="day-count">STAY CASH</span></div>'+
+      '<div class="no-day" style="padding:28px;text-align:center;"><div style="font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:4px">STAY CASH</div><div style="font-size:11px;color:var(--muted2)">No qualifying setups today</div></div>';
   }
-  return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">' + ds + '</span><span class="day-count">' + (sigs&&sigs.length ? sigs.length+' SIGNAL'+(sigs.length>1?'S':'') : 'STAY CASH') + '</span></div>' + body;
+  const top10 = sigs.slice(0,10);
+  const rest  = sigs.slice(10);
+  let body = '<div class="today-grid">' + top10.map(scCard).join('') + '</div>';
+  if (rest.length) {
+    body += '<div style="text-align:center;padding:10px 0">'+
+      '<span id="seeMoreBtn" onclick="toggleSeeMore()" style="cursor:pointer;font-size:10px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:6px 18px">SEE '+rest.length+' MORE &#9660;</span></div>';
+    body += '<div id="seeMoreCards" style="display:none"><div class="today-grid">'+rest.map(scCard).join('')+'</div></div>';
+  }
+  return '<div class="day-header"><span class="day-badge today">TODAY</span><span class="day-date">'+ds+'</span><span class="day-count">'+sigs.length+' SIGNAL'+(sigs.length>1?'S':'')+'</span></div>'+body;
+}
+
+function toggleSeeMore(){
+  const el=document.getElementById('seeMoreCards');
+  const btn=document.getElementById('seeMoreBtn');
+  if(!el)return;
+  if(el.style.display==='none'){
+    el.style.display='block';
+    btn.innerHTML='SHOW LESS &#9650;';
+  } else {
+    el.style.display='none';
+    const n=el.querySelectorAll('.sc-card').length;
+    btn.innerHTML='SEE '+n+' MORE &#9660;';
+  }
 }
 
 function scCard(s) {
@@ -273,8 +293,61 @@ async function render(){
   const r3WithSigs = activeDays.length >= 3 ? activeDays : r3;
   
   const lbls=['TODAY','YESTERDAY','2 DAYS AGO'];
-  // TODAY: full signal cards (most recent signal day)
-  let html = todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null);
+  // BREAKING OUT NOW — intraday live signals shown FIRST
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayLive2 = (live||[]).filter(s => s.signal_date === todayStr);
+  let html = '';
+
+  if (todayLive2.length) {
+    const liveDate = new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    html += '<div class="day-header">'+
+      '<span class="day-badge today" style="background:rgba(255,179,71,0.12);color:#ffb347;border-color:rgba(255,179,71,0.4)">BREAKING OUT NOW</span>'+
+      '<span class="day-date">Intraday &middot; '+liveDate+'</span>'+
+      '<span class="day-count" style="color:#ffb347">'+todayLive2.length+' LIVE</span>'+
+    '</div>';
+    const eodToday = byD[r3WithSigs[0]]||[];
+    const liveCards = todayLive2.map(s => {
+      const isL = s.direction==='LONG';
+      const q = JSON.stringify(s).replace(/"/g,'&quot;');
+      const eodMatch = eodToday.find(e=>e.symbol===s.symbol&&e.direction===s.direction);
+      const badge = eodMatch
+        ? '<span style="font-size:8px;padding:1px 5px;background:rgba(0,214,143,0.12);color:var(--green);border:1px solid rgba(0,214,143,0.3);margin-left:5px">EOD+LIVE</span>'
+        : '<span style="font-size:8px;padding:1px 5px;background:rgba(255,179,71,0.1);color:#ffb347;border:1px solid rgba(255,179,71,0.3);margin-left:5px">INTRADAY</span>';
+      return '<div class="sc-card" onclick="openModal('+q+')">'+
+        '<div class="sc-top">'+
+          '<div><div class="sc-sym">'+s.symbol+badge+'</div>'+
+          '<div class="sc-sub">'+(s.setup_name||'—')+'</div></div>'+
+          '<div style="text-align:center;flex-shrink:0">'+
+            '<div style="font-size:11px;font-weight:700;color:#ffb347">'+parseFloat(s.rvol||0).toFixed(1)+'x</div>'+
+            '<div style="font-size:8px;color:var(--muted2)">RVOL</div>'+
+          '</div>'+
+        '</div>'+
+        '<div class="sc-levels">'+
+          '<div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val" style="color:var(--sky)">&#8377;'+fmt(s.entry)+'</div></div>'+
+          '<div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val" style="color:var(--green)">&#8377;'+fmt(s.target_1)+'</div></div>'+
+          '<div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val" style="color:var(--red)">&#8377;'+fmt(s.sl)+'</div></div>'+
+        '</div>'+
+        '<div class="sc-body">'+
+          '<div class="sc-chips">'+
+            '<span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+(isL?'LONG':'SHORT')+'</span>'+
+            '<span class="chip chip-amb">INTRADAY</span>'+
+            '<span class="chip chip-neu">'+(s.signal_time||'—')+'</span>'+
+          '</div>'+
+          '<div class="sc-sbar"><div class="sc-sbar-fill" style="width:'+Math.min(100,(s.rvol||0)/3*100)+'%;background:#ffb347"></div></div>'+
+          '<div class="sc-risk" style="margin-top:8px">'+
+            '<span>RVOL <span>'+parseFloat(s.rvol||0).toFixed(1)+'x</span></span>'+
+            '<span>At <span>'+(s.signal_time||'—')+'</span></span>'+
+            '<span>Range <span>'+(s.orb_range_pct||'—')+'%</span></span>'+
+          '</div>'+
+        '</div>'+
+        '<div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div>'+
+      '</div>';
+    });
+    html += '<div class="today-grid">'+liveCards.join('')+'</div>';
+  }
+
+  // TODAY — EOD signals (top 10 + collapse)
+  html += todayCards(r3WithSigs[0], byD[r3WithSigs[0]]||null);
   // YESTERDAY + 2 DAYS AGO: summary rows
   html += r3WithSigs.slice(1).map((d,i)=>daySection(d,byD[d]||null,lbls[i+1]||i+'D AGO')).join('');
   // Live ORB signals section
