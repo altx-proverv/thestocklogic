@@ -285,15 +285,64 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     atr     = df.get("atr", close * 0.02).fillna(close * 0.02)
     direction = df.get("direction", pd.Series("long", index=df.index))
 
-    entry_ref  = close
-    entry_low  = (close * 0.998).round(2)
-    entry_high = (close * 1.002).round(2)
+    # ── SMC ORDER BLOCK ENTRY ──────────────────────────────────────
+    # Use nearest unmitigated OB as entry zone instead of close price
+    # LONG: nearest demand OB (ob_high/ob_low where is_demand_ob=True)
+    # SHORT: nearest supply OB (ob_high/ob_low where is_supply_ob=True)
+
+    ob_high_col = df.get("ob_high", pd.Series(np.nan, index=df.index))
+    ob_low_col  = df.get("ob_low",  pd.Series(np.nan, index=df.index))
+    is_demand   = df.get("is_demand_ob", pd.Series(False, index=df.index))
+    is_supply   = df.get("is_supply_ob", pd.Series(False, index=df.index))
+    mitigated   = df.get("ob_mitigated", pd.Series(False, index=df.index))
+
+    # For each row, find the nearest valid OB
+    # If no OB available, fall back to close ±0.2%
+    direction_col2 = df.get("direction", pd.Series("long", index=df.index))
+
+    ob_entry_high = pd.Series(np.nan, index=df.index)
+    ob_entry_low  = pd.Series(np.nan, index=df.index)
+
+    # Vectorized: use current row's OB if it's valid and unmitigated
+    # For LONG — use demand OB high/low
+    long_mask = (direction_col2 == "long") & is_demand & (~mitigated) & ob_high_col.notna()
+    ob_entry_high = ob_entry_high.where(~long_mask, ob_high_col)
+    ob_entry_low  = ob_entry_low.where(~long_mask,  ob_low_col)
+
+    # For SHORT — use supply OB high/low
+    short_mask = (direction_col2 == "short") & is_supply & (~mitigated) & ob_high_col.notna()
+    ob_entry_high = ob_entry_high.where(~short_mask, ob_high_col)
+    ob_entry_low  = ob_entry_low.where(~short_mask,  ob_low_col)
+
+    # Where OB entry is valid, use it; otherwise fall back to close ±0.2%
+    has_ob = ob_entry_high.notna() & ob_entry_low.notna()
+
+    entry_ref  = ob_entry_high.where(has_ob, close).round(2)
+    entry_high = ob_entry_high.where(has_ob, (close * 1.002)).round(2)
+    entry_low  = ob_entry_low.where(has_ob,  (close * 0.998)).round(2)
+
+    # For SHORT: entry_ref = OB low (enter on retracement UP into supply OB)
+    # For LONG:  entry_ref = OB high (enter on retracement DOWN into demand OB)
+    entry_ref = entry_ref.where(direction_col2 == "long", ob_entry_low.where(has_ob, close)).round(2)
 
     atr_pct = (atr / close.replace(0, np.nan)).fillna(0.02)
     sl_pct  = np.clip(atr_pct, MIN_SL_PCT, MAX_SL_PCT)
 
-    sl_long  = (close * (1 - sl_pct)).round(2)
-    sl_short = (close * (1 + sl_pct)).round(2)
+    # ── STRUCTURAL SL ───────────────────────────────────────────────
+    # LONG: SL just below demand OB low (1% buffer)
+    # SHORT: SL just above supply OB high (1% buffer)
+    # Fallback to ATR-based SL if no OB
+
+    sl_buffer = 0.005  # 0.5% beyond OB
+
+    sl_long_ob  = (ob_entry_low  * (1 - sl_buffer)).round(2)
+    sl_short_ob = (ob_entry_high * (1 + sl_buffer)).round(2)
+
+    sl_long_atr  = (close * (1 - sl_pct)).round(2)
+    sl_short_atr = (close * (1 + sl_pct)).round(2)
+
+    sl_long  = sl_long_ob.where(has_ob,  sl_long_atr).round(2)
+    sl_short = sl_short_ob.where(has_ob, sl_short_atr).round(2)
     sl = np.where(direction == "long", sl_long, sl_short)
 
     sl_dist = np.abs(close - sl)
