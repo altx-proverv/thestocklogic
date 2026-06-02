@@ -374,7 +374,7 @@ function openModal(s){
       })()
     )
     +'<div class="score-wrap"><div class="score-label">'+(isORB?'RVOL STRENGTH &mdash; '+rvol+'x':'CONVICTION &mdash; '+(s.score||'&mdash;')+'/100')+'</div><div class="score-bg"><div class="score-fill'+(isORB?' orb-sfill':'')+'" style="width:'+sp+'%"></div></div></div>'
-    +'<div style="padding:12px 18px;border-top:1px solid var(--line2)"><div style="margin-bottom:8px"><select id="tradeReason" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:6px 10px;font-family:var(--font);font-size:11px;margin-bottom:6px"><option value="">Select decision...</option><option value="Taken">✓ Taken — entered the trade</option><option value="Skipped">✗ Skipped — conscious decision not to trade</option><option value="Missed">⊘ Missed — saw it too late or entry moved</option><option value="Watching">◎ Watching — monitoring, not decided yet</option></select><input id="tradeNotes" placeholder="Notes (optional)" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:6px 10px;font-family:var(--font);font-size:11px"></div><button id="logTradeBtn" onclick="logTrade('+sj(s)+')" style="width:100%;background:rgba(0,214,143,0.08);border:1px solid rgba(0,214,143,0.3);color:var(--green);padding:8px;font-family:var(--font);font-size:10px;letter-spacing:2px;cursor:pointer">+ LOG THIS TRADE</button></div>'
+    +'<div style="padding:12px 18px;border-top:1px solid var(--line2)"><div style="margin-bottom:8px"><select id="tradeReason" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:6px 10px;font-family:var(--font);font-size:11px;margin-bottom:6px"><option value="">Select decision...</option><option value="Taken">✓ Taken — entered the trade</option><option value="Skipped">✗ Skipped — conscious decision not to trade</option><option value="Missed">⊘ Missed — saw it too late or entry moved</option><option value="Watching">◎ Watching — monitoring, not decided yet</option></select><input id="tradeNotes" placeholder="Why this decision? (required)" required style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:6px 10px;font-family:var(--font);font-size:11px"></div><button id="logTradeBtn" onclick="logTrade('+sj(s)+')" style="width:100%;background:rgba(0,214,143,0.08);border:1px solid rgba(0,214,143,0.3);color:var(--green);padding:8px;font-family:var(--font);font-size:10px;letter-spacing:2px;cursor:pointer">+ LOG THIS TRADE</button></div>'
     +'<div class="modal-disc">&#9888; Educational only &middot; Not SEBI advice &middot; All trading decisions are solely yours</div>';
   document.getElementById('modal').classList.add('open');
 }
@@ -382,6 +382,8 @@ function logTrade(s){
   if(typeof s==='string')s=JSON.parse(s);
   var reason=document.getElementById('tradeReason')?.value||'';
   var notes=document.getElementById('tradeNotes')?.value||'';
+  if(!reason){alert('Please select a decision (Taken / Skipped / Missed / Watching)');return;}
+  if(!notes||notes.trim().length<3){alert('Please add a note explaining your decision — this trains your personal filter.');return;}
   var record={
     signal_id:   s.id||null,
     symbol:      s.symbol,
