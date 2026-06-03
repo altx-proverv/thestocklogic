@@ -655,17 +655,12 @@ document.getElementById('authModal').addEventListener('click', function(e){ if(e
 setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
 window.addEventListener('load', function(){
   if (!_supa) _supa = window.supabase.createClient(SB, AK);
-  _supa.auth.onAuthStateChange(async function(event, session){
+  _supa.auth.onAuthStateChange(function(event, session){
     _user = session ? session.user : null;
-    if (_user) {
-      var r = await fetch(SB+'/rest/v1/subscribers?email=eq.'+encodeURIComponent(_user.email)+'&status=eq.active&limit=1',
-        {headers:{apikey:AK,Authorization:'Bearer '+AK}});
-      var data = await r.json();
-      if (!data || !data.length) _user = null;
-    }
-    renderGate();
+    updateNavAuth();
   });
-  setInterval(function(){if(_user)render().catch(function(e){console.error(e);});},5*60*1000);
+  render().catch(function(e){console.error(e);});
+  setInterval(function(){render().catch(function(e){console.error(e);});},5*60*1000);
 });
 </script>
 </body>
