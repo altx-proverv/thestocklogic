@@ -276,9 +276,13 @@ def approve_trade(symbol: str) -> dict:
     if trade_id:
         deploy_capital(trade_id, capital, symbol)
 
-    # Place GTT for CNC longs
+    # Place trade management orders
+    from atlas.execution.trade_management import place_cnc_gtt_orders, place_mis_bracket_order
+    t2 = sizing.get("target_2", 0)
     if product == "CNC" and direction == "LONG":
-        place_gtt_orders(symbol, direction, qty, sl, t1, sizing.get("target_2", 0))
+        place_cnc_gtt_orders(symbol, qty, entry, sl, t1, t2, trade_id)
+    elif product == "MIS" and direction == "SHORT":
+        place_mis_bracket_order(symbol, qty, entry, sl, t1, t2, trade_id)
 
     # Confirm on Telegram
     send_trade_entry({
