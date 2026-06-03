@@ -229,7 +229,14 @@ function todayStr(){return new Date().toISOString().split('T')[0];}
 function fmtDate(ds){return new Date(ds).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});}
 function sj(s){return JSON.stringify(s).replace(/"/g,'&quot;');}
 async function fetchEOD(){var s=new Date();s.setDate(s.getDate()-30);var r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,score.desc&select=*',{headers:HDR});return r.json();}
-async function fetchSectors(){var r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:HDR});return r.json();}
+async function fetchSectors(){
+  var r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:HDR});
+  var data=await r.json();
+  if(!data||!data.length)return data;
+  // Only use most recent date
+  var latestDate=data[0].signal_date;
+  return data.filter(function(s){return s.signal_date===latestDate;});
+}
 async function fetchLive(){var r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+todayStr()+'&order=signal_time.asc',{headers:HDR});return r.json();}
 async function fetchOutcomes(){var r=await fetch(SB+'/rest/v1/signal_outcomes?select=signal_id,outcome,pnl,exit_day,days_held',{headers:HDR});return r.json();}
 async function fetchPrices(){var r=await fetch(SB+'/rest/v1/live_prices?select=symbol,ltp,change_pct',{headers:HDR});return r.json();}
