@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TSL Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--line:rgba(255,255,255,0.06);--sky:#4db8ff;--green:#00d68f;--red:#ff4d6d;--amber:#ffb347;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.15);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;min-height:100vh}
+nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:rgba(6,8,10,0.95)}
+.logo{font-family:var(--display);font-size:18px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.nav-r{display:flex;align-items:center;gap:12px;font-size:10px;color:var(--muted)}
+.main{max-width:1000px;margin:0 auto;padding:28px 20px}
+.page-title{font-family:var(--display);font-size:28px;letter-spacing:2px;margin-bottom:4px}
+.page-sub{font-size:11px;color:var(--muted);margin-bottom:24px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px}
+.stat{background:var(--s1);border:1px solid var(--line);padding:12px 16px}
+.stat-n{font-size:24px;font-weight:700;margin-bottom:2px}
+.stat-l{font-size:10px;color:var(--muted);letter-spacing:1px}
+.section-title{font-size:10px;letter-spacing:3px;color:var(--muted);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.table{width:100%;border-collapse:collapse;margin-bottom:28px}
+.table th{font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
+.table td{padding:10px 10px;border-bottom:1px solid var(--line2);font-size:12px;vertical-align:middle}
+.table tr:hover td{background:var(--s2)}
+.badge{font-size:9px;padding:2px 7px;border-radius:2px;letter-spacing:.5px}
+.badge-pending{background:rgba(255,179,71,0.1);color:var(--amber);border:1px solid rgba(255,179,71,0.3)}
+.badge-approved{background:rgba(0,214,143,0.1);color:var(--green);border:1px solid rgba(0,214,143,0.3)}
+.badge-rejected{background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)}
+.btn{font-size:9px;padding:4px 10px;border:1px solid;cursor:pointer;font-family:var(--font);letter-spacing:1px;transition:all .15s}
+.btn-approve{background:rgba(0,214,143,0.08);color:var(--green);border-color:rgba(0,214,143,0.3)}
+.btn-approve:hover{background:rgba(0,214,143,0.2)}
+.btn-reject{background:rgba(255,77,109,0.08);color:var(--red);border-color:rgba(255,77,109,0.3)}
+.btn-reject:hover{background:rgba(255,77,109,0.2)}
+.btn-copy{background:var(--s2);color:var(--sky);border-color:var(--line)}
+.empty{padding:28px;text-align:center;color:var(--muted);font-size:12px;border:1px solid var(--line2)}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;z-index:100}
+.modal-bg.open{display:flex}
+.modal{background:var(--s1);border:1px solid rgba(77,184,255,.25);padding:28px;max-width:400px;width:100%}
+.modal h3{font-family:var(--display);font-size:22px;letter-spacing:2px;margin-bottom:8px;color:var(--green)}
+.modal p{font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.6}
+.cred-box{background:var(--s2);border:1px solid var(--line);padding:12px;margin-bottom:16px;font-size:13px}
+.cred-box div{margin-bottom:6px}
+.cred-label{color:var(--muted);font-size:10px;letter-spacing:1px}
+.cred-val{color:var(--white);font-weight:600}
+.loading{color:var(--muted);font-size:11px;padding:20px 0}
+.login-box{max-width:380px;margin:80px auto;background:var(--s1);border:1px solid var(--line);padding:32px}
+.login-box h2{font-family:var(--display);font-size:24px;letter-spacing:2px;margin-bottom:4px}
+.login-box p{font-size:11px;color:var(--muted);margin-bottom:20px}
+input{width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:9px 12px;font-family:var(--font);font-size:13px;outline:none;margin-bottom:10px}
+input:focus{border-color:rgba(77,184,255,.4)}
+.btn-full{width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.15),rgba(0,214,143,0.15));border:1px solid rgba(77,184,255,0.3);color:var(--white);padding:10px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer}
+.err{color:var(--red);font-size:11px;margin-top:6px;text-align:center}
+</style>
+</head>
+<body>
+
+<div id="loginView">
+  <nav><div class="logo">TSL ADMIN</div></div>
+  <div class="login-box">
+    <h2>ADMIN LOGIN</h2>
+    <p>Restricted to approved administrators only</p>
+    <input id="loginEmail" type="email" placeholder="Admin email">
+    <input id="loginPass" type="password" placeholder="Password">
+    <button class="btn-full" onclick="adminLogin()">SIGN IN ›</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<div id="adminView" style="display:none">
+  <nav>
+    <div class="logo">TSL ADMIN</div>
+    <div class="nav-r">
+      <span id="adminEmail"></span>
+      <button onclick="adminLogout()" style="background:none;border:1px solid rgba(255,77,109,.3);color:var(--red);padding:3px 10px;cursor:pointer;font-family:var(--font);font-size:10px;letter-spacing:1px">SIGN OUT</button>
+      <a href="/" style="color:var(--muted);font-size:10px;letter-spacing:1px;text-decoration:none">← BACK TO SITE</a>
+    </div>
+  </nav>
+  <div class="main">
+    <div class="page-title">ADMIN DASHBOARD</div>
+    <div class="page-sub">Manage waitlist approvals and subscribers</div>
+    <div class="stats" id="statsRow">
+      <div class="stat"><div class="stat-n" id="statPending">—</div><div class="stat-l">PENDING</div></div>
+      <div class="stat"><div class="stat-n" id="statApproved">—</div><div class="stat-l">APPROVED</div></div>
+      <div class="stat"><div class="stat-n" id="statSubscribers">—</div><div class="stat-l">SUBSCRIBERS</div></div>
+      <div class="stat"><div class="stat-n" id="statTotal">—</div><div class="stat-l">TOTAL WAITLIST</div></div>
+    </div>
+    <div class="section-title">PENDING APPROVAL</div>
+    <div id="pendingList"><div class="loading">Loading...</div></div>
+    <div class="section-title">APPROVED</div>
+    <div id="approvedList"><div class="loading">Loading...</div></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="credModal">
+  <div class="modal">
+    <h3>✓ USER APPROVED</h3>
+    <p>Share these credentials with the subscriber. They can change their password after signing in.</p>
+    <div class="cred-box">
+      <div><div class="cred-label">EMAIL</div><div class="cred-val" id="credEmail"></div></div>
+      <div style="margin-top:8px"><div class="cred-label">TEMPORARY PASSWORD</div><div class="cred-val" id="credPass"></div></div>
+      <div style="margin-top:8px"><div class="cred-label">LOGIN URL</div><div class="cred-val">thestocklogic.com</div></div>
+    </div>
+    <button class="btn btn-copy" style="width:100%;margin-bottom:8px" onclick="copyCredentials()">COPY CREDENTIALS</button>
+    <button class="btn btn-approve" style="width:100%" onclick="document.getElementById('credModal').classList.remove('open')">DONE</button>
+  </div>
+</div>
+
+<script>
+const SB  = 'https://eibdlcanpudjgmkjxrga.supabase.co';
+const AK  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
+const SK  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODUzNTE4MywiZXhwIjoyMDk0MTExMTgzfQ.zUTVliCU56zNRIvdC_joEl9JxuErFlLioahkQfwBJ6g';
+
+var _supa = null;
+var _session = null;
+var _adminEmails = ['dua.hemal@gmail.com'];
+
+async function adminLogin() {
+  var email = document.getElementById('loginEmail').value.trim();
+  var pass  = document.getElementById('loginPass').value;
+  var err   = document.getElementById('loginErr');
+
+  if (!_supa) _supa = supabase.createClient(SB, AK);
+
+  if (!_adminEmails.includes(email)) {
+    err.textContent = 'Access denied. Admin only.'; return;
+  }
+
+  var res = await _supa.auth.signInWithPassword({email, password: pass});
+  if (res.error) { err.textContent = 'Invalid credentials.'; return; }
+
+  _session = res.data.session;
+  document.getElementById('adminEmail').textContent = email;
+  document.getElementById('loginView').style.display = 'none';
+  document.getElementById('adminView').style.display = 'block';
+  loadDashboard();
+}
+
+async function adminLogout() {
+  await _supa.auth.signOut();
+  location.reload();
+}
+
+async function loadDashboard() {
+  var hdrs = {apikey: AK, Authorization: 'Bearer ' + _session.access_token};
+  var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK};
+
+  // Load waitlist
+  var wRes = await fetch(SB + '/rest/v1/waitlist?order=created_at.desc', {headers: hdrs});
+  var waitlist = await wRes.json();
+
+  // Load subscribers count
+  var sRes = await fetch(SB + '/rest/v1/subscribers?select=id', {headers: shdrs});
+  var subs = await sRes.json();
+
+  var pending  = waitlist.filter(function(w){return w.status==='pending';});
+  var approved = waitlist.filter(function(w){return w.status==='approved';});
+
+  document.getElementById('statPending').textContent    = pending.length;
+  document.getElementById('statApproved').textContent   = approved.length;
+  document.getElementById('statSubscribers').textContent= subs.length;
+  document.getElementById('statTotal').textContent      = waitlist.length;
+
+  renderPending(pending);
+  renderApproved(approved);
+}
+
+function renderPending(list) {
+  var el = document.getElementById('pendingList');
+  if (!list.length) { el.innerHTML = '<div class="empty">No pending approvals</div>'; return; }
+  el.innerHTML = '<table class="table"><thead><tr>'+
+    '<th>NAME</th><th>EMAIL</th><th>EXPERIENCE</th><th>APPLIED</th><th>ACTION</th>'+
+    '</tr></thead><tbody>'+
+    list.map(function(w){
+      var d = new Date(w.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+      return '<tr>'+
+        '<td>'+w.name+'</td>'+
+        '<td style="color:var(--sky)">'+w.email+'</td>'+
+        '<td style="color:var(--muted)">'+w.reason+'</td>'+
+        '<td style="color:var(--muted2)">'+d+'</td>'+
+        '<td style="display:flex;gap:6px">'+
+          '<button class="btn btn-approve" onclick="approveUser(\''+w.id+'\',\''+w.email+'\',\''+w.name+'\')">APPROVE</button>'+
+          '<button class="btn btn-reject" onclick="rejectUser(\''+w.id+'\')">REJECT</button>'+
+        '</td>'+
+      '</tr>';
+    }).join('')+
+    '</tbody></table>';
+}
+
+function renderApproved(list) {
+  var el = document.getElementById('approvedList');
+  if (!list.length) { el.innerHTML = '<div class="empty">No approved users yet</div>'; return; }
+  el.innerHTML = '<table class="table"><thead><tr>'+
+    '<th>NAME</th><th>EMAIL</th><th>EXPERIENCE</th><th>APPROVED</th><th>STATUS</th>'+
+    '</tr></thead><tbody>'+
+    list.map(function(w){
+      var d = new Date(w.approved_at||w.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+      return '<tr>'+
+        '<td>'+w.name+'</td>'+
+        '<td style="color:var(--sky)">'+w.email+'</td>'+
+        '<td style="color:var(--muted)">'+w.reason+'</td>'+
+        '<td style="color:var(--muted2)">'+d+'</td>'+
+        '<td><span class="badge badge-approved">APPROVED</span></td>'+
+      '</tr>';
+    }).join('')+
+    '</tbody></table>';
+}
+
+function genPassword() {
+  var chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#';
+  var pass = '';
+  for (var i = 0; i < 10; i++) pass += chars[Math.floor(Math.random()*chars.length)];
+  return pass;
+}
+
+async function approveUser(waitlistId, email, name) {
+  var tempPass = genPassword();
+  var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK, 'Content-Type': 'application/json'};
+
+  // 1. Create auth user via Supabase Admin API
+  var authRes = await fetch(SB + '/auth/v1/admin/users', {
+    method: 'POST',
+    headers: shdrs,
+    body: JSON.stringify({email: email, password: tempPass, email_confirm: true})
+  });
+  var authData = await authRes.json();
+
+  if (!authData.id) {
+    alert('Failed to create user: ' + (authData.message || JSON.stringify(authData)));
+    return;
+  }
+
+  // 2. Add to subscribers table
+  await fetch(SB + '/rest/v1/subscribers', {
+    method: 'POST',
+    headers: {...shdrs, 'Prefer': 'return=minimal'},
+    body: JSON.stringify({user_id: authData.id, email: email, name: name, status: 'active', plan: 'beta'})
+  });
+
+  // 3. Update waitlist status
+  await fetch(SB + '/rest/v1/waitlist?id=eq.' + waitlistId, {
+    method: 'PATCH',
+    headers: {...shdrs, 'Prefer': 'return=minimal'},
+    body: JSON.stringify({status: 'approved', approved_at: new Date().toISOString()})
+  });
+
+  // 4. Show credentials
+  document.getElementById('credEmail').textContent = email;
+  document.getElementById('credPass').textContent  = tempPass;
+  document.getElementById('credModal').classList.add('open');
+
+  // Reload dashboard
+  loadDashboard();
+}
+
+async function rejectUser(waitlistId) {
+  if (!confirm('Reject this application?')) return;
+  var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK, 'Content-Type': 'application/json'};
+  await fetch(SB + '/rest/v1/waitlist?id=eq.' + waitlistId, {
+    method: 'PATCH',
+    headers: {...shdrs, 'Prefer': 'return=minimal'},
+    body: JSON.stringify({status: 'rejected'})
+  });
+  loadDashboard();
+}
+
+function copyCredentials() {
+  var email = document.getElementById('credEmail').textContent;
+  var pass  = document.getElementById('credPass').textContent;
+  var text  = 'The Stock Logic — Login Credentials\n\nURL: https://thestocklogic.com\nEmail: '+email+'\nPassword: '+pass+'\n\nPlease change your password after first login.\n\nEducational content only. Not SEBI advice.';
+  navigator.clipboard.writeText(text).then(function(){
+    alert('Credentials copied to clipboard!');
+  });
+}
+
+// Auto-login if session exists
+window.addEventListener('load', async function() {
+  _supa = supabase.createClient(SB, AK);
+  var res = await _supa.auth.getSession();
+  if (res.data.session && _adminEmails.includes(res.data.session.user.email)) {
+    _session = res.data.session;
+    document.getElementById('adminEmail').textContent = res.data.session.user.email;
+    document.getElementById('loginView').style.display = 'none';
+    document.getElementById('adminView').style.display = 'block';
+    loadDashboard();
+  }
+});
+</script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</body>
+</html>
