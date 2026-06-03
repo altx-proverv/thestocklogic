@@ -18,19 +18,22 @@ IST = timezone(timedelta(hours=5, minutes=30))
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
-def send(message: str, parse_mode: str = "HTML") -> bool:
+def send(message: str, parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
     """Send a message to the ATLAS Telegram channel."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram not configured — skipping message")
         return False
     try:
+        payload = {
+            "chat_id":    TELEGRAM_CHAT_ID,
+            "text":       message,
+            "parse_mode": parse_mode,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         r = requests.post(
             f"{BASE_URL}/sendMessage",
-            json={
-                "chat_id":    TELEGRAM_CHAT_ID,
-                "text":       message,
-                "parse_mode": parse_mode,
-            },
+            json=payload,
             timeout=10
         )
         if r.status_code == 200:
@@ -40,6 +43,18 @@ def send(message: str, parse_mode: str = "HTML") -> bool:
     except Exception as e:
         log.error(f"Telegram error: {e}")
         return False
+
+
+def send_with_buttons(message: str, symbol: str) -> bool:
+    """Send signal alert with inline approve/skip/watch buttons."""
+    reply_markup = {
+        "inline_keyboard": [[
+            {"text": "✅ APPROVE", "callback_data": f"trade_{symbol}"},
+            {"text": "❌ SKIP",    "callback_data": f"skip_{symbol}"},
+            {"text": "👁 WATCH",   "callback_data": f"watch_{symbol}"},
+        ]]
+    }
+    return send(message, reply_markup=reply_markup)
 
 
 def send_signal_alert(signal: dict) -> bool:

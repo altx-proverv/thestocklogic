@@ -35,8 +35,17 @@ def handle_shutdown(signum, frame):
 sig_module.signal(sig_module.SIGTERM, handle_shutdown)
 sig_module.signal(sig_module.SIGINT, handle_shutdown)
 
+def answer_callback(callback_id: str):
+    """Acknowledge button tap to remove loading spinner."""
+    try:
+        requests.post(f"{BASE_URL}/answerCallbackQuery",
+                     json={"callback_query_id": callback_id}, timeout=5)
+    except Exception:
+        pass
+
+
 def get_updates(offset=None):
-    params = {"timeout": 30, "allowed_updates": ["message"]}
+    params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
     if offset:
         params["offset"] = offset
     try:
@@ -48,6 +57,30 @@ def get_updates(offset=None):
     return []
 
 def process_update(update: dict) -> bool:
+    # Handle inline button callbacks
+    callback = update.get("callback_query", {})
+    if callback:
+        callback_id = callback.get("id", "")
+        chat = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+        data = callback.get("data", "")
+        answer_callback(callback_id)
+        if chat != str(TELEGRAM_CHAT_ID):
+            return False
+        now = datetime.now(IST).strftime("%H:%M IST")
+        log.info(f"Button tap at {now}: {data}")
+        if data.startswith("trade_"):
+            text = f"/trade {data.replace('trade_','').upper()}"
+        elif data.startswith("skip_"):
+            text = f"/skip {data.replace('skip_','').upper()}"
+        elif data.startswith("watch_"):
+            text = f"/watch {data.replace('watch_','').upper()}"
+        else:
+            text = data
+        response = handle_directive(text)
+        if response:
+            send(response)
+        return True
+
     msg  = update.get("message", {})
     chat = str(msg.get("chat", {}).get("id", ""))
     text = msg.get("text", "").strip()
