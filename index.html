@@ -592,11 +592,10 @@ function renderGate() {
     if (userBar) userBar.style.display = 'none';
     render().catch(function(e){console.error(e);});
     setTimeout(function(){
-      var grid = document.querySelector('.cards-grid');
-      if (grid) grid.classList.add('blurred');
-      var archToggle = document.querySelector('.arch-toggle');
-      if (archToggle) archToggle.classList.add('blurred');
-      // Insert gate banner
+      // Blur entire signal container
+      var sc = document.getElementById('signalContainer');
+      if (sc) sc.classList.add('blurred');
+      // Insert gate banner ABOVE the signal container
       var existing = document.getElementById('gateBanner');
       if (!existing) {
         var banner = document.createElement('div');
@@ -606,7 +605,7 @@ function renderGate() {
           '<p class="gate-sub">The Stock Logic is in private beta.<br>Join the waitlist or sign in if you\'re already approved.</p>'+
           '<a href="/waitlist" class="gate-btn">JOIN WAITLIST &#8250;</a>'+
           '<button class="gate-btn secondary" onclick="openAuthModal()">SIGN IN</button>';
-        container.insertBefore(banner, container.firstChild);
+        sc.parentNode.insertBefore(banner, sc);
       }
     }, 800);
   }
