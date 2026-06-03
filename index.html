@@ -35,7 +35,7 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .mkt-bar{display:flex;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
 .mkt-bar::-webkit-scrollbar{display:none}
 .mkt-pill{padding:8px 20px;border-right:1px solid var(--line);white-space:nowrap;flex-shrink:0;font-size:11px}
-.mkt-key{color:var(--muted);margin-right:6px;letter-spacing:1px}
+.mkt-key{color:var(--muted);margin-right:8px;letter-spacing:1px}
 .mkt-val{font-weight:600}
 .bull{color:var(--green)}.bear{color:var(--red)}.side{color:var(--amber)}.neut{color:var(--white)}
 .main{max-width:1100px;margin:0 auto;padding:0 20px}
@@ -436,12 +436,12 @@ async function render(){
     // In bullish regime show weakest sectors (least strong) not short bias
     var topSecs,botSecs;
     if(reg==='BEARISH'){
-      // Sort by rank — rank 1 = least bearish (relatively stronger)
-      var sorted=sectors.slice().sort(function(a,b){return a.rank-b.rank;});
+      var sorted=sectors.slice().sort(function(a,b){return (b.ret_median||0)-(a.ret_median||0);});
+      var weakest=sectors.slice().sort(function(a,b){return (a.ret_median||0)-(b.ret_median||0);});
       topSecs=sorted.slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
-      botSecs=sorted.slice(-2).map(function(s){return s.sector;}).join(' &middot; ');
+      botSecs=weakest.slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
       document.getElementById('mTopLabel').textContent='RELATIVELY STRONGER';
-      document.getElementById('mBotLabel').textContent='AVOID';
+      document.getElementById('mBotLabel').textContent='WEAKEST';
     } else if(reg==='BULLISH'){
       topSecs=sectors.filter(function(s){return s.trade_bias==='long';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
       botSecs=sectors.filter(function(s){return s.trade_bias==='short';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
