@@ -215,6 +215,10 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   <div class="mkt-pill"><span class="mkt-key">UPDATED</span><span class="mkt-val neut" id="mUpdated">&mdash;</span></div>
 </div>
 <div class="main">
+  <div id="userBar" style="display:none" class="user-bar">
+    <span>Signed in as <span class="user-email" id="userEmailLabel"></span></span>
+    <button class="logout-btn" onclick="signOut()">SIGN OUT</button>
+  </div>
   <div id="signalContainer"><div class="loading"><div class="spinner"></div>FETCHING SIGNALS...</div></div>
   <div class="how-section">
     <div class="how-title">HOW IT WORKS</div>
