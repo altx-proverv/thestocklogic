@@ -653,8 +653,10 @@ function closeAuthModal(){ document.getElementById('authModal').classList.remove
 document.getElementById('authModal').addEventListener('click', function(e){ if(e.target===document.getElementById('authModal'))closeAuthModal(); });
 
 setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
-checkAuth();
-setInterval(function(){render().catch(function(e){console.error(e);});},5*60*1000);
+window.addEventListener('load', function(){
+  checkAuth();
+  setInterval(function(){if(_user)render().catch(function(e){console.error(e);});},5*60*1000);
+});
 </script>
 </body>
 </html>
