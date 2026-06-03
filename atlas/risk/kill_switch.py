@@ -136,7 +136,17 @@ def check(signal: dict = None) -> KillSwitchResult:
         log.warning(f"KILL SWITCH: Max open positions reached — {open_positions}/{max_trades}")
         return KillSwitchResult(False, f"Max positions reached ({open_positions}/{max_trades})", details)
 
-    # CHECK 5 — Signal conviction check
+    # CHECK 5 — Capital fence check
+    if signal:
+        from atlas.risk.capital_manager import can_deploy
+        capital_required = float(signal.get("capital_required", 0))
+        if capital_required > 0:
+            can, avail, cap_reason = can_deploy(capital_required)
+            if not can:
+                log.warning(f"KILL SWITCH: Capital fence — {cap_reason}")
+                return KillSwitchResult(False, cap_reason, details)
+
+    # CHECK 6 — Signal conviction check
     if signal:
         conviction = float(signal.get("conviction", 0))
         min_conv   = mode_config["min_conviction"]
@@ -144,7 +154,7 @@ def check(signal: dict = None) -> KillSwitchResult:
             log.warning(f"KILL SWITCH: Conviction too low — {conviction}/{min_conv} in {mode} mode")
             return KillSwitchResult(False, f"Conviction {conviction} below threshold {min_conv}", details)
 
-    # CHECK 6 — Daily P&L approaching cap (warn at 75%)
+    # CHECK 7 — Daily P&L approaching cap (warn at 75%)
     warning_threshold = daily_loss_cap * 0.75
     if daily_pnl <= -warning_threshold:
         remaining = daily_loss_cap - abs(daily_pnl)
