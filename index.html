@@ -659,6 +659,11 @@ window.addEventListener('load', function(){
     _user = session ? session.user : null;
     updateNavAuth();
   });
+  // Also check session immediately on load
+  _supa.auth.getSession().then(function(res){
+    _user = res.data.session ? res.data.session.user : null;
+    updateNavAuth();
+  });
   render().catch(function(e){console.error(e);});
   setInterval(function(){render().catch(function(e){console.error(e);});},5*60*1000);
 });
