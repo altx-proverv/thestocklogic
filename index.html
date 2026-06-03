@@ -554,10 +554,14 @@ async function render(){
 function toggleSeeMore(){var el=document.getElementById('seeMoreDiv');var btn=document.getElementById('seeMoreBtn');if(!el)return;if(el.style.display==='none'){el.style.display='block';btn.innerHTML='SHOW LESS &#9650;';}else{el.style.display='none';btn.innerHTML='SEE '+el.querySelectorAll('.sc').length+' MORE &#9660;';}}
 function toggleArch(){document.getElementById('archBody').classList.toggle('open');document.getElementById('archIcon').classList.toggle('open');}
 // ── SUPABASE AUTH ─────────────────────────────────────────────
-var _supa = window.supabase ? window.supabase.createClient(SB, AK) : null;
+var _supa = null;
 var _user = null;
 
 async function checkAuth() {
+  if (!_supa) {
+    if (!window.supabase) { renderGate(); return; }
+    _supa = window.supabase.createClient(SB, AK);
+  }
   var res = await _supa.auth.getSession();
   _user = res.data.session ? res.data.session.user : null;
   if (_user) {
