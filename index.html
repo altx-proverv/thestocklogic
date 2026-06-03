@@ -654,7 +654,9 @@ document.getElementById('authModal').addEventListener('click', function(e){ if(e
 
 setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
 window.addEventListener('load', function(){
-  checkAuth();
+  setTimeout(function(){
+    checkAuth();
+  }, 300);
   setInterval(function(){if(_user)render().catch(function(e){console.error(e);});},5*60*1000);
 });
 </script>
