@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Stock Logic — Join Waitlist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--line:rgba(255,255,255,0.06);--sky:#4db8ff;--sky2:rgba(77,184,255,0.1);--green:#00d68f;--green2:rgba(0,214,143,0.08);--red:#ff4d6d;--amber:#ffb347;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.15);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;min-height:100vh;display:flex;flex-direction:column}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.007) 3px,rgba(77,184,255,0.007) 4px);pointer-events:none;z-index:9999}
+nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:rgba(6,8,10,0.92);backdrop-filter:blur(16px);position:sticky;top:0;z-index:100}
+.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;text-decoration:none}
+.nav-link{font-size:10px;letter-spacing:2px;color:var(--muted);text-decoration:none}
+.nav-link:hover{color:var(--white)}
+.main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 20px}
+.card{background:var(--s1);border:1px solid var(--line);padding:40px;width:100%;max-width:480px}
+.card-label{font-size:9px;letter-spacing:4px;color:var(--sky);margin-bottom:12px;display:flex;align-items:center;gap:10px}
+.card-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--sky),transparent);opacity:.3}
+.card h1{font-family:var(--display);font-size:36px;letter-spacing:2px;line-height:1;margin-bottom:8px}
+.card h1 em{font-family:var(--serif);font-style:italic;color:var(--sky);font-size:.85em}
+.card-sub{font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:28px}
+.form-group{margin-bottom:14px}
+.form-label{font-size:10px;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;display:block}
+.form-input{width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none;transition:border-color .15s}
+.form-input:focus{border-color:rgba(77,184,255,0.4)}
+.form-input::placeholder{color:var(--muted2)}
+select.form-input option{background:var(--s2)}
+.form-btn{width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.15),rgba(0,214,143,0.15));border:1px solid rgba(77,184,255,0.3);color:var(--white);padding:12px;font-family:var(--font);font-size:11px;letter-spacing:3px;cursor:pointer;transition:all .15s;margin-top:8px}
+.form-btn:hover{background:linear-gradient(120deg,rgba(77,184,255,0.25),rgba(0,214,143,0.25));border-color:rgba(77,184,255,0.5)}
+.form-btn:disabled{opacity:.5;cursor:not-allowed}
+.msg{padding:12px;font-size:12px;margin-top:12px;text-align:center;display:none}
+.msg.success{background:var(--green2);border:1px solid rgba(0,214,143,0.3);color:var(--green)}
+.msg.error{background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.3);color:var(--red)}
+.features{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:24px}
+.feature{background:var(--s2);padding:10px 12px;border:1px solid var(--line)}
+.feature-icon{font-size:16px;margin-bottom:4px}
+.feature-name{font-size:11px;font-weight:600;margin-bottom:2px}
+.feature-desc{font-size:10px;color:var(--muted);line-height:1.4}
+.disc{font-size:9px;color:var(--muted2);text-align:center;margin-top:14px;line-height:1.6}
+footer{padding:16px 28px;border-top:1px solid var(--line);text-align:center;font-size:10px;color:var(--muted2)}
+@media(max-width:500px){.card{padding:24px 18px}.features{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">THE STOCK LOGIC</a>
+  <a href="/" class="nav-link">VIEW SIGNALS &#8250;</a>
+</nav>
+<div class="main">
+  <div class="card">
+    <div class="card-label">EARLY ACCESS</div>
+    <h1>JOIN THE <em>Waitlist</em></h1>
+    <p class="card-sub">Institutional-grade NSE trade signals. SMC-based setups with entry, SL and targets — delivered daily. Limited beta access.</p>
+
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">📡</div>
+        <div class="feature-name">500 NSE Stocks</div>
+        <div class="feature-desc">Daily scan across full Nifty 500 universe</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-name">Intraday + BTST</div>
+        <div class="feature-desc">ORB breakouts at 9:35 AM + EOD setups</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🎯</div>
+        <div class="feature-name">Entry Defined</div>
+        <div class="feature-desc">Order block entries · structural SL · 2:1 RR</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📊</div>
+        <div class="feature-name">Regime Aware</div>
+        <div class="feature-desc">Signals adapt to bullish / bearish / mixed market</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">FULL NAME</label>
+      <input id="wlName" type="text" class="form-input" placeholder="Your name">
+    </div>
+    <div class="form-group">
+      <label class="form-label">EMAIL ADDRESS</label>
+      <input id="wlEmail" type="email" class="form-input" placeholder="your@email.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">TRADING EXPERIENCE</label>
+      <select id="wlReason" class="form-input">
+        <option value="">Select your experience level...</option>
+        <option value="Beginner — less than 1 year">Beginner — less than 1 year</option>
+        <option value="Intermediate — 1 to 3 years">Intermediate — 1 to 3 years</option>
+        <option value="Experienced — 3 to 5 years">Experienced — 3 to 5 years</option>
+        <option value="Expert — 5+ years">Expert — 5+ years</option>
+      </select>
+    </div>
+    <button class="form-btn" id="wlBtn" onclick="joinWaitlist()">REQUEST ACCESS &#8250;</button>
+    <div class="msg" id="wlMsg"></div>
+    <div class="disc">&#9888; Educational content only &middot; Not SEBI-registered research analyst &middot; Not a buy/sell recommendation</div>
+  </div>
+</div>
+<footer>thestocklogic.com &middot; &copy; 2026 &middot; Educational use only</footer>
+
+<script>
+const SB  = 'https://eibdlcanpudjgmkjxrga.supabase.co';
+const AK  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
+const HDR = {'apikey':AK,'Authorization':'Bearer '+AK,'Content-Type':'application/json'};
+
+function showMsg(text, type) {
+  var el = document.getElementById('wlMsg');
+  el.textContent = text;
+  el.className = 'msg ' + type;
+  el.style.display = 'block';
+}
+
+async function joinWaitlist() {
+  var name   = document.getElementById('wlName').value.trim();
+  var email  = document.getElementById('wlEmail').value.trim();
+  var reason = document.getElementById('wlReason').value;
+
+  if (!name) { showMsg('Please enter your name.', 'error'); return; }
+  if (!email || !email.includes('@')) { showMsg('Please enter a valid email address.', 'error'); return; }
+  if (!reason) { showMsg('Please select your experience level.', 'error'); return; }
+
+  var btn = document.getElementById('wlBtn');
+  btn.disabled = true;
+  btn.textContent = 'SUBMITTING...';
+
+  try {
+    var r = await fetch(SB + '/rest/v1/waitlist', {
+      method: 'POST',
+      headers: {...HDR, 'Prefer': 'return=representation'},
+      body: JSON.stringify({ name: name, email: email, reason: reason, status: 'pending' })
+    });
+
+    if (r.ok) {
+      showMsg('You\'re on the waitlist! We\'ll notify you when your access is approved.', 'success');
+      btn.textContent = '✓ SUBMITTED';
+      document.getElementById('wlName').value = '';
+      document.getElementById('wlEmail').value = '';
+      document.getElementById('wlReason').value = '';
+    } else {
+      var data = await r.json();
+      if (data.code === '23505') {
+        showMsg('This email is already on the waitlist. We\'ll be in touch soon.', 'success');
+      } else {
+        showMsg('Something went wrong. Please try again.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'REQUEST ACCESS ›';
+      }
+    }
+  } catch(e) {
+    showMsg('Network error. Please check your connection and try again.', 'error');
+    btn.disabled = false;
+    btn.textContent = 'REQUEST ACCESS ›';
+  }
+}
+</script>
+</body>
+</html>
