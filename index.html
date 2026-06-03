@@ -436,8 +436,8 @@ async function render(){
     // In bullish regime show weakest sectors (least strong) not short bias
     var topSecs,botSecs;
     if(reg==='BEARISH'){
-      var sorted=sectors.slice().sort(function(a,b){return (b.ret_median||0)-(a.ret_median||0);});
-      var weakest=sectors.slice().sort(function(a,b){return (a.ret_median||0)-(b.ret_median||0);});
+      var sorted=sectors.slice().sort(function(a,b){return (b.momentum_score||0)-(a.momentum_score||0);});
+      var weakest=sectors.slice().sort(function(a,b){return (a.momentum_score||0)-(b.momentum_score||0);});
       topSecs=sorted.slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
       botSecs=weakest.slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
       document.getElementById('mTopLabel').textContent='RELATIVELY STRONGER';
