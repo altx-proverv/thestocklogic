@@ -29,7 +29,7 @@ from atlas.risk.kill_switch import check as kill_switch_check
 from atlas.risk.capital_manager import can_deploy, deploy_capital, get_state
 from atlas.risk.position_sizing import calculate, validate
 from atlas.execution.broker import get_kite, place_order, place_sl_order
-from atlas.reporting.telegram import send, send_trade_entry
+from atlas.reporting.telegram import send, send_with_buttons, send_trade_entry
 
 logging.basicConfig(level=logging.INFO,
                    format="%(asctime)s [ATLAS-EXEC] %(message)s")
@@ -145,9 +145,9 @@ def queue_signal(signal: dict) -> dict:
         "expires_at": expires_at,
     }
 
-    # Step 4 — Send Telegram alert
+    # Step 4 — Send Telegram alert with inline buttons
     alert = format_signal_alert(signal, sizing)
-    send(alert)
+    send_with_buttons(alert, symbol)
 
     log.info(f"Signal queued for approval: {symbol} — expires {expires_at.strftime('%H:%M IST')}")
     return {"status": "PENDING", "symbol": symbol, "expires_at": str(expires_at)}
