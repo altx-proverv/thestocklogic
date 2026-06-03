@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Stock Logic">
 <link rel="manifest" href="/manifest.json">
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
 <style>
@@ -127,6 +128,18 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .score-fill.orb-sfill{background:var(--amber)}
 .modal-disc{padding:8px 18px 14px;font-size:9px;color:var(--muted2);line-height:1.6;border-top:1px solid var(--line2)}
 .loading{display:flex;align-items:center;gap:10px;padding:40px 0;color:var(--muted);font-size:11px;letter-spacing:1px}
+.gate-banner{background:linear-gradient(135deg,rgba(77,184,255,0.08),rgba(0,214,143,0.08));border:1px solid rgba(77,184,255,0.25);padding:24px;text-align:center;margin:20px 0}
+.gate-title{font-family:var(--display);font-size:22px;letter-spacing:2px;margin-bottom:8px}
+.gate-sub{font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.6}
+.gate-btn{display:inline-block;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:10px 24px;font-family:var(--font);font-size:10px;letter-spacing:3px;text-decoration:none;cursor:pointer;transition:all .15s;margin:0 6px}
+.gate-btn:hover{background:linear-gradient(120deg,rgba(77,184,255,0.35),rgba(0,214,143,0.35))}
+.gate-btn.secondary{background:transparent;border-color:var(--line);color:var(--muted)}
+.gate-btn.secondary:hover{color:var(--white);border-color:rgba(255,255,255,.2)}
+.blurred{filter:blur(6px);pointer-events:none;user-select:none;opacity:.4}
+.user-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 0;font-size:10px;color:var(--muted);border-bottom:1px solid var(--line2);margin-bottom:4px}
+.user-email{color:var(--sky)}
+.logout-btn{cursor:pointer;color:var(--muted);background:none;border:none;font-family:var(--font);font-size:10px;letter-spacing:1px}
+.logout-btn:hover{color:var(--red)}
 .spinner{width:14px;height:14px;border:1.5px solid var(--line);border-top-color:var(--sky);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .how-section{border-top:1px solid var(--line);padding:28px 0 40px;margin-top:28px}
@@ -219,6 +232,31 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   <div class="footer-meta">thestocklogic.com &middot; v3.0<br>Signals update daily after 6:35 PM IST</div>
 </footer>
 <div class="modal-bg" id="modal"><div class="modal" id="modalInner"></div></div>
+
+<div class="modal-bg" id="authModal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-top">
+      <div><div class="modal-sym" style="font-size:20px">SIGN IN</div>
+      <div class="modal-meta">Approved subscribers only</div></div>
+      <button class="modal-close" onclick="closeAuthModal()">&#215;</button>
+    </div>
+    <div style="padding:20px 18px">
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px">EMAIL</div>
+        <input id="authEmail" type="email" placeholder="your@email.com" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none">
+      </div>
+      <div style="margin-bottom:16px">
+        <div style="font-size:10px;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px">PASSWORD</div>
+        <input id="authPassword" type="password" placeholder="••••••••" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none">
+      </div>
+      <button onclick="signIn()" style="width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:10px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer;margin-bottom:8px">SIGN IN &#8250;</button>
+      <div id="authMsg" style="font-size:11px;text-align:center;color:var(--red);display:none;margin-top:8px"></div>
+      <div style="text-align:center;margin-top:12px;font-size:10px;color:var(--muted)">
+        Not approved yet? <a href="/waitlist" style="color:var(--sky);text-decoration:none">Join the waitlist &#8250;</a>
+      </div>
+    </div>
+  </div>
+</div>
 <script>
 var SB='https://eibdlcanpudjgmkjxrga.supabase.co';
 var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
@@ -515,7 +553,88 @@ async function render(){
 }
 function toggleSeeMore(){var el=document.getElementById('seeMoreDiv');var btn=document.getElementById('seeMoreBtn');if(!el)return;if(el.style.display==='none'){el.style.display='block';btn.innerHTML='SHOW LESS &#9650;';}else{el.style.display='none';btn.innerHTML='SEE '+el.querySelectorAll('.sc').length+' MORE &#9660;';}}
 function toggleArch(){document.getElementById('archBody').classList.toggle('open');document.getElementById('archIcon').classList.toggle('open');}
-render().catch(function(e){console.error(e);document.getElementById('signalContainer').innerHTML='<div class="loading">Could not load signals. Please refresh.</div>';});
+// ── SUPABASE AUTH ─────────────────────────────────────────────
+var _supa = window.supabase ? window.supabase.createClient(SB, AK) : null;
+var _user = null;
+
+async function checkAuth() {
+  var res = await _supa.auth.getSession();
+  _user = res.data.session ? res.data.session.user : null;
+  if (_user) {
+    // Check if subscriber is approved
+    var r = await fetch(SB+'/rest/v1/subscribers?email=eq.'+encodeURIComponent(_user.email)+'&status=eq.active&limit=1',
+      {headers:{apikey:AK,Authorization:'Bearer '+res.data.session.access_token}});
+    var data = await r.json();
+    if (!data || !data.length) {
+      _user = null; // not approved yet
+    }
+  }
+  renderGate();
+}
+
+function renderGate() {
+  var container = document.getElementById('signalContainer');
+  var userBar   = document.getElementById('userBar');
+
+  if (_user) {
+    // Logged in + approved — show user bar, full access
+    if (userBar) {
+      userBar.style.display = 'flex';
+      document.getElementById('userEmailLabel').textContent = _user.email;
+    }
+    render().catch(function(e){console.error(e);container.innerHTML='<div class="loading">Could not load signals.</div>';});
+  } else {
+    // Not logged in — show blurred gate
+    if (userBar) userBar.style.display = 'none';
+    render().catch(function(e){console.error(e);});
+    setTimeout(function(){
+      var grid = document.querySelector('.cards-grid');
+      if (grid) grid.classList.add('blurred');
+      var archToggle = document.querySelector('.arch-toggle');
+      if (archToggle) archToggle.classList.add('blurred');
+      // Insert gate banner
+      var existing = document.getElementById('gateBanner');
+      if (!existing) {
+        var banner = document.createElement('div');
+        banner.id = 'gateBanner';
+        banner.className = 'gate-banner';
+        banner.innerHTML = '<div class="gate-title">ACCESS RESTRICTED</div>'+
+          '<p class="gate-sub">The Stock Logic is in private beta.<br>Join the waitlist or sign in if you're already approved.</p>'+
+          '<a href="/waitlist" class="gate-btn">JOIN WAITLIST &#8250;</a>'+
+          '<button class="gate-btn secondary" onclick="openAuthModal()">SIGN IN</button>';
+        container.insertBefore(banner, container.firstChild);
+      }
+    }, 800);
+  }
+}
+
+async function signIn() {
+  var email = document.getElementById('authEmail').value.trim();
+  var pass  = document.getElementById('authPassword').value;
+  var msg   = document.getElementById('authMsg');
+  if (!email || !pass) { msg.textContent='Please enter email and password.'; msg.style.display='block'; return; }
+  var res = await _supa.auth.signInWithPassword({email:email, password:pass});
+  if (res.error) {
+    msg.textContent = 'Invalid email or password.';
+    msg.style.display = 'block';
+  } else {
+    closeAuthModal();
+    checkAuth();
+  }
+}
+
+async function signOut() {
+  await _supa.auth.signOut();
+  _user = null;
+  location.reload();
+}
+
+function openAuthModal(){ document.getElementById('authModal').classList.add('open'); }
+function closeAuthModal(){ document.getElementById('authModal').classList.remove('open'); }
+document.getElementById('authModal').addEventListener('click', function(e){ if(e.target===document.getElementById('authModal'))closeAuthModal(); });
+
+setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
+checkAuth();
 setInterval(function(){render().catch(function(e){console.error(e);});},5*60*1000);
 </script>
 </body>
