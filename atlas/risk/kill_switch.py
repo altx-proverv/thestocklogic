@@ -140,8 +140,10 @@ def check(signal: dict = None) -> KillSwitchResult:
     if signal:
         from atlas.risk.capital_manager import can_deploy
         capital_required = float(signal.get("capital_required", 0))
-        if capital_required > 0:
-            can, avail, cap_reason = can_deploy(capital_required)
+        direction        = str(signal.get("direction", "LONG")).upper()
+        product          = "MIS" if direction == "SHORT" else "CNC"
+        if capital_required > 0 or product == "CNC":
+            can, avail, cap_reason = can_deploy(capital_required, product)
             if not can:
                 log.warning(f"KILL SWITCH: Capital fence — {cap_reason}")
                 return KillSwitchResult(False, cap_reason, details)

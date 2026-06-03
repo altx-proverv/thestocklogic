@@ -66,16 +66,26 @@ def update_state(updates: dict) -> bool:
     return r.status_code in (200, 204)
 
 
-def can_deploy(capital_required: float) -> tuple:
+def can_deploy(capital_required: float, product: str = "CNC") -> tuple:
     """
     Check if capital is available for a new trade.
+    CNC: counts against capital fence (real money deployed)
+    MIS: only brokerage counted — margin provided by Zerodha
     Returns (can_deploy, available, reason)
     """
+    # MIS shorts — only check brokerage, not full capital
+    if product == "MIS":
+        brokerage = BROKERAGE_PER_ORDER * 2
+        state     = get_state()
+        available = float(state.get("available_capital", INITIAL_CAPITAL))
+        if available < brokerage:
+            return False, available, f"Insufficient for brokerage: need INR {brokerage}"
+        return True, available, f"MIS trade — margin provided by Zerodha"
+
+    # CNC — full capital check
     state     = get_state()
     available = float(state.get("available_capital", INITIAL_CAPITAL))
     allocated = float(state.get("allocated_capital", INITIAL_CAPITAL))
-
-    # Include brokerage cost (entry + exit = 2 orders minimum)
     total_required = capital_required + (BROKERAGE_PER_ORDER * 2)
 
     if total_required > available:
@@ -85,7 +95,6 @@ def can_deploy(capital_required: float) -> tuple:
             f"Insufficient capital — need INR {total_required:,.0f}, "
             f"available INR {available:,.0f} of INR {allocated:,.0f} allocated"
         )
-
     return True, available, f"Capital available — INR {available:,.0f}"
 
 

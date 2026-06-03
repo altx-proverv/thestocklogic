@@ -68,6 +68,7 @@ def calculate(
     agent_mode: str = DEFAULT_AGENT_MODE,
     capital: float = None,
     win_rate: float = 0.5,
+    direction: str = "LONG",
 ) -> dict:
     """
     Calculate position size for a trade.
@@ -132,8 +133,14 @@ def calculate(
     actual_risk      = qty * risk_per_share
     actual_reward    = qty * reward_per_share
 
+    # For SHORT MIS — override capital_deployed to show only risk
+    product = "MIS" if str(direction).upper() == "SHORT" else "CNC"
+    if product == "MIS":
+        capital_deployed = risk_inr  # Only risk counts for MIS
+
     result = {
         "qty":               qty,
+        "product":           product,
         "entry_price":       entry_price,
         "sl_price":          sl_price,
         "target_price":      target_price,
@@ -176,8 +183,8 @@ def validate(sizing: dict, capital: float = None) -> tuple:
     if sizing.get("risk_inr", 0) > MAX_RISK_PER_TRADE:
         return False, f"Risk too high: ₹{sizing['risk_inr']:,.0f} (max ₹{MAX_RISK_PER_TRADE:,.0f})"
 
-    if sizing.get("capital_deployed", 0) > cap * 0.4:
-        return False, f"Position too large: {sizing['size_pct']:.1f}% of capital (max 40%)"
+    # Capital deployed check removed — capital_manager handles the fence
+    # MIS shorts use margin, CNC longs bounded by capital_manager.can_deploy()
 
     return True, "Valid"
 

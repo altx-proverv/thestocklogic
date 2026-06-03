@@ -69,7 +69,7 @@ def format_signal_alert(signal: dict, sizing: dict) -> str:
     risk      = sizing.get("risk_inr", 0)
     reward    = sizing.get("reward_inr", 0)
     rr        = sizing.get("rr_ratio", 0)
-    product   = sizing.get("product", "CNC")
+    product   = "MIS" if direction.upper() == "SHORT" else "CNC"
     capital   = sizing.get("capital_deployed", 0)
     setup     = signal.get("setup_name", "")
     now       = datetime.now(IST).strftime("%H:%M IST")
@@ -176,10 +176,46 @@ def approve_trade(symbol: str) -> dict:
     sl        = sizing.get("sl_price", 0)
     t1        = sizing.get("target_1", 0)
     qty       = sizing.get("qty", 0)
-    product   = sizing.get("product", "CNC")
+    product   = "MIS" if direction.upper() == "SHORT" else "CNC"
     capital   = sizing.get("capital_deployed", 0)
 
     log.info(f"Executing approved trade: {symbol} {direction} {qty} shares")
+
+    # PRE-EXECUTION PRICE VALIDATION
+    # Check current price vs original entry zone — reject if moved too far
+    from atlas.execution.broker import get_ltp
+    current_ltp = get_ltp(symbol)
+    if current_ltp > 0:
+        price_drift_pct = abs(current_ltp - entry) / entry * 100
+        max_drift = 0.5  # 0.5% max drift from entry zone
+
+        if direction == "LONG" and current_ltp > entry * 1.005:
+            msg = (
+                f"⚠️ <b>ENTRY BLOCKED — {symbol}</b>\n"
+                f"Price has moved too far from entry zone\n"
+                f"Signal entry: ₹{entry:,.1f}\n"
+                f"Current LTP:  ₹{current_ltp:,.1f} (+{price_drift_pct:.1f}%)\n"
+                f"Max allowed drift: {max_drift}%\n"
+                f"RR ratio compromised — trade rejected."
+            )
+            send(msg)
+            del PENDING_TRADES[symbol]
+            return {"status": "REJECTED", "reason": f"Price drifted {price_drift_pct:.1f}% from entry"}
+
+        if direction == "SHORT" and current_ltp < entry * 0.995:
+            msg = (
+                f"⚠️ <b>ENTRY BLOCKED — {symbol}</b>\n"
+                f"Price has moved too far from entry zone\n"
+                f"Signal entry: ₹{entry:,.1f}\n"
+                f"Current LTP:  ₹{current_ltp:,.1f} (-{price_drift_pct:.1f}%)\n"
+                f"Max allowed drift: {max_drift}%\n"
+                f"RR ratio compromised — trade rejected."
+            )
+            send(msg)
+            del PENDING_TRADES[symbol]
+            return {"status": "REJECTED", "reason": f"Price drifted {price_drift_pct:.1f}% from entry"}
+
+        log.info(f"Price validation passed: LTP ₹{current_ltp:,.1f} vs entry ₹{entry:,.1f} (drift {price_drift_pct:.2f}%)")
 
     # Place entry order
     order_result = place_order(
