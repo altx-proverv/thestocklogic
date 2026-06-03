@@ -115,12 +115,11 @@ def queue_signal(signal: dict) -> dict:
     log.info(f"Processing signal: {symbol} {direction} Conv:{conviction}")
 
     # Step 1 — Position sizing
+    from atlas.risk.position_sizing import calculate
     sizing = calculate(
-        direction=direction,
         entry_price=entry,
         sl_price=sl,
-        target_1=t1,
-        target_2=t2,
+        target_price=t1,
         conviction=conviction,
         agent_mode=mode,
     )

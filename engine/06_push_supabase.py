@@ -173,12 +173,51 @@ def push_signals(target_date: str = None):
             log.info(f"  {s['symbol']:<12} {s['grade']} {s['score']}")
     else:
         log.warning("Could not verify — check Supabase dashboard")
+    return records
+
+
+def notify_atlas(records: list):
+    """
+    Send qualifying signals to ATLAS trade executor.
+    Only Grade A signals (score >= 78) trigger Telegram alerts.
+    ATLAS bot listener must be running to receive.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from atlas.execution.trade_executor import queue_signal
+        from atlas.config import MIN_CONVICTION_SCORE
+
+        qualifying = [r for r in records if float(r.get("score", 0)) >= MIN_CONVICTION_SCORE]
+        log.info(f"ATLAS: {len(qualifying)} signals qualify for notification (score >= {MIN_CONVICTION_SCORE})")
+
+        for record in qualifying:
+            signal = {
+                "symbol":     record.get("symbol"),
+                "direction":  record.get("direction"),
+                "conviction": float(record.get("score", 0)),
+                "score":      float(record.get("score", 0)),
+                "entry_ref":  float(record.get("entry_ref", 0)),
+                "entry":      float(record.get("entry_ref", 0)),
+                "sl":         float(record.get("sl", 0)),
+                "target_1":   float(record.get("target_1", 0)),
+                "target_2":   float(record.get("target_2", 0)),
+                "setup_name": record.get("setup_name", ""),
+                "sector":     record.get("sector", ""),
+                "grade":      record.get("grade", "B"),
+            }
+            result = queue_signal(signal)
+            log.info(f"ATLAS signal queued: {signal['symbol']} — {result.get('status')}")
+
+    except Exception as e:
+        log.warning(f"ATLAS notification failed (non-critical): {e}")
 
 
 def main():
     target = sys.argv[1] if len(sys.argv) > 1 else None
     os.chdir(Path(__file__).parent.parent)
-    push_signals(target)
+    records = push_signals(target)
+    if records:
+        notify_atlas(records)
     log.info("Done. Signals are live on Supabase.")
 
 
