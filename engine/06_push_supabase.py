@@ -72,6 +72,27 @@ def push_signals(target_date: str = None):
         (df["total_score"] >= MIN_SCORE)
     ].copy()
 
+    # REGIME-AWARE FILTER
+    # Fetch current market regime from Supabase sector_heatmap
+    try:
+        r_regime = requests.get(
+            f"{SUPABASE_URL}/rest/v1/sector_heatmap?order=signal_date.desc&limit=1",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        )
+        regime_data = r_regime.json()
+        market_dir = regime_data[0]["market_direction"] if regime_data else "mixed"
+        log.info(f"Market regime: {market_dir.upper()}")
+
+        before = len(day)
+        if market_dir == "bearish":
+            day = day[day["direction"] != "long"]
+            log.info(f"Bearish regime: suppressed {before - len(day)} LONG signals")
+        elif market_dir == "bullish":
+            day = day[day["direction"] != "short"]
+            log.info(f"Bullish regime: suppressed {before - len(day)} SHORT signals")
+    except Exception as e:
+        log.warning(f"Could not fetch regime — pushing all signals: {e}")
+
     if day.empty:
         log.warning(f"No qualifying signals for {d.date()}")
         # Still push empty — website shows "no signals today"

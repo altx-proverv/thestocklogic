@@ -174,7 +174,14 @@ def compute_live_sector_heatmap(quotes: dict, symbol_map: dict, sector_map: dict
 
     all_pos = (sector_df["ret_median"] > 0).all()
     all_neg = (sector_df["ret_median"] < 0).all()
-    sector_df["market_direction"] = "bullish" if all_pos else "bearish" if all_neg else "mixed"
+    market_direction = "bullish" if all_pos else "bearish" if all_neg else "mixed"
+    sector_df["market_direction"] = market_direction
+
+    # REGIME OVERRIDE — trade_bias must agree with market_direction
+    if market_direction == "bearish":
+        sector_df.loc[sector_df["trade_bias"] == "long", "trade_bias"] = "avoid"
+    elif market_direction == "bullish":
+        sector_df.loc[sector_df["trade_bias"] == "short", "trade_bias"] = "avoid"
 
     return sector_df, df
 

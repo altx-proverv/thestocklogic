@@ -160,6 +160,12 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> pd.DataFrame:
     sector_df.loc[sector_df["classification"] == "strong", "trade_bias"] = "long"
     sector_df.loc[sector_df["classification"] == "weak",   "trade_bias"] = "short"
 
+    # REGIME OVERRIDE — trade_bias must agree with market_direction
+    if market_direction == "bearish":
+        sector_df.loc[sector_df["trade_bias"] == "long", "trade_bias"] = "avoid"
+    elif market_direction == "bullish":
+        sector_df.loc[sector_df["trade_bias"] == "short", "trade_bias"] = "avoid"
+
     return sector_df, stocks_df
 
 

@@ -297,8 +297,30 @@ def run_orb_scan(max_stocks: int = 500):
             json.dump(signals, f, indent=2)
 
         # Push to Supabase
+        # REGIME-AWARE FILTER — suppress signals against market direction
+    try:
+        import requests as _req
+        r_reg = _req.get(
+            f"{SUPABASE_URL}/rest/v1/sector_heatmap?order=signal_date.desc&limit=1",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        )
+        reg_data = r_reg.json()
+        mdir = reg_data[0]["market_direction"] if reg_data else "mixed"
+        before = len(signals)
+        if mdir == "bearish":
+            signals = [s for s in signals if s["direction"] != "LONG"]
+            log.info(f"Bearish regime: suppressed {before-len(signals)} LONG ORB signals")
+        elif mdir == "bullish":
+            signals = [s for s in signals if s["direction"] != "SHORT"]
+            log.info(f"Bullish regime: suppressed {before-len(signals)} SHORT ORB signals")
+        log.info(f"Regime: {mdir.upper()} | Signals after filter: {len(signals)}")
+    except Exception as e:
+        log.warning(f"Regime fetch failed — pushing all ORB signals: {e}")
+
+    if signals:
         push_orb_signals(signals)
     else:
+        log.info("No ORB breakouts after regime filter.")
         log.info("No ORB breakouts detected yet.")
 
     # Save ORB levels for all stocks

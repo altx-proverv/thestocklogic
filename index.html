@@ -196,8 +196,8 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </div>
 <div class="mkt-bar">
   <div class="mkt-pill"><span class="mkt-key">REGIME</span><span class="mkt-val neut" id="mRegime">&mdash;</span></div>
-  <div class="mkt-pill"><span class="mkt-key">TOP SECTORS</span><span class="mkt-val bull" id="mTop">&mdash;</span></div>
-  <div class="mkt-pill"><span class="mkt-key">WEAK SECTORS</span><span class="mkt-val bear" id="mBot">&mdash;</span></div>
+  <div class="mkt-pill"><span class="mkt-key" id="mTopLabel">TOP SECTORS</span><span class="mkt-val bull" id="mTop">&mdash;</span></div>
+  <div class="mkt-pill"><span class="mkt-key" id="mBotLabel">WEAK SECTORS</span><span class="mkt-val bear" id="mBot">&mdash;</span></div>
   <div class="mkt-pill"><span class="mkt-key">TODAY</span><span class="mkt-val" id="mCount">&mdash;</span></div>
   <div class="mkt-pill"><span class="mkt-key">UPDATED</span><span class="mkt-val neut" id="mUpdated">&mdash;</span></div>
 </div>
@@ -427,14 +427,34 @@ async function render(){
   var outcomeMap={};
   (outcomes||[]).forEach(function(o){outcomeMap[o.signal_id]=o;});
   if(sectors&&sectors.length){
-    var top=sectors.filter(function(s){return s.trade_bias==='long';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
-    var bot=sectors.filter(function(s){return s.trade_bias==='short';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
     var reg=(sectors[0].market_direction||'mixed').toUpperCase();
     var rc=reg==='BULLISH'?'bull':reg==='BEARISH'?'bear':'side';
     document.getElementById('mRegime').innerHTML=reg;
     document.getElementById('mRegime').className='mkt-val '+rc;
-    document.getElementById('mTop').innerHTML=top||'&mdash;';
-    document.getElementById('mBot').innerHTML=bot||'&mdash;';
+
+    // In bearish regime show strongest sectors (least weak) not long bias
+    // In bullish regime show weakest sectors (least strong) not short bias
+    var topSecs,botSecs;
+    if(reg==='BEARISH'){
+      // Sort by rank — rank 1 = least bearish (relatively stronger)
+      var sorted=sectors.slice().sort(function(a,b){return a.rank-b.rank;});
+      topSecs=sorted.slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
+      botSecs=sorted.slice(-2).map(function(s){return s.sector;}).join(' &middot; ');
+      document.getElementById('mTopLabel').textContent='RELATIVELY STRONGER';
+      document.getElementById('mBotLabel').textContent='AVOID';
+    } else if(reg==='BULLISH'){
+      topSecs=sectors.filter(function(s){return s.trade_bias==='long';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
+      botSecs=sectors.filter(function(s){return s.trade_bias==='short';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
+      document.getElementById('mTopLabel').textContent='TOP SECTORS';
+      document.getElementById('mBotLabel').textContent='WEAK SECTORS';
+    } else {
+      topSecs=sectors.filter(function(s){return s.trade_bias==='long';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
+      botSecs=sectors.filter(function(s){return s.trade_bias==='short';}).slice(0,2).map(function(s){return s.sector;}).join(' &middot; ');
+      document.getElementById('mTopLabel').textContent='TOP SECTORS';
+      document.getElementById('mBotLabel').textContent='WEAK SECTORS';
+    }
+    document.getElementById('mTop').innerHTML=topSecs||'&mdash;';
+    document.getElementById('mBot').innerHTML=botSecs||'&mdash;';
   }
   if(!eodAll||!eodAll.length){document.getElementById('liveLabel').textContent='NO DATA';document.getElementById('signalContainer').innerHTML='<div class="loading">No signals found.</div>';return;}
   var byDate={};
