@@ -182,6 +182,62 @@ def handle_directive(text: str) -> str:
             f"Net capital: INR {s['net_capital']:,.0f}"
         )
 
+    elif text.startswith("/trade") or text.startswith("/skip") or text.startswith("/watch"):
+        parts  = text.split()
+        cmd    = parts[0].lower()
+        symbol = parts[1].upper() if len(parts) > 1 else ""
+        if not symbol:
+            return "Usage: /trade SYMBOL or /skip SYMBOL or /watch SYMBOL"
+        from atlas.execution.trade_executor import approve_trade, skip_trade, PENDING_TRADES
+        if cmd == "/trade":
+            if symbol not in PENDING_TRADES:
+                return f"No pending trade for {symbol}. Check /status."
+            result = approve_trade(symbol)
+            status = result.get("status","")
+            if status == "EXECUTED":
+                return f"ORDER PLACED — {symbol}. Order ID: {result.get('order_id','')}"
+            elif status == "EXPIRED":
+                return f"EXPIRED — {symbol}. Approval window closed."
+            else:
+                return f"FAILED — {symbol}. {result.get('reason','Unknown error')}"
+        elif cmd == "/skip":
+            skip_trade(symbol)
+            return f"SKIPPED — {symbol}. Signal rejected."
+        elif cmd == "/watch":
+            if symbol not in PENDING_TRADES:
+                return f"No pending signal for {symbol}."
+            pending = PENDING_TRADES[symbol]
+            expires = pending["expires_at"].strftime("%H:%M IST")
+            sizing  = pending["sizing"]
+            entry   = sizing.get("entry_price", 0)
+            sl      = sizing.get("sl_price", 0)
+            t1      = sizing.get("target_1", 0)
+            return f"WATCHING {symbol} until {expires}. Entry:Rs{entry:.1f} SL:Rs{sl:.1f} T1:Rs{t1:.1f}. Send /trade {symbol} to execute."
+
+    elif text in ["/positions", "positions"]:
+        import requests as _req, os
+        url = "https://eibdlcanpudjgmkjxrga.supabase.co"
+        key = os.environ.get("SUPABASE_SERVICE_KEY","")
+        r = _req.get(f"{url}/rest/v1/atlas_trades?status=eq.OPEN&order=created_at.desc",
+            headers={"apikey":key,"Authorization":f"Bearer {key}"})
+        trades = r.json() if r.status_code == 200 else []
+        if not trades:
+            return "No open positions"
+        out = "OPEN POSITIONS"
+        for t in trades:
+            sym   = t.get("symbol","")
+            dirn  = t.get("direction","")
+            entry = float(t.get("entry_price",0))
+            sl    = float(t.get("sl",0))
+            t1    = float(t.get("target_1",0))
+            out  += f"\n{sym} {dirn} Entry:Rs{entry:.1f} SL:Rs{sl:.1f} T1:Rs{t1:.1f}"
+        return out
+
+    elif text in ["/report", "report"]:
+        from atlas.reporting.daily_report import generate_and_send
+        generate_and_send()
+        return "📊 Report generated and sent."
+
     elif text in ["/help", "help"]:
         return (
             "🤖 <b>ATLAS DIRECTIVES</b>\n\n"
