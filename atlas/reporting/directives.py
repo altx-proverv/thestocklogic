@@ -160,17 +160,12 @@ def handle_directive(text: str) -> str:
         from atlas.execution.zerodha_login import get_stored_token, verify_token
         token = get_stored_token()
         if token and verify_token(token):
-            return "✅ <b>Already logged in</b>
-Zerodha token is valid. No action needed."
+            return "✅ <b>Already logged in</b>\nZerodha token is valid. No action needed."
         url = gen_login_url()
         if url:
             return (
-                f"🔐 <b>ZERODHA LOGIN</b>
-"
-                f"Tap to login:
-{url}
-
-"
+                f"🔐 <b>ZERODHA LOGIN</b>\n"
+                f"Tap to login:\n{url}\n\n"
                 f"After redirect, paste the token=XXXXX value here."
             )
         return "❌ Could not generate login URL. Check API credentials."
@@ -179,16 +174,11 @@ Zerodha token is valid. No action needed."
         from atlas.risk.capital_manager import get_capital_status
         s = get_capital_status()
         return (
-            f"💰 <b>CAPITAL STATUS</b>
-"
-            f"Allocated:  INR {s['allocated']:,.0f}
-"
-            f"Deployed:   INR {s['deployed']:,.0f} ({s['utilisation_pct']:.1f}%)
-"
-            f"Available:  INR {s['available']:,.0f}
-"
-            f"Brokerage:  INR {s['brokerage_paid']:,.0f}
-"
+            f"💰 <b>CAPITAL STATUS</b>\n"
+            f"Allocated:  INR {s['allocated']:,.0f}\n"
+            f"Deployed:   INR {s['deployed']:,.0f} ({s['utilisation_pct']:.1f}%)\n"
+            f"Available:  INR {s['available']:,.0f}\n"
+            f"Brokerage:  INR {s['brokerage_paid']:,.0f}\n"
             f"Net capital: INR {s['net_capital']:,.0f}"
         )
 
