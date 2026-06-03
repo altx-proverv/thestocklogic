@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ATLAS — Trading Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--s3:#161e28;--line:rgba(255,255,255,0.06);--line2:rgba(255,255,255,0.04);--sky:#4db8ff;--sky2:rgba(77,184,255,0.08);--green:#00d68f;--green2:rgba(0,214,143,0.08);--red:#ff4d6d;--red2:rgba(255,77,109,0.08);--amber:#ffb347;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.12);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;min-height:100vh}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.006) 3px,rgba(77,184,255,0.006) 4px);pointer-events:none;z-index:9999}
+nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:rgba(6,8,10,0.95);position:sticky;top:0;z-index:100}
+.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;text-decoration:none}
+.nav-r{display:flex;align-items:center;gap:16px;font-size:10px}
+.nav-link{color:var(--muted);text-decoration:none;letter-spacing:1px}
+.nav-link:hover{color:var(--white)}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;margin-right:5px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.main{max-width:1200px;margin:0 auto;padding:24px 20px}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.page-title{font-family:var(--display);font-size:28px;letter-spacing:2px}
+.last-update{font-size:10px;color:var(--muted);letter-spacing:1px}
+.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:20px}
+.metric{background:var(--s1);border:1px solid var(--line);padding:12px 14px}
+.metric-label{font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px}
+.metric-val{font-size:20px;font-weight:600;letter-spacing:1px}
+.metric-sub{font-size:10px;color:var(--muted);margin-top:2px}
+.green{color:var(--green)}
+.red{color:var(--red)}
+.amber{color:var(--amber)}
+.sky{color:var(--sky)}
+.section{margin-bottom:20px}
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.section-title{font-size:10px;letter-spacing:3px;color:var(--muted)}
+.section-badge{font-size:9px;padding:2px 8px;border:1px solid var(--line)}
+.table{width:100%;border-collapse:collapse}
+.table th{font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+.table td{padding:10px 10px;border-bottom:1px solid var(--line2);font-size:12px;vertical-align:middle}
+.table tr:hover td{background:var(--s2)}
+.badge{font-size:9px;padding:2px 7px;border-radius:2px;letter-spacing:.5px}
+.badge-long{background:rgba(0,214,143,0.1);color:var(--green);border:1px solid rgba(0,214,143,0.3)}
+.badge-short{background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)}
+.badge-open{background:rgba(77,184,255,0.1);color:var(--sky);border:1px solid rgba(77,184,255,0.3)}
+.badge-closed{background:var(--muted2);color:var(--muted)}
+.badge-cnc{background:rgba(0,214,143,0.08);color:var(--green);border:1px solid rgba(0,214,143,0.2)}
+.badge-mis{background:rgba(255,179,71,0.08);color:var(--amber);border:1px solid rgba(255,179,71,0.2)}
+.win{color:var(--green)}
+.loss{color:var(--red)}
+.neutral{color:var(--muted)}
+.kill-active{background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.3);padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--red);display:none}
+.kill-safe{background:rgba(0,214,143,0.06);border:1px solid rgba(0,214,143,0.2);padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--green)}
+.empty{padding:28px;text-align:center;color:var(--muted);font-size:12px;border:1px solid var(--line2)}
+.mode-badge{font-size:10px;padding:3px 10px;border-radius:2px;letter-spacing:1px}
+.mode-normal{background:rgba(77,184,255,0.1);color:var(--sky);border:1px solid rgba(77,184,255,0.3)}
+.mode-cautious{background:rgba(255,179,71,0.1);color:var(--amber);border:1px solid rgba(255,179,71,0.3)}
+.mode-aggressive{background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)}
+.mode-paused{background:var(--muted2);color:var(--muted);border:1px solid var(--line)}
+.mode-defensive{background:rgba(0,214,143,0.08);color:var(--green);border:1px solid rgba(0,214,143,0.2)}
+.capital-bar{margin-bottom:20px;background:var(--s1);border:1px solid var(--line);padding:16px}
+.cap-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.cap-label{font-size:10px;letter-spacing:2px;color:var(--muted)}
+.cap-vals{display:flex;gap:24px;font-size:12px}
+.cap-item{text-align:right}
+.cap-item-label{font-size:9px;color:var(--muted);letter-spacing:1px;display:block}
+.cap-item-val{font-size:16px;font-weight:600}
+.track{height:6px;background:var(--s2);border-radius:0;overflow:hidden;border:1px solid var(--line2)}
+.track-fill{height:100%;background:linear-gradient(90deg,var(--green),var(--sky));transition:width .5s}
+footer{padding:14px 28px;border-top:1px solid var(--line);text-align:center;font-size:10px;color:var(--muted2);margin-top:20px}
+@media(max-width:768px){.metrics{grid-template-columns:repeat(3,1fr)}.cap-vals{gap:12px}}
+@media(max-width:500px){.metrics{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">ATLAS</a>
+  <div class="nav-r">
+    <span><span class="status-dot"></span><span id="navStatus">LOADING</span></span>
+    <a href="/" class="nav-link">← TSL SIGNALS</a>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="page-header">
+    <div class="page-title">TRADING DASHBOARD</div>
+    <div class="last-update">Last updated: <span id="lastUpdate">—</span></div>
+  </div>
+
+  <div class="kill-safe" id="killStatus">
+    <span style="color:var(--green)">● KILL SWITCH SAFE</span> &nbsp;·&nbsp; All systems operational
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-label">AGENT MODE</div>
+      <div class="metric-val sky" id="agentMode">—</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">TODAY P&L</div>
+      <div class="metric-val" id="dailyPnl">—</div>
+      <div class="metric-sub" id="dailyPnlPct">—</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">WEEKLY P&L</div>
+      <div class="metric-val" id="weeklyPnl">—</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">OPEN POSITIONS</div>
+      <div class="metric-val sky" id="openPositions">—</div>
+      <div class="metric-sub">max 3</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">WIN RATE</div>
+      <div class="metric-val" id="winRate">—</div>
+      <div class="metric-sub" id="winRateSub">all time</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">DAILY RISK CAP</div>
+      <div class="metric-val amber" id="riskCap">₹2,000</div>
+      <div class="metric-sub" id="riskUsed">0% used</div>
+    </div>
+  </div>
+
+  <div class="capital-bar">
+    <div class="cap-row">
+      <div class="cap-label">CAPITAL ALLOCATION</div>
+      <div class="cap-vals">
+        <div class="cap-item">
+          <span class="cap-item-label">ALLOCATED</span>
+          <span class="cap-item-val sky" id="capAllocated">—</span>
+        </div>
+        <div class="cap-item">
+          <span class="cap-item-label">DEPLOYED</span>
+          <span class="cap-item-val amber" id="capDeployed">—</span>
+        </div>
+        <div class="cap-item">
+          <span class="cap-item-label">AVAILABLE</span>
+          <span class="cap-item-val green" id="capAvailable">—</span>
+        </div>
+        <div class="cap-item">
+          <span class="cap-item-label">BROKERAGE</span>
+          <span class="cap-item-val" style="color:var(--muted)" id="capBrokerage">—</span>
+        </div>
+      </div>
+    </div>
+    <div class="track"><div class="track-fill" id="capTrack" style="width:0%"></div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">OPEN POSITIONS</div>
+      <div class="section-badge" id="openCount">0 OPEN</div>
+    </div>
+    <div id="openTable"><div class="empty">No open positions</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">TODAY'S TRADES</div>
+      <div class="section-badge" id="todayCount">0 TODAY</div>
+    </div>
+    <div id="todayTable"><div class="empty">No trades today</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">TRADE HISTORY</div>
+      <div class="section-badge" id="historyCount">—</div>
+    </div>
+    <div id="historyTable"><div class="empty">No trade history</div></div>
+  </div>
+</div>
+
+<footer>ATLAS · Agentic Trading &amp; Lifecycle Automation System · Educational use only · Not SEBI advice</footer>
+
+<script>
+var SB  = 'https://eibdlcanpudjgmkjxrga.supabase.co';
+var SK  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODUzNTE4MywiZXhwIjoyMDk0MTExMTgzfQ.zUTVliCU56zNRIvdC_joEl9JxuErFlLioahkQfwBJ6g';
+var HDR = {apikey:SK,Authorization:'Bearer '+SK};
+
+function fmt(n){return new Intl.NumberFormat('en-IN').format(Math.round(n));}
+function fmtPnl(n){
+  var s = (n>=0?'+':'')+fmt(n);
+  return '<span class="'+(n>=0?'win':'loss')+'">₹'+s+'</span>';
+}
+function fmtDate(d){
+  if(!d) return '—';
+  return new Date(d).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+}
+
+async function loadState(){
+  var r = await fetch(SB+'/rest/v1/atlas_state?limit=1&order=updated_at.desc',{headers:HDR});
+  var data = await r.json();
+  if(!data||!data.length) return;
+  var s = data[0];
+  var mode = s.mode||'NORMAL';
+  var cap  = parseFloat(s.allocated_capital||100000);
+  var dep  = parseFloat(s.deployed_capital||0);
+  var avail= parseFloat(s.available_capital||cap);
+  var brok = parseFloat(s.total_brokerage||0);
+  var dpnl = parseFloat(s.daily_pnl||0);
+  var wpnl = parseFloat(s.weekly_pnl||0);
+  var dailyCap = cap * 0.02;
+
+  document.getElementById('agentMode').textContent = mode;
+  document.getElementById('agentMode').className = 'metric-val mode-'+mode.toLowerCase().replace('_','-');
+  document.getElementById('dailyPnl').innerHTML = fmtPnl(dpnl);
+  document.getElementById('dailyPnlPct').textContent = (dpnl/cap*100).toFixed(2)+'%';
+  document.getElementById('weeklyPnl').innerHTML = fmtPnl(wpnl);
+  document.getElementById('capAllocated').textContent = '₹'+fmt(cap);
+  document.getElementById('capDeployed').textContent  = '₹'+fmt(dep);
+  document.getElementById('capAvailable').textContent = '₹'+fmt(avail);
+  document.getElementById('capBrokerage').textContent = '₹'+fmt(brok);
+  document.getElementById('capTrack').style.width = Math.min(dep/cap*100,100)+'%';
+  document.getElementById('riskCap').textContent = '₹'+fmt(dailyCap);
+  document.getElementById('riskUsed').textContent = Math.min(Math.abs(dpnl)/dailyCap*100,100).toFixed(0)+'% used';
+
+  // Kill switch status
+  var ks = document.getElementById('killStatus');
+  if(dpnl <= -dailyCap){
+    ks.className = 'kill-active';
+    ks.style.display='block';
+    ks.innerHTML = '🚨 <b>KILL SWITCH ACTIVE</b> &nbsp;·&nbsp; Daily loss cap breached · No further trades today';
+    document.getElementById('navStatus').textContent = 'KILL SWITCH';
+    document.getElementById('navStatus').style.color = 'var(--red)';
+  } else {
+    ks.className = 'kill-safe';
+    ks.style.display='block';
+    document.getElementById('navStatus').textContent = 'LIVE';
+  }
+}
+
+async function loadTrades(){
+  var r = await fetch(SB+'/rest/v1/atlas_trades?order=created_at.desc&limit=100',{headers:HDR});
+  var trades = await r.json();
+  if(!trades||!Array.isArray(trades)) return;
+
+  var today = new Date().toISOString().split('T')[0];
+  var open   = trades.filter(function(t){return t.status==='OPEN';});
+  var todayT = trades.filter(function(t){return t.entry_date===today && t.status==='CLOSED';});
+  var history= trades.filter(function(t){return t.status==='CLOSED';});
+
+  // Win rate
+  var wins   = history.filter(function(t){return parseFloat(t.pnl||0)>0;});
+  var wr     = history.length ? (wins.length/history.length*100).toFixed(0)+'%' : '—';
+  document.getElementById('winRate').textContent = wr;
+  document.getElementById('winRateSub').textContent = wins.length+'W / '+(history.length-wins.length)+'L';
+  document.getElementById('openPositions').textContent = open.length;
+  document.getElementById('openCount').textContent = open.length+' OPEN';
+  document.getElementById('todayCount').textContent = todayT.length+' TODAY';
+  document.getElementById('historyCount').textContent = history.length+' TOTAL';
+
+  // Open positions table
+  var openEl = document.getElementById('openTable');
+  if(open.length){
+    openEl.innerHTML = '<table class="table"><thead><tr>'+
+      '<th>SYMBOL</th><th>DIR</th><th>PRODUCT</th><th>ENTRY</th><th>SL</th><th>T1</th><th>T2</th>'+
+      '<th>QTY</th><th>CAPITAL</th><th>CONVICTION</th><th>SETUP</th><th>DATE</th>'+
+      '</tr></thead><tbody>'+
+      open.map(function(t){
+        var dir = t.direction||'';
+        var prod = dir==='SHORT'?'MIS':'CNC';
+        return '<tr>'+
+          '<td style="font-weight:600;color:var(--white)">'+t.symbol+'</td>'+
+          '<td><span class="badge badge-'+(dir==='LONG'?'long':'short')+'">'+dir+'</span></td>'+
+          '<td><span class="badge badge-'+(prod==='CNC'?'cnc':'mis')+'">'+prod+'</span></td>'+
+          '<td class="sky">₹'+fmt(t.entry_price||0)+'</td>'+
+          '<td class="red">₹'+fmt(t.sl||0)+'</td>'+
+          '<td class="green">₹'+fmt(t.target_1||0)+'</td>'+
+          '<td class="green">₹'+fmt(t.target_2||0)+'</td>'+
+          '<td>'+t.qty+'</td>'+
+          '<td>₹'+fmt(t.capital_deployed||0)+'</td>'+
+          '<td class="amber">'+parseFloat(t.conviction||0).toFixed(0)+'/100</td>'+
+          '<td style="color:var(--muted);font-size:11px">'+t.setup_name+'</td>'+
+          '<td style="color:var(--muted2)">'+fmtDate(t.entry_date)+'</td>'+
+        '</tr>';
+      }).join('')+'</tbody></table>';
+  } else {
+    openEl.innerHTML = '<div class="empty">No open positions</div>';
+  }
+
+  // Today table
+  var todayEl = document.getElementById('todayTable');
+  if(todayT.length){
+    todayEl.innerHTML = '<table class="table"><thead><tr>'+
+      '<th>SYMBOL</th><th>DIR</th><th>ENTRY</th><th>EXIT</th><th>P&L</th>'+
+      '<th>EXIT REASON</th><th>CONVICTION</th>'+
+      '</tr></thead><tbody>'+
+      todayT.map(function(t){
+        var pnl = parseFloat(t.pnl||0);
+        return '<tr>'+
+          '<td style="font-weight:600">'+t.symbol+'</td>'+
+          '<td><span class="badge badge-'+(t.direction==='LONG'?'long':'short')+'">'+t.direction+'</span></td>'+
+          '<td>₹'+fmt(t.entry_price||0)+'</td>'+
+          '<td>₹'+fmt(t.exit_price||0)+'</td>'+
+          '<td>'+fmtPnl(pnl)+'</td>'+
+          '<td style="color:var(--muted)">'+t.exit_reason+'</td>'+
+          '<td class="amber">'+parseFloat(t.conviction||0).toFixed(0)+'/100</td>'+
+        '</tr>';
+      }).join('')+'</tbody></table>';
+  } else {
+    todayEl.innerHTML = '<div class="empty">No closed trades today</div>';
+  }
+
+  // History table (last 20)
+  var histEl = document.getElementById('historyTable');
+  var recent = history.slice(0,20);
+  if(recent.length){
+    histEl.innerHTML = '<table class="table"><thead><tr>'+
+      '<th>DATE</th><th>SYMBOL</th><th>DIR</th><th>ENTRY</th><th>EXIT</th>'+
+      '<th>P&L</th><th>EXIT REASON</th><th>MODE</th>'+
+      '</tr></thead><tbody>'+
+      recent.map(function(t){
+        var pnl = parseFloat(t.pnl||0);
+        return '<tr>'+
+          '<td style="color:var(--muted2)">'+fmtDate(t.entry_date)+'</td>'+
+          '<td style="font-weight:600">'+t.symbol+'</td>'+
+          '<td><span class="badge badge-'+(t.direction==='LONG'?'long':'short')+'">'+t.direction+'</span></td>'+
+          '<td>₹'+fmt(t.entry_price||0)+'</td>'+
+          '<td>₹'+fmt(t.exit_price||0)+'</td>'+
+          '<td>'+fmtPnl(pnl)+'</td>'+
+          '<td style="color:var(--muted);font-size:11px">'+t.exit_reason+'</td>'+
+          '<td style="color:var(--muted2)">'+t.agent_mode+'</td>'+
+        '</tr>';
+      }).join('')+'</tbody></table>';
+  } else {
+    histEl.innerHTML = '<div class="empty">No trade history yet</div>';
+  }
+}
+
+async function refresh(){
+  await Promise.all([loadState(), loadTrades()]);
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('en-IN');
+}
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
