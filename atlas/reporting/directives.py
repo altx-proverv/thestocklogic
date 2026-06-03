@@ -155,15 +155,54 @@ def handle_directive(text: str) -> str:
             f"Time:    {now}"
         )
 
+    elif text in ["/login", "login"]:
+        from atlas.execution.zerodha_login import login as gen_login_url
+        from atlas.execution.zerodha_login import get_stored_token, verify_token
+        token = get_stored_token()
+        if token and verify_token(token):
+            return "✅ <b>Already logged in</b>
+Zerodha token is valid. No action needed."
+        url = gen_login_url()
+        if url:
+            return (
+                f"🔐 <b>ZERODHA LOGIN</b>
+"
+                f"Tap to login:
+{url}
+
+"
+                f"After redirect, paste the token=XXXXX value here."
+            )
+        return "❌ Could not generate login URL. Check API credentials."
+
+    elif text in ["/capital", "capital"]:
+        from atlas.risk.capital_manager import get_capital_status
+        s = get_capital_status()
+        return (
+            f"💰 <b>CAPITAL STATUS</b>
+"
+            f"Allocated:  INR {s['allocated']:,.0f}
+"
+            f"Deployed:   INR {s['deployed']:,.0f} ({s['utilisation_pct']:.1f}%)
+"
+            f"Available:  INR {s['available']:,.0f}
+"
+            f"Brokerage:  INR {s['brokerage_paid']:,.0f}
+"
+            f"Net capital: INR {s['net_capital']:,.0f}"
+        )
+
     elif text in ["/help", "help"]:
         return (
             "🤖 <b>ATLAS DIRECTIVES</b>\n\n"
             "/approve — proceed with suggested mode\n"
             "/pause — no trading tomorrow\n"
-            "/normal — NORMAL mode (3 trades, 78+ conv)\n"
-            "/cautious — CAUTIOUS mode (2 trades, 82+ conv)\n"
-            "/aggressive — AGGRESSIVE mode (3 trades, 75+ conv)\n"
-            "/defensive — DEFENSIVE mode (1 trade, 87+ conv)\n"
+            "/normal — NORMAL mode\n"
+            "/cautious — CAUTIOUS mode\n"
+            "/aggressive — AGGRESSIVE mode\n"
+            "/defensive — DEFENSIVE mode\n"
+            "/login — generate Zerodha login URL\n"
+            "/capital — show capital status\n"
             "/status — current agent status\n"
             "/help — show this menu"
         )
