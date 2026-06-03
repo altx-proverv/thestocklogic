@@ -207,12 +207,12 @@ def handle_directive(text: str) -> str:
             if symbol not in PENDING_TRADES:
                 return f"No pending signal for {symbol}."
             pending = PENDING_TRADES[symbol]
-            from datetime import datetime, timezone, timedelta
-            IST = timezone(timedelta(hours=5, minutes=30))
-            now = datetime.now(IST)
-            market_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
-            if now < market_close:
-                pending["expires_at"] = market_close
+            import datetime as _dt
+            _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+            _now = _dt.datetime.now(_IST)
+            _close = _now.replace(hour=15, minute=15, second=0, microsecond=0)
+            if _now < _close:
+                pending["expires_at"] = _close
             expires = pending["expires_at"].strftime("%H:%M IST")
             sizing  = pending["sizing"]
             entry   = sizing.get("entry_price", 0)
