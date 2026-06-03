@@ -570,8 +570,9 @@ async function checkAuth() {
   _user = res.data.session ? res.data.session.user : null;
   if (_user) {
     // Check if subscriber is approved
+    var token = res.data.session.access_token;
     var r = await fetch(SB+'/rest/v1/subscribers?email=eq.'+encodeURIComponent(_user.email)+'&status=eq.active&limit=1',
-      {headers:{apikey:AK,Authorization:'Bearer '+res.data.session.access_token}});
+      {headers:{apikey:AK,Authorization:'Bearer '+token}});
     var data = await r.json();
     if (!data || !data.length) {
       _user = null; // not approved yet
