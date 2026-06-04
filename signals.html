@@ -531,6 +531,7 @@ async function render(){
   var latestEOD=byDate[latestDate]||[];
   var today=todayStr();
   var todayLive=(liveAll||[]).filter(function(s){return s.signal_date===today;});
+  window._allSignals=(allEOD||[]).concat(liveAll||[]);
   document.getElementById('liveLabel').textContent='LIVE';
   var allToday=todayLive.concat(latestEOD);
   var lc=allToday.filter(function(s){return s.direction==='LONG';}).length;
@@ -551,8 +552,8 @@ async function render(){
     html+='<div class="sec-header"><span class="sec-badge intraday">BREAKING OUT NOW</span><span class="sec-date">Intraday &middot; '+new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})+'</span><span class="sec-count" style="color:var(--amber)">'+intradayList.length+' LIVE</span></div>';
     html+='<div class="cards-grid">'+intradayList.map(function(item){return intradayCard(item.sig,item.match);}).join('')+'</div>';
   }
-  // BTST section
-  var btstCards = allSignals.filter(function(s){return s.trade_type==='BTST';});
+  // BTST section — filter from combined signals pool
+  var btstCards = (window._allSignals||[]).filter(function(s){return s.trade_type==='BTST';});
   btstCards.sort(function(a,b){return (b.score||0)-(a.score||0);});
   if(btstCards.length){
     var btstTime = new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
@@ -615,7 +616,12 @@ function updateNavAuth() {
     .then(function(r){return r.json();})
     .then(function(d){
       if(d&&d.length){
-        atlasNav.outerHTML = "<a href='/atlas' style='font-size:10px;letter-spacing:1px;color:var(--sky);text-decoration:none;padding:4px 8px;border:1px solid rgba(77,184,255,0.3)'>ATLAS</a>";
+        atlasNav.innerHTML = 'ATLAS';
+        atlasNav.style.color = 'var(--sky)';
+        atlasNav.style.borderColor = 'rgba(77,184,255,0.3)';
+        atlasNav.style.cursor = 'pointer';
+        atlasNav.style.textDecoration = 'none';
+        atlasNav.onclick = function(){ window.location.href='/atlas'; };
       }
     });
   }
