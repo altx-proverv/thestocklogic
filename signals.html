@@ -196,7 +196,14 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </head>
 <body>
 <nav>
-  <div class="logo">THE STOCK LOGIC</div>
+  <a href="/" class="logo" style="text-decoration:none">THE STOCK LOGIC</a>
+  <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
+    <a href="/" style="font-size:10px;letter-spacing:1px;color:var(--muted);text-decoration:none;padding:4px 8px">HOME</a>
+    <a href="/dashboard" style="font-size:10px;letter-spacing:1px;color:var(--white);text-decoration:none;padding:4px 8px;border:1px solid var(--line);background:var(--s2)">EQUITY</a>
+    <a href="/atlas" style="font-size:10px;letter-spacing:1px;color:var(--sky);text-decoration:none;padding:4px 8px;border:1px solid rgba(77,184,255,0.3)">ATLAS</a>
+    <span style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">F&amp;O 🔒</span>
+    <span style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">MCX 🔒</span>
+  </div>
   <div class="nav-right">
     <div class="live-dot"><span class="dot"></span><span id="liveLabel">LOADING</span></div>
     <div id="navAuth"><button onclick="openAuthModal()" style="font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(77,184,255,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN IN</button></div>
