@@ -143,7 +143,7 @@ async function adminLogout() {
 }
 
 async function loadDashboard() {
-  var hdrs = {apikey: AK, Authorization: 'Bearer ' + _session.access_token};
+  var hdrs = {apikey: SK, Authorization: 'Bearer ' + SK};
   var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK};
 
   // Load waitlist
@@ -151,7 +151,7 @@ async function loadDashboard() {
   var waitlist = await wRes.json();
 
   // Load subscribers count
-  var sRes = await fetch(SB + '/rest/v1/subscribers?select=id', {headers: shdrs});
+  var sRes = await fetch(SB + '/rest/v1/subscribers?select=id', {headers: {apikey: SK, Authorization: 'Bearer ' + SK}});
   var subs = await sRes.json();
 
   var pending  = waitlist.filter(function(w){return w.status==='pending';});
