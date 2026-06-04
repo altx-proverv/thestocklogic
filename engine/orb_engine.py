@@ -319,9 +319,33 @@ def run_orb_scan(max_stocks: int = 500):
 
     if signals:
         push_orb_signals(signals)
+        # Notify ATLAS — top 3 by RVOL only
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).parent.parent))
+            from atlas.execution.trade_executor import queue_signal
+            # Sort by RVOL descending, take top 3
+            top_signals = sorted(signals, key=lambda s: float(s.get("rvol", 0)), reverse=True)[:3]
+            for sig in top_signals:
+                atlas_signal = {
+                    "symbol":     sig.get("symbol"),
+                    "direction":  sig.get("direction"),
+                    "conviction": min(float(sig.get("rvol", 1.5)) / 5.0 * 100, 95),
+                    "score":      min(float(sig.get("rvol", 1.5)) / 5.0 * 100, 95),
+                    "entry_ref":  float(sig.get("entry", 0)),
+                    "entry":      float(sig.get("entry", 0)),
+                    "sl":         float(sig.get("sl", 0)),
+                    "target_1":   float(sig.get("t1", 0)),
+                    "target_2":   float(sig.get("t1", 0)) * 1.02,
+                    "setup_name": f"ORB Breakout — {sig.get('rvol', 0):.1f}x RVOL",
+                    "session":    "opening",
+                }
+                result = queue_signal(atlas_signal)
+                log.info(f"ATLAS ORB queued: {sig['symbol']} RVOL:{sig.get('rvol')} — {result.get('status')}")
+        except Exception as e:
+            log.warning(f"ATLAS ORB notification failed: {e}")
     else:
         log.info("No ORB breakouts after regime filter.")
-        log.info("No ORB breakouts detected yet.")
 
     # Save ORB levels for all stocks
     with open(DATA_DIR / "orb_levels_today.json", "w") as f:
