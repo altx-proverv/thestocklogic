@@ -128,37 +128,15 @@ def run():
         f"⏰ You have 10 minutes."
     )
 
-    # Step 3 — Wait for token
-    request_token = poll_for_token(timeout_seconds=600)
-
-    if not request_token:
-        send(
-            "⏰ <b>LOGIN TIMEOUT</b>\n"
-            "No token received in 10 minutes.\n"
-            "ATLAS will not trade today.\n"
-            "Run manually: python3 atlas/execution/zerodha_morning.py"
-        )
-        log.error("Login timeout — no token received")
-        return False
-
-    # Step 4 — Complete login
-    access_token = complete_login(request_token)
-    if not access_token:
-        send("❌ <b>LOGIN FAILED</b>\nInvalid token. Please try again.")
-        return False
-
-    # Step 5 — Confirm ready
+    # Token is handled by bot_listener.py (running 24/7)
+    # Just remind user to paste token here
     send(
-        f"✅ <b>ATLAS ONLINE</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Zerodha connected · Ready to trade\n"
-        f"Time: {datetime.now(IST).strftime('%d %b %Y %H:%M IST')}\n"
-        f"Daily loss cap: ₹2,000\n"
-        f"Max positions: 3\n"
-        f"Min conviction: 75/100\n\n"
-        f"Market opens at 9:15 AM. ORB scan at 9:35 AM."
+        f"⏰ <b>PASTE TOKEN BEFORE 9:00 AM</b>\n"
+        f"Copy the token=XXXXX from the redirect URL\n"
+        f"and paste it directly in this chat.\n"
+        f"ATLAS starts trading automatically once logged in."
     )
-    log.info("Morning login complete — ATLAS ready")
+    log.info("Login URL sent — bot_listener will handle token response")
     return True
 
 
