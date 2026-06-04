@@ -343,8 +343,13 @@ function outcomeBadge(s){
 
 function eodCard(s){
   var isL=s.direction==='LONG';
+  var isBTST=s.trade_type==='BTST';
   var sp=Math.min(100,((s.score||0)/100)*100);
-  return '<div class="sc" onclick="openModal('+sj(s)+')"><div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-setup">'+(s.setup_name||'&mdash;')+'</div></div><div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div><div class="sc-levels"><div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val lv-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val lv-target">&#8377;'+fmt(s.target_1)+'</div></div><div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val lv-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="sc-body"><div class="sc-chips"><span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+s.direction+'</span><span class="chip chip-neu">'+(isL?'BTST':'INTRADAY')+'</span><span class="chip chip-neu">RR '+(s.rr_1||2)+':1</span></div><div class="sc-bar"><div class="sc-bar-fill" style="width:'+sp+'%"></div></div><div class="sc-meta" style="margin-top:8px"><span>Score <span>'+(s.score||'&mdash;')+'/100</span></span><span>Risk <span>&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></span></div></div><div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div></div>';
+  var typeChip=isBTST
+    ?'<span class="chip" style="background:rgba(0,214,143,0.15);color:#00d68f;border:1px solid rgba(0,214,143,0.5)">&#127919; POTENTIAL BAGGER</span>'
+    :(isL?'<span class="chip chip-neu">SWING / BTST</span>':'<span class="chip chip-neu">INTRADAY</span>');
+  var cardBorder=isBTST?'style="border:2px solid rgba(0,214,143,0.5)"':'';
+  return '<div class="sc" onclick="openModal('+sj(s)+')" '+cardBorder+'><div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-setup">'+(s.setup_name||'&mdash;')+'</div></div><div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div><div class="sc-levels"><div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val lv-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val lv-target">&#8377;'+fmt(s.target_1)+'</div></div><div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val lv-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="sc-body"><div class="sc-chips"><span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+s.direction+'</span>'+typeChip+'<span class="chip chip-neu">RR '+(s.rr_1||2)+':1</span></div><div class="sc-bar"><div class="sc-bar-fill" style="width:'+sp+'%"></div></div><div class="sc-meta" style="margin-top:8px"><span>Score <span>'+(s.score||'&mdash;')+'/100</span></span><span>Risk <span>&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></span></div></div><div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div></div>';
 }
 function archDayRow(ds,sigs){
   var d=new Date(ds).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
@@ -373,7 +378,7 @@ function openModal(s){
   var dep=s.qty&&entry?Math.round(s.qty*entry).toLocaleString('en-IN'):'&mdash;';
   var specRows=isORB
     ?'<div class="mrow"><span class="mrow-k">ORB range</span><span class="mrow-v">'+(s.orb_range_pct?parseFloat(s.orb_range_pct).toFixed(2)+'%':'&mdash;')+'</span></div><div class="mrow"><span class="mrow-k">Signal time</span><span class="mrow-v">'+(s.signal_time||'&mdash;')+'</span></div><div class="mrow"><span class="mrow-k">RVOL</span><span class="mrow-v" style="color:var(--amber)">'+rvol+'x</span></div><div class="mrow"><span class="mrow-k">Trade type</span><span class="mrow-v">INTRADAY &mdash; Square off by 3:20 PM</span></div>'
-    :'<div class="mrow"><span class="mrow-k">Risk / Reward</span><span class="mrow-v">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div><div class="mrow"><span class="mrow-k">Quantity</span><span class="mrow-v">'+(s.qty||'&mdash;')+' shares</span></div><div class="mrow"><span class="mrow-k">Capital deployed</span><span class="mrow-v">&#8377;'+dep+'</span></div><div class="mrow"><span class="mrow-k">Max risk</span><span class="mrow-v" style="color:var(--red)">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></div><div class="mrow"><span class="mrow-k">Trade type</span><span class="mrow-v">'+(isL?'BTST &mdash; Hold 1&ndash;3 days':'INTRADAY SHORT &mdash; Square off by 3:20 PM')+'</span></div>';
+    :'<div class="mrow"><span class="mrow-k">Risk / Reward</span><span class="mrow-v">'+(s.rr_1||2)+':1 &#8594; '+(s.rr_2||3)+':1</span></div><div class="mrow"><span class="mrow-k">Quantity</span><span class="mrow-v">'+(s.qty||'&mdash;')+' shares</span></div><div class="mrow"><span class="mrow-k">Capital deployed</span><span class="mrow-v">&#8377;'+dep+'</span></div><div class="mrow"><span class="mrow-k">Max risk</span><span class="mrow-v" style="color:var(--red)">&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></div><div class="mrow"><span class="mrow-k">Trade type</span><span class="mrow-v">'+(s.trade_type==='BTST'?'&#127919; POTENTIAL BAGGER &mdash; Exit tomorrow open':isL?'SWING / BTST &mdash; Hold 1&ndash;3 days':'INTRADAY &mdash; Square off by 3:20 PM')+'</span></div>';
   document.getElementById('modalInner').innerHTML=
     '<div class="modal-top"><div><div class="modal-sym">'+s.symbol+'</div><div class="modal-meta"><span style="color:'+(isL?'var(--green)':'var(--red)')+'">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</span> &middot; '+(isORB?'<span style="color:var(--amber)">INTRADAY</span>':'<span class="'+gc(s.grade||'B')+'" style="padding:1px 6px;border:1px solid currentColor;font-size:9px">'+(s.grade||'B')+'</span>')+' &middot; '+(isORB?rvol+'x RVOL':(s.score||'&mdash;')+'/100')+' &middot; '+ds+'</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div>'
     +'<div class="modal-levels"><div class="ml-item"><div class="ml-label">ENTRY</div><div class="ml-val ml-entry">&#8377;'+fmt(entry)+'</div></div><div class="ml-item"><div class="ml-label">TARGET 1</div><div class="ml-val ml-t1">&#8377;'+fmt(s.target_1)+'</div></div><div class="ml-item"><div class="ml-label">STOP LOSS</div><div class="ml-val ml-sl">&#8377;'+fmt(s.sl)+'</div></div></div>'
@@ -552,14 +557,23 @@ async function render(){
     html+='<div class="sec-header"><span class="sec-badge intraday">BREAKING OUT NOW</span><span class="sec-date">Intraday &middot; '+new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})+'</span><span class="sec-count" style="color:var(--amber)">'+intradayList.length+' LIVE</span></div>';
     html+='<div class="cards-grid">'+intradayList.map(function(item){return intradayCard(item.sig,item.match);}).join('')+'</div>';
   }
-  // BTST section — filter from combined signals pool
+  // Merge BTST signals into Today's Watchlist
   var btstCards = (window._allSignals||[]).filter(function(s){return s.trade_type==='BTST';});
-  btstCards.sort(function(a,b){return (b.score||0)-(a.score||0);});
-  if(btstCards.length){
-    var btstTime = new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
-    html+='<div class="sec-header"><span class="sec-badge" style="background:rgba(255,179,71,0.15);color:#ffb347;border:1px solid rgba(255,179,71,0.4)">BTST OPPORTUNITIES</span><span class="sec-date">Hold overnight &middot; Exit tomorrow open</span><span class="sec-count" style="color:#ffb347">'+btstCards.length+' SET UP</span></div>';
-    html+='<div class="cards-grid">'+btstCards.map(function(s){return eodCard(s);}).join('')+'</div>';
-  }
+  var btstSymbols = {};
+  btstCards.forEach(function(s){ btstSymbols[s.symbol]=s; });
+  // Mark EOD cards that have BTST confirmation
+  eodCards = eodCards.map(function(s){
+    if(btstSymbols[s.symbol]){ s.trade_type='BTST'; }
+    return s;
+  });
+  // Add BTST-only stocks not in EOD list
+  btstCards.forEach(function(s){
+    if(!eodCards.find(function(e){return e.symbol===s.symbol;})){
+      eodCards.push(s);
+    }
+  });
+  // Sort by score descending — BTST cards naturally bubble up
+  eodCards.sort(function(a,b){return (b.score||0)-(a.score||0);});
 
   var top10=eodCards.slice(0,10);var rest=eodCards.slice(10);
   var _nd=new Date();_nd.setDate(_nd.getDate()+1);
