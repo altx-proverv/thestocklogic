@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    },
+    {
       "source": "/waitlist",
       "destination": "/waitlist.html"
     },
@@ -11,6 +15,10 @@
     {
       "source": "/atlas",
       "destination": "/atlas.html"
+    },
+    {
+      "source": "/",
+      "destination": "/landing.html"
     }
   ]
 }

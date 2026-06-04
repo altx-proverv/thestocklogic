@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Stock Logic — Institutional-Grade NSE Signals</title>
+<meta name="description" content="SMC-based trade signals for NSE stocks. Entry, SL and targets defined. Daily watchlist for serious traders.">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#06080a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--line:rgba(255,255,255,0.06);--sky:#4db8ff;--green:#00d68f;--red:#ff4d6d;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.12);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--white);font-family:var(--font);min-height:100vh;overflow-x:hidden}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.006) 3px,rgba(77,184,255,0.006) 4px);pointer-events:none;z-index:9999}
+
+nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(6,8,10,0.95);backdrop-filter:blur(16px)}
+.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;text-decoration:none}
+.nav-r{display:flex;align-items:center;gap:10px}
+.btn-signin{font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(77,184,255,0.3);padding:5px 14px;cursor:pointer;font-family:var(--font);transition:all .15s}
+.btn-signin:hover{background:rgba(77,184,255,0.1)}
+.btn-waitlist{font-size:10px;letter-spacing:2px;color:var(--bg);background:var(--sky);border:1px solid var(--sky);padding:5px 14px;cursor:pointer;font-family:var(--font);text-decoration:none;transition:all .15s}
+.btn-waitlist:hover{opacity:.85}
+
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:80px 20px 60px;position:relative}
+.hero-label{font-size:10px;letter-spacing:4px;color:var(--sky);margin-bottom:16px;display:flex;align-items:center;gap:10px}
+.hero-label::before,.hero-label::after{content:'';flex:1;max-width:60px;height:1px;background:linear-gradient(90deg,transparent,var(--sky))}
+.hero-label::after{background:linear-gradient(90deg,var(--sky),transparent)}
+.hero h1{font-family:var(--display);font-size:clamp(52px,10vw,96px);letter-spacing:3px;line-height:.95;margin-bottom:12px}
+.hero h1 em{font-family:var(--serif);font-style:italic;color:var(--sky);display:block}
+.hero-sub{font-size:14px;color:var(--muted);max-width:480px;line-height:1.8;margin-bottom:36px}
+.hero-btns{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.btn-primary{font-size:11px;letter-spacing:3px;color:var(--bg);background:linear-gradient(120deg,var(--sky),var(--green));border:none;padding:14px 32px;cursor:pointer;font-family:var(--font);font-weight:600;text-decoration:none;transition:opacity .15s}
+.btn-primary:hover{opacity:.85}
+.btn-secondary{font-size:11px;letter-spacing:3px;color:var(--white);background:transparent;border:1px solid rgba(255,255,255,0.2);padding:14px 32px;cursor:pointer;font-family:var(--font);text-decoration:none;transition:all .15s}
+.btn-secondary:hover{border-color:rgba(255,255,255,.4)}
+.hero-disc{font-size:10px;color:var(--muted2);margin-top:20px}
+
+.ticker{overflow:hidden;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin:0;background:var(--s1)}
+.ticker-inner{display:flex;gap:40px;animation:scroll 30s linear infinite;white-space:nowrap;font-size:11px;color:var(--muted)}
+.ticker-inner span{color:var(--green)}
+@keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+
+.features{padding:80px 20px;max-width:1000px;margin:0 auto}
+.features-label{font-size:10px;letter-spacing:4px;color:var(--muted);text-align:center;margin-bottom:40px}
+.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+.feat{background:var(--bg);padding:28px 24px}
+.feat-num{font-family:var(--display);font-size:36px;color:var(--sky);opacity:.3;margin-bottom:8px}
+.feat-title{font-size:13px;font-weight:600;margin-bottom:8px;letter-spacing:1px}
+.feat-desc{font-size:12px;color:var(--muted);line-height:1.7}
+
+.how{padding:60px 20px;max-width:800px;margin:0 auto;text-align:center}
+.how h2{font-family:var(--display);font-size:42px;letter-spacing:2px;margin-bottom:40px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative}
+.steps::before{content:'';position:absolute;top:20px;left:12.5%;right:12.5%;height:1px;background:linear-gradient(90deg,var(--sky),var(--green));opacity:.3}
+.step{padding:0 12px;text-align:center}
+.step-dot{width:40px;height:40px;border-radius:50%;background:var(--s1);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:11px;color:var(--sky);font-weight:600;position:relative;z-index:1}
+.step-title{font-size:11px;letter-spacing:1px;margin-bottom:4px}
+.step-desc{font-size:10px;color:var(--muted);line-height:1.5}
+
+.signal-preview{padding:60px 20px;max-width:900px;margin:0 auto}
+.preview-label{font-size:10px;letter-spacing:4px;color:var(--muted);text-align:center;margin-bottom:28px}
+.preview-card{background:var(--s1);border:1px solid var(--line);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:12px}
+.pc-sym{font-size:18px;font-weight:700;letter-spacing:1px}
+.pc-setup{font-size:10px;color:var(--muted);margin-top:2px}
+.pc-badges{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.badge{font-size:9px;padding:2px 7px;border-radius:2px}
+.badge-long{background:rgba(0,214,143,0.1);color:var(--green);border:1px solid rgba(0,214,143,0.3)}
+.badge-short{background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)}
+.badge-grade{background:rgba(77,184,255,0.1);color:var(--sky);border:1px solid rgba(77,184,255,0.3)}
+.pc-levels{display:flex;flex-direction:column;gap:6px;justify-content:center}
+.pc-row{display:flex;justify-content:space-between;font-size:11px}
+.pc-key{color:var(--muted)}
+.pc-val{font-weight:600}
+.pc-val.entry{color:var(--sky)}
+.pc-val.target{color:var(--green)}
+.pc-val.sl{color:var(--red)}
+.pc-meta{display:flex;flex-direction:column;gap:6px;justify-content:center;align-items:flex-end}
+.pc-score{font-family:var(--display);font-size:32px;color:var(--green)}
+.pc-score-label{font-size:9px;color:var(--muted);letter-spacing:1px}
+.preview-blur{filter:blur(6px);position:relative}
+.preview-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px}
+.preview-overlay-text{font-size:11px;letter-spacing:2px;color:var(--muted)}
+
+.cta{padding:80px 20px;text-align:center;border-top:1px solid var(--line)}
+.cta h2{font-family:var(--display);font-size:48px;letter-spacing:2px;margin-bottom:12px}
+.cta p{font-size:13px;color:var(--muted);margin-bottom:32px}
+
+footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--muted2);flex-wrap:wrap;gap:8px}
+.footer-links{display:flex;gap:16px}
+.footer-links a{color:var(--muted2);text-decoration:none}
+.footer-links a:hover{color:var(--muted)}
+
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:flex-end;justify-content:center;z-index:200}
+.modal-bg.open{display:flex}
+@media(min-width:600px){.modal-bg{align-items:center}}
+.modal{background:var(--s1);border:1px solid rgba(77,184,255,.2);padding:28px;width:100%;max-width:380px;border-radius:0}
+@media(min-width:600px){.modal{border-radius:4px}}
+.modal h3{font-family:var(--display);font-size:24px;letter-spacing:2px;margin-bottom:4px}
+.modal p{font-size:11px;color:var(--muted);margin-bottom:20px}
+.modal input{width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none;margin-bottom:10px}
+.modal input:focus{border-color:rgba(77,184,255,.4)}
+.modal-btn{width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:11px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer}
+.modal-close{position:absolute;top:12px;right:16px;background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;font-family:var(--font)}
+.modal-err{color:var(--red);font-size:11px;text-align:center;margin-top:6px;display:none}
+.modal-wrap{position:relative}
+
+@media(max-width:700px){.feat-grid{grid-template-columns:1fr}.steps{grid-template-columns:repeat(2,1fr)}.steps::before{display:none}.preview-card{grid-template-columns:1fr}.hero h1{font-size:56px}}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="/" class="logo">THE STOCK LOGIC</a>
+  <div class="nav-r">
+    <button class="btn-signin" onclick="document.getElementById('signinModal').classList.add('open')">SIGN IN</button>
+    <a href="/waitlist" class="btn-waitlist">JOIN WAITLIST</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero-label">PRIVATE BETA</div>
+  <h1>TRADE <em>Intelligence</em> DAILY</h1>
+  <p class="hero-sub">Institutional-grade NSE signals built on Smart Money Concepts. Entry, stop-loss and targets defined. You decide — you trade.</p>
+  <div class="hero-btns">
+    <a href="/waitlist" class="btn-primary">REQUEST ACCESS ›</a>
+    <button class="btn-secondary" onclick="document.getElementById('signinModal').classList.add('open')">SIGN IN</button>
+  </div>
+  <div class="hero-disc">Educational content only · Not SEBI-registered research · Not buy/sell advice</div>
+</section>
+
+<div class="ticker">
+  <div class="ticker-inner">
+    <span>NIFTY 500</span> · SMC-BASED SIGNALS · <span>ORDER BLOCKS</span> · ENTRY + SL + TARGET · <span>REGIME AWARE</span> · INSTITUTIONAL FLOW · <span>ORB BREAKOUTS</span> · BTST SETUPS · <span>DAILY WATCHLIST</span> · CONVICTION SCORING · <span>NIFTY 500</span> · SMC-BASED SIGNALS · <span>ORDER BLOCKS</span> · ENTRY + SL + TARGET · <span>REGIME AWARE</span> · INSTITUTIONAL FLOW · <span>ORB BREAKOUTS</span> · BTST SETUPS · <span>DAILY WATCHLIST</span> · CONVICTION SCORING ·
+  </div>
+</div>
+
+<section class="features">
+  <div class="features-label">WHAT YOU GET</div>
+  <div class="feat-grid">
+    <div class="feat">
+      <div class="feat-num">01</div>
+      <div class="feat-title">500 NSE STOCKS SCANNED DAILY</div>
+      <div class="feat-desc">Full Nifty 500 universe scanned every evening using NSE Bhavcopy data. No manual screening required.</div>
+    </div>
+    <div class="feat">
+      <div class="feat-num">02</div>
+      <div class="feat-title">SMC-BASED ENTRY ZONES</div>
+      <div class="feat-desc">Entries defined by unmitigated order blocks — not arbitrary price levels. Structural stop-loss placement.</div>
+    </div>
+    <div class="feat">
+      <div class="feat-num">03</div>
+      <div class="feat-title">REGIME-AWARE SIGNALS</div>
+      <div class="feat-desc">Bullish regime shows long setups. Bearish shows short setups. Mixed shows both with sector context.</div>
+    </div>
+    <div class="feat">
+      <div class="feat-num">04</div>
+      <div class="feat-title">LIVE ORB BREAKOUTS</div>
+      <div class="feat-desc">Opening Range Breakout scan at 9:35 AM. Top breakouts by relative volume pushed in real time.</div>
+    </div>
+    <div class="feat">
+      <div class="feat-num">05</div>
+      <div class="feat-title">BTST OPPORTUNITIES</div>
+      <div class="feat-desc">End-of-day scan identifies stocks under accumulation likely to continue momentum next session.</div>
+    </div>
+    <div class="feat">
+      <div class="feat-num">06</div>
+      <div class="feat-title">TRADE JOURNAL</div>
+      <div class="feat-desc">Log every decision — taken, skipped, missed, watching. Track your personal win rate over time.</div>
+    </div>
+  </div>
+</section>
+
+<section class="how">
+  <h2>HOW IT WORKS</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-dot">01</div>
+      <div class="step-title">EVENING SCAN</div>
+      <div class="step-desc">500 stocks scanned after market close. Best setups selected.</div>
+    </div>
+    <div class="step">
+      <div class="step-dot">02</div>
+      <div class="step-title">MORNING OPEN</div>
+      <div class="step-desc">Signals published at market open with entry, SL and targets.</div>
+    </div>
+    <div class="step">
+      <div class="step-dot">03</div>
+      <div class="step-title">ORB BREAKOUTS</div>
+      <div class="step-desc">Live breakouts pushed at 9:35 AM with RVOL confirmation.</div>
+    </div>
+    <div class="step">
+      <div class="step-dot">04</div>
+      <div class="step-title">YOU DECIDE</div>
+      <div class="step-desc">Review signals, log your trades, track your performance.</div>
+    </div>
+  </div>
+</section>
+
+<section class="signal-preview">
+  <div class="preview-label">SAMPLE SIGNAL</div>
+  <div class="preview-card">
+    <div>
+      <div class="pc-sym">TECHM</div>
+      <div class="pc-setup">CHOCH Reversal — Trend Change</div>
+      <div class="pc-badges">
+        <span class="badge badge-long">↑ LONG</span>
+        <span class="badge badge-grade">A · 81/100</span>
+      </div>
+    </div>
+    <div class="pc-levels">
+      <div class="pc-row"><span class="pc-key">ENTRY</span><span class="pc-val entry">₹1,543</span></div>
+      <div class="pc-row"><span class="pc-key">TARGET 1</span><span class="pc-val target">₹1,605</span></div>
+      <div class="pc-row"><span class="pc-key">TARGET 2</span><span class="pc-val target">₹1,636</span></div>
+      <div class="pc-row"><span class="pc-key">STOP LOSS</span><span class="pc-val sl">₹1,512</span></div>
+    </div>
+    <div class="pc-meta">
+      <div class="pc-score">81</div>
+      <div class="pc-score-label">CONVICTION</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">RR 2.0:1</div>
+    </div>
+  </div>
+  <div style="position:relative">
+    <div class="preview-card preview-blur">
+      <div><div class="pc-sym">NHPC</div><div class="pc-setup">Supply OB Rejection</div></div>
+      <div class="pc-levels">
+        <div class="pc-row"><span class="pc-key">ENTRY</span><span class="pc-val entry">₹75.1</span></div>
+        <div class="pc-row"><span class="pc-key">TARGET 1</span><span class="pc-val target">₹72.8</span></div>
+        <div class="pc-row"><span class="pc-key">STOP LOSS</span><span class="pc-val sl">₹76.6</span></div>
+      </div>
+      <div class="pc-meta"><div class="pc-score">79</div></div>
+    </div>
+    <div class="preview-overlay">
+      <div class="preview-overlay-text">REQUEST ACCESS TO SEE ALL SIGNALS</div>
+      <a href="/waitlist" class="btn-primary" style="font-size:10px;padding:10px 24px">JOIN WAITLIST ›</a>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <h2>READY TO TRADE SMARTER?</h2>
+  <p>Join the waitlist. Get early access. Trade with conviction.</p>
+  <a href="/waitlist" class="btn-primary">REQUEST ACCESS ›</a>
+</section>
+
+<footer>
+  <div>© 2026 The Stock Logic · Educational use only · Not SEBI-registered</div>
+  <div class="footer-links">
+    <a href="/waitlist">Waitlist</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+</footer>
+
+<div class="modal-bg" id="signinModal">
+  <div class="modal-wrap">
+    <div class="modal">
+      <button class="modal-close" onclick="document.getElementById('signinModal').classList.remove('open')">×</button>
+      <h3>SIGN IN</h3>
+      <p>Approved subscribers only</p>
+      <input id="siEmail" type="email" placeholder="your@email.com">
+      <input id="siPass" type="password" placeholder="Password">
+      <button class="modal-btn" onclick="doSignIn()">SIGN IN ›</button>
+      <div class="modal-err" id="siErr">Invalid email or password</div>
+      <div style="text-align:center;margin-top:12px;font-size:10px;color:var(--muted)">
+        Not approved? <a href="/waitlist" style="color:var(--sky);text-decoration:none">Join the waitlist ›</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+var SB = 'https://eibdlcanpudjgmkjxrga.supabase.co';
+var AK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
+var _supa = null;
+
+window.addEventListener('load', function(){
+  _supa = window.supabase.createClient(SB, AK);
+  // Check if already logged in — redirect to dashboard
+  _supa.auth.getSession().then(function(res){
+    if(res.data.session){
+      window.location.href = '/dashboard';
+    }
+  });
+});
+
+async function doSignIn(){
+  var email = document.getElementById('siEmail').value.trim();
+  var pass  = document.getElementById('siPass').value;
+  var err   = document.getElementById('siErr');
+  err.style.display = 'none';
+  if(!email||!pass){err.textContent='Please enter email and password.';err.style.display='block';return;}
+  var res = await _supa.auth.signInWithPassword({email:email, password:pass});
+  if(res.error){err.textContent='Invalid email or password.';err.style.display='block';return;}
+  // Check if approved subscriber
+  var r = await fetch(SB+'/rest/v1/subscribers?email=eq.'+encodeURIComponent(email)+'&status=eq.active&limit=1',
+    {headers:{apikey:AK,Authorization:'Bearer '+AK}});
+  var data = await r.json();
+  if(!data||!data.length){
+    await _supa.auth.signOut();
+    err.textContent='Your account is pending approval. Check back soon.';
+    err.style.display='block';
+    return;
+  }
+  window.location.href = '/dashboard';
+}
+
+document.getElementById('signinModal').addEventListener('click', function(e){
+  if(e.target===document.getElementById('signinModal'))
+    document.getElementById('signinModal').classList.remove('open');
+});
+</script>
+</body>
+</html>
