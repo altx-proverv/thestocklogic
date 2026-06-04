@@ -256,7 +256,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
       <button onclick="signIn()" style="width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:10px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer;margin-bottom:8px">SIGN IN &#8250;</button>
       <div id="authMsg" style="font-size:11px;text-align:center;color:var(--red);display:none;margin-top:8px"></div>
       <div style="text-align:center;margin-top:12px;font-size:10px;color:var(--muted)">
-        Not approved yet? <a href="/waitlist" style="color:var(--sky);text-decoration:none">Join the waitlist &#8250;</a>
+        <a href="#" onclick="resetPassword()" style="color:var(--muted);text-decoration:none">Forgot password?</a> &nbsp;·&nbsp; <a href="/waitlist" style="color:var(--sky);text-decoration:none">Join the waitlist &#8250;</a>
       </div>
     </div>
   </div>
@@ -642,10 +642,23 @@ async function signIn() {
   }
 }
 
+async function resetPassword() {
+  var email = document.getElementById("authEmail").value.trim();
+  if (!email) { alert("Enter your email address first."); return; }
+  var res = await _supa.auth.resetPasswordForEmail(email, {
+    redirectTo: "https://thestocklogic.com/dashboard"
+  });
+  if (res.error) {
+    alert("Error: " + res.error.message);
+  } else {
+    alert("Password reset email sent to " + email);
+  }
+}
+
 async function signOut() {
   await _supa.auth.signOut();
   _user = null;
-  location.reload();
+  window.location.href = "/";
 }
 
 function openAuthModal(){ document.getElementById('authModal').classList.add('open'); }
