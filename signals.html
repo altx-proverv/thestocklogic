@@ -551,8 +551,19 @@ async function render(){
     html+='<div class="sec-header"><span class="sec-badge intraday">BREAKING OUT NOW</span><span class="sec-date">Intraday &middot; '+new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})+'</span><span class="sec-count" style="color:var(--amber)">'+intradayList.length+' LIVE</span></div>';
     html+='<div class="cards-grid">'+intradayList.map(function(item){return intradayCard(item.sig,item.match);}).join('')+'</div>';
   }
+  // BTST section
+  var btstCards = allSignals.filter(function(s){return s.trade_type==='BTST';});
+  btstCards.sort(function(a,b){return (b.score||0)-(a.score||0);});
+  if(btstCards.length){
+    var btstTime = new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+    html+='<div class="sec-header"><span class="sec-badge" style="background:rgba(255,179,71,0.15);color:#ffb347;border:1px solid rgba(255,179,71,0.4)">BTST OPPORTUNITIES</span><span class="sec-date">Hold overnight &middot; Exit tomorrow open</span><span class="sec-count" style="color:#ffb347">'+btstCards.length+' SET UP</span></div>';
+    html+='<div class="cards-grid">'+btstCards.map(function(s){return makeCard(s);}).join('')+'</div>';
+  }
+
   var top10=eodCards.slice(0,10);var rest=eodCards.slice(10);
-  html+='<div class="sec-header"><span class="sec-badge today">TODAY</span><span class="sec-date">'+new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'})+'</span><span class="sec-count">'+eodCards.length+' SIGNAL'+(eodCards.length!==1?'S':'')+'</span></div>';
+  var _nd=new Date();_nd.setDate(_nd.getDate()+1);
+  var _nds=_nd.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+  html+='<div class="sec-header"><span class="sec-badge today">TODAY\'S WATCHLIST</span><span class="sec-date">For '+_nds+'</span><span class="sec-count">'+eodCards.length+' SIGNAL'+(eodCards.length!==1?'S':'')+'</span></div>';
   if(!eodCards.length){html+='<div class="stay-cash"><h3>STAY CASH</h3><p>No qualifying EOD setups today</p></div>';}
   else{
     html+='<div class="cards-grid">'+top10.map(eodCard).join('')+'</div>';
