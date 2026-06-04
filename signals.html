@@ -200,7 +200,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
     <a href="/" style="font-size:10px;letter-spacing:1px;color:var(--muted);text-decoration:none;padding:4px 8px">HOME</a>
     <a href="/dashboard" style="font-size:10px;letter-spacing:1px;color:var(--white);text-decoration:none;padding:4px 8px;border:1px solid var(--line);background:var(--s2)">EQUITY</a>
-    <a href="/atlas" style="font-size:10px;letter-spacing:1px;color:var(--sky);text-decoration:none;padding:4px 8px;border:1px solid rgba(77,184,255,0.3)">ATLAS</a>
+    <span id="atlasNav" style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">ATLAS 🔒</span>
     <span style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">F&amp;O 🔒</span>
     <span style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">MCX 🔒</span>
   </div>
@@ -588,6 +588,18 @@ async function checkAuth() {
 }
 
 function updateNavAuth() {
+  // Unlock ATLAS only for admin plan
+  var atlasNav = document.getElementById("atlasNav");
+  if (atlasNav && _user) {
+    fetch(SB+"/rest/v1/subscribers?email=eq."+encodeURIComponent(_user.email)+"&plan=eq.admin&limit=1",
+      {headers:{apikey:AK,Authorization:"Bearer "+AK}})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d&&d.length){
+        atlasNav.outerHTML = "<a href='/atlas' style='font-size:10px;letter-spacing:1px;color:var(--sky);text-decoration:none;padding:4px 8px;border:1px solid rgba(77,184,255,0.3)'>ATLAS</a>";
+      }
+    });
+  }
   var navAuth = document.getElementById('navAuth');
   if (!navAuth) return;
   if (_user) {
