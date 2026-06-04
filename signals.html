@@ -611,8 +611,15 @@ function updateNavAuth() {
   var navAuth = document.getElementById('navAuth');
   if (!navAuth) return;
   if (_user) {
-    navAuth.innerHTML = '<span style="font-size:10px;color:var(--muted);letter-spacing:1px;margin-right:8px">'+_user.email+'</span>'+
-      '<button onclick="signOut()" style="font-size:10px;letter-spacing:2px;color:var(--red);background:none;border:1px solid rgba(255,77,109,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN OUT</button>';
+    var name = _user.email.split('@')[0].toUpperCase();
+    navAuth.innerHTML = '<div class="user-dropdown" id="userDropdown">'+
+      '<button class="user-dropdown-btn" onclick="toggleDropdown()">'+name+' ▾</button>'+
+      '<div class="user-dropdown-menu" id="userDropdownMenu">'+
+        '<span style="font-size:10px;color:var(--muted2);padding:8px 14px;display:block;border-bottom:1px solid var(--line2)">'+_user.email+'</span>'+
+        '<button onclick="showResetPassword()">CHANGE PASSWORD</button>'+
+        '<button class="danger" onclick="signOut()">SIGN OUT</button>'+
+      '</div>'+
+    '</div>';
   } else {
     navAuth.innerHTML = '<button onclick="openAuthModal()" style="font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(77,184,255,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN IN</button>';
   }
@@ -682,6 +689,27 @@ async function resetPassword() {
   }
 }
 
+function toggleDropdown() {
+  var menu = document.getElementById("userDropdownMenu");
+  if (menu) menu.classList.toggle("open");
+}
+document.addEventListener("click", function(e) {
+  var dd = document.getElementById("userDropdown");
+  if (dd && !dd.contains(e.target)) {
+    var menu = document.getElementById("userDropdownMenu");
+    if (menu) menu.classList.remove("open");
+  }
+});
+function showResetPassword() {
+  if (!_user) return;
+  if (!confirm("Send password reset email to " + _user.email + "?")) return;
+  _supa.auth.resetPasswordForEmail(_user.email, {
+    redirectTo: "https://thestocklogic.com/dashboard"
+  }).then(function(res) {
+    if (res.error) alert("Error: " + res.error.message);
+    else alert("Reset email sent. Check your inbox.");
+  });
+}
 async function signOut() {
   await _supa.auth.signOut();
   _user = null;
