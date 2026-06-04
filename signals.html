@@ -140,6 +140,15 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .user-email{color:var(--sky)}
 .logout-btn{cursor:pointer;color:var(--muted);background:none;border:none;font-family:var(--font);font-size:10px;letter-spacing:1px}
 .logout-btn:hover{color:var(--red)}
+.user-dropdown{position:relative;display:inline-block}
+.user-dropdown-btn{font-size:10px;color:var(--muted);background:none;border:1px solid var(--line);padding:4px 10px;cursor:pointer;font-family:var(--font);letter-spacing:1px;display:flex;align-items:center;gap:6px}
+.user-dropdown-btn:hover{border-color:rgba(255,255,255,.2);color:var(--white)}
+.user-dropdown-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--s1);border:1px solid var(--line);min-width:160px;z-index:200}
+.user-dropdown-menu.open{display:block}
+.user-dropdown-menu a,.user-dropdown-menu button{display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;letter-spacing:1px;color:var(--muted);background:none;border:none;cursor:pointer;font-family:var(--font);text-decoration:none;border-bottom:1px solid var(--line2)}
+.user-dropdown-menu a:hover,.user-dropdown-menu button:hover{color:var(--white);background:var(--s2)}
+.user-dropdown-menu button.danger{color:var(--red)}
+.user-dropdown-menu button.danger:hover{background:rgba(255,77,109,0.08)}
 .spinner{width:14px;height:14px;border:1.5px solid var(--line);border-top-color:var(--sky);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .how-section{border-top:1px solid var(--line);padding:28px 0 40px;margin-top:28px}
