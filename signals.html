@@ -531,7 +531,7 @@ async function render(){
   var latestEOD=byDate[latestDate]||[];
   var today=todayStr();
   var todayLive=(liveAll||[]).filter(function(s){return s.signal_date===today;});
-  window._allSignals=(allEOD||[]).concat(liveAll||[]);
+  window._allSignals=(eodAll||[]).concat(liveAll||[]);
   document.getElementById('liveLabel').textContent='LIVE';
   var allToday=todayLive.concat(latestEOD);
   var lc=allToday.filter(function(s){return s.direction==='LONG';}).length;
@@ -558,7 +558,7 @@ async function render(){
   if(btstCards.length){
     var btstTime = new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
     html+='<div class="sec-header"><span class="sec-badge" style="background:rgba(255,179,71,0.15);color:#ffb347;border:1px solid rgba(255,179,71,0.4)">BTST OPPORTUNITIES</span><span class="sec-date">Hold overnight &middot; Exit tomorrow open</span><span class="sec-count" style="color:#ffb347">'+btstCards.length+' SET UP</span></div>';
-    html+='<div class="cards-grid">'+btstCards.map(function(s){return makeCard(s);}).join('')+'</div>';
+    html+='<div class="cards-grid">'+btstCards.map(function(s){return eodCard(s);}).join('')+'</div>';
   }
 
   var top10=eodCards.slice(0,10);var rest=eodCards.slice(10);
