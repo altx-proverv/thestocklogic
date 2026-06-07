@@ -343,8 +343,7 @@ function renderTradeTable(){
   document.getElementById('tradeTableBody').innerHTML = html;
 }
 
-loadTrades();
-setInterval(loadTrades, 60000);
+window.addEventListener('load', function(){ loadTrades(); setInterval(loadTrades, 60000); });
 </script>
 
 <footer>ATLAS · Agentic Trading Lifecycle Automation System · Educational use only · Not SEBI advice</footer>
