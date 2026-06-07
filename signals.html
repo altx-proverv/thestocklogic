@@ -590,11 +590,15 @@ async function render(){
   intradayList.sort(function(a,b){return(b.sig.rvol||0)-(a.sig.rvol||0);});
   var eodCards=latestEOD.filter(function(s){return!conflicts[s.symbol];});
   var html='';
-  // Populate ORB ticker — green for LONG, red for SHORT
+  // Populate ORB ticker — visible only 9:35 AM to 3:15 PM IST
   if(intradayList.length){
+    var _nowIST = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+    var _tv = _nowIST.getUTCHours() * 60 + _nowIST.getUTCMinutes();
+    var _orbOpen  = 9  * 60 + 35;
+    var _mktClose = 15 * 60 + 15;
     var tickerEl = document.getElementById('orbTicker');
     var tickerInner = document.getElementById('orbTickerInner');
-    if(tickerEl && tickerInner){
+    if(tickerEl && tickerInner && _tv >= _orbOpen && _tv <= _mktClose){
       tickerEl.classList.add('active');
       var items = intradayList.map(function(item){
         var s = item.sig;
@@ -602,8 +606,9 @@ async function render(){
         var arrow = s.direction==='LONG' ? '↑' : '↓';
         return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted2)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>';
       }).join('<span style="color:var(--line);margin:0 8px">|</span>');
-      // Duplicate for seamless scroll
-      tickerInner.innerHTML = '<span class="orb-label">ORB BREAKOUTS</span>'+items+'<span style="margin:0 20px"></span><span class="orb-label">ORB BREAKOUTS</span>'+items;
+      tickerInner.innerHTML = items+'<span style="margin:0 40px">·</span>'+items;
+    } else if(tickerEl){
+      tickerEl.classList.remove('active');
     }
   }
   // Merge BTST signals into Today's Watchlist
