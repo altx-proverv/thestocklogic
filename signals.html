@@ -576,8 +576,11 @@ async function render(){
   eodCards.sort(function(a,b){return (b.score||0)-(a.score||0);});
 
   var top10=eodCards.slice(0,10);var rest=eodCards.slice(10);
-  var _nd=new Date();_nd.setDate(_nd.getDate()+1);
-  var _nds=_nd.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+  // Next trading day after latest signal date — skip weekends
+  var _base=new Date(latestDate+'T00:00:00');
+  _base.setDate(_base.getDate()+1);
+  while(_base.getDay()===0||_base.getDay()===6){_base.setDate(_base.getDate()+1);}
+  var _nds=_base.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
   html+='<div class="sec-header"><span class="sec-badge today">TODAY\'S WATCHLIST</span><span class="sec-date">For '+_nds+'</span><span class="sec-count">'+eodCards.length+' SIGNAL'+(eodCards.length!==1?'S':'')+'</span></div>';
   if(!eodCards.length){html+='<div class="stay-cash"><h3>STAY CASH</h3><p>No qualifying EOD setups today</p></div>';}
   else{
