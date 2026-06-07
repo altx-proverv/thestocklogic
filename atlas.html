@@ -171,6 +171,182 @@ footer{padding:14px 28px;border-top:1px solid var(--line);text-align:center;font
   </div>
 </div>
 
+<div class="main" style="margin-top:0;padding-top:0">
+
+  <!-- Summary metrics -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:20px" id="perfMetrics">
+    <div class="metric"><div class="metric-label">TOTAL TRADES</div><div class="metric-val sky" id="pmTotal">—</div></div>
+    <div class="metric"><div class="metric-label">WIN %</div><div class="metric-val green" id="pmWinPct">—</div></div>
+    <div class="metric"><div class="metric-label">LOSS %</div><div class="metric-val red" id="pmLossPct">—</div></div>
+    <div class="metric"><div class="metric-label">NET P&L</div><div class="metric-val" id="pmPnl">—</div></div>
+    <div class="metric"><div class="metric-label">RETURN ON CAPITAL</div><div class="metric-val" id="pmReturn">—</div></div>
+  </div>
+
+  <!-- Sort controls -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+    <span style="font-size:10px;letter-spacing:2px;color:var(--muted)">SORT BY</span>
+    <select id="tradeSort" onchange="renderTradeTable()" style="background:var(--s2);border:1px solid var(--line);color:var(--white);font-family:var(--font);font-size:10px;letter-spacing:1px;padding:4px 8px;cursor:pointer">
+      <option value="date_desc">DATE — NEWEST FIRST</option>
+      <option value="date_asc">DATE — OLDEST FIRST</option>
+      <option value="pnl_desc">P&L — BEST FIRST</option>
+      <option value="pnl_asc">P&L — WORST FIRST</option>
+      <option value="symbol">SYMBOL A–Z</option>
+      <option value="open_first">STATUS — OPEN FIRST</option>
+    </select>
+    <span style="font-size:10px;color:var(--muted);margin-left:auto" id="tradeCount">—</span>
+  </div>
+
+  <!-- Trade table -->
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--font)" id="tradeTable">
+      <thead>
+        <tr>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">SYMBOL</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">DIR</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">ENTRY DATE</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">ENTRY ₹</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">SL ₹</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">T1 ₹</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">T2 ₹</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">EXIT DATE</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">EXIT ₹</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">OUTCOME</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">P&L</th>
+          <th style="font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap">STATUS</th>
+        </tr>
+      </thead>
+      <tbody id="tradeTableBody">
+        <tr><td colspan="12" style="padding:28px;text-align:center;color:var(--muted)">Loading trades...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+var _trades = [];
+var _prices = {};
+
+function fmtD(d){
+  if(!d) return '—';
+  return new Date(d).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+}
+
+function fmtPnl(v, showSign){
+  if(v===null||v===undefined||isNaN(v)) return '—';
+  var n = Math.round(v);
+  var sign = n >= 0 ? '+' : '';
+  var col = n >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<span style="color:'+col+';font-weight:500">'+sign+'₹'+Math.abs(n).toLocaleString('en-IN')+'</span>';
+}
+
+async function loadTrades(){
+  var r = await fetch(SB+'/rest/v1/atlas_trades?order=created_at.desc&limit=100', {headers:HDR});
+  _trades = await r.json() || [];
+
+  // Load live prices for open trades
+  var openSymbols = _trades.filter(function(t){return t.status==='OPEN';}).map(function(t){return t.symbol;});
+  if(openSymbols.length){
+    var r2 = await fetch(SB+'/rest/v1/live_prices?symbol=in.('+openSymbols.join(',')+')',{headers:HDR});
+    var prices = await r2.json() || [];
+    prices.forEach(function(p){ _prices[p.symbol] = parseFloat(p.ltp||0); });
+  }
+
+  renderTradeTable();
+}
+
+function renderTradeTable(){
+  var trades = _trades.slice();
+  var sort = document.getElementById('tradeSort').value;
+
+  if(sort==='date_desc') trades.sort(function(a,b){return new Date(b.created_at)-new Date(a.created_at);});
+  else if(sort==='date_asc') trades.sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at);});
+  else if(sort==='pnl_desc') trades.sort(function(a,b){return (parseFloat(b.pnl||0))-(parseFloat(a.pnl||0));});
+  else if(sort==='pnl_asc') trades.sort(function(a,b){return (parseFloat(a.pnl||0))-(parseFloat(b.pnl||0));});
+  else if(sort==='symbol') trades.sort(function(a,b){return a.symbol.localeCompare(b.symbol);});
+  else if(sort==='open_first') trades.sort(function(a,b){return (a.status==='OPEN'?0:1)-(b.status==='OPEN'?0:1);});
+
+  document.getElementById('tradeCount').textContent = trades.length + ' TRADES (ROLLING 100)';
+
+  // Summary metrics
+  var closed = trades.filter(function(t){return t.status==='CLOSED';});
+  var wins   = closed.filter(function(t){return parseFloat(t.pnl||0)>0;});
+  var losses = closed.filter(function(t){return parseFloat(t.pnl||0)<=0;});
+  var netPnl = closed.reduce(function(s,t){return s+parseFloat(t.pnl||0);},0);
+  var totalCap = closed.reduce(function(s,t){return s+parseFloat(t.capital_deployed||0);},0);
+  var retPct = totalCap > 0 ? (netPnl/totalCap*100) : 0;
+  var winPct = closed.length > 0 ? (wins.length/closed.length*100).toFixed(1) : '—';
+  var lossPct = closed.length > 0 ? (losses.length/closed.length*100).toFixed(1) : '—';
+
+  document.getElementById('pmTotal').textContent = trades.length;
+  document.getElementById('pmWinPct').textContent = winPct !== '—' ? winPct+'%' : '—';
+  document.getElementById('pmLossPct').textContent = lossPct !== '—' ? lossPct+'%' : '—';
+  document.getElementById('pmPnl').innerHTML = fmtPnl(netPnl);
+  document.getElementById('pmReturn').innerHTML = '<span style="color:'+(retPct>=0?'var(--green)':'var(--red)')+'">'+retPct.toFixed(2)+'%</span>';
+
+  // Table rows
+  var html = '';
+  if(!trades.length){
+    html = '<tr><td colspan="12" style="padding:28px;text-align:center;color:var(--muted)">No trades yet</td></tr>';
+  } else {
+    trades.forEach(function(t){
+      var isOpen = t.status === 'OPEN';
+      var isLong = t.direction === 'LONG';
+      var entry  = parseFloat(t.entry_price||0);
+      var qty    = parseInt(t.qty||0);
+      var cap    = parseFloat(t.capital_deployed||0);
+      var pnl    = parseFloat(t.pnl||0);
+
+      // Live P&L for open trades
+      var pnlDisplay = '—';
+      if(isOpen){
+        var ltp = _prices[t.symbol] || 0;
+        if(ltp > 0){
+          var livePnl = isLong ? (ltp - entry)*qty : (entry - ltp)*qty;
+          var liveSign = livePnl >= 0 ? '+' : '';
+          var liveCol = livePnl >= 0 ? 'var(--green)' : 'var(--red)';
+          pnlDisplay = '<span style="color:'+liveCol+';font-weight:500">'+liveSign+'₹'+Math.round(Math.abs(livePnl)).toLocaleString('en-IN')+'</span><span style="font-size:9px;color:var(--muted)"> live</span>';
+        }
+      } else {
+        pnlDisplay = fmtPnl(pnl);
+      }
+
+      // Outcome badge
+      var outcomeBadge = '—';
+      if(!isOpen){
+        if(pnl > 0) outcomeBadge = '<span style="font-size:9px;padding:2px 8px;border-radius:3px;background:rgba(0,214,143,0.1);color:var(--green);border:1px solid rgba(0,214,143,0.3)">WIN</span>';
+        else outcomeBadge = '<span style="font-size:9px;padding:2px 8px;border-radius:3px;background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)">LOSS</span>';
+      }
+
+      // Status badge
+      var statusBadge = isOpen
+        ? '<span style="font-size:9px;padding:2px 8px;border-radius:3px;background:rgba(77,184,255,0.1);color:var(--sky);border:1px solid rgba(77,184,255,0.3)">OPEN</span>'
+        : '<span style="font-size:9px;padding:2px 8px;border-radius:3px;background:rgba(255,255,255,0.06);color:var(--muted)">CLOSED</span>';
+
+      var tc = 'padding:10px 10px;border-bottom:1px solid rgba(255,255,255,0.04);white-space:nowrap;vertical-align:middle';
+      html += '<tr style="cursor:default">'
+        +'<td style="'+tc+';font-weight:500;color:var(--white)">'+t.symbol+'</td>'
+        +'<td style="'+tc+';color:'+(isLong?'var(--green)':'var(--red)')+'">'+( isLong?'↑ LONG':'↓ SHORT')+'</td>'
+        +'<td style="'+tc+';color:var(--muted)">'+fmtD(t.entry_date)+'</td>'
+        +'<td style="'+tc+';color:var(--sky)">₹'+parseFloat(t.entry_price||0).toLocaleString('en-IN')+'</td>'
+        +'<td style="'+tc+';color:var(--red)">₹'+parseFloat(t.sl||0).toLocaleString('en-IN')+'</td>'
+        +'<td style="'+tc+';color:var(--green)">₹'+parseFloat(t.target_1||0).toLocaleString('en-IN')+'</td>'
+        +'<td style="'+tc+';color:var(--green)">₹'+parseFloat(t.target_2||0).toLocaleString('en-IN')+'</td>'
+        +'<td style="'+tc+';color:var(--muted)">'+(isOpen?'—':fmtD(t.exit_date))+'</td>'
+        +'<td style="'+tc+';">'+(isOpen?'—':'₹'+parseFloat(t.exit_price||0).toLocaleString('en-IN'))+'</td>'
+        +'<td style="'+tc+'">'+outcomeBadge+'</td>'
+        +'<td style="'+tc+'">'+pnlDisplay+'</td>'
+        +'<td style="'+tc+'">'+statusBadge+'</td>'
+        +'</tr>';
+    });
+  }
+
+  document.getElementById('tradeTableBody').innerHTML = html;
+}
+
+loadTrades();
+setInterval(loadTrades, 60000);
+</script>
+
 <footer>ATLAS · Agentic Trading Lifecycle Automation System · Educational use only · Not SEBI advice</footer>
 
 <script>
