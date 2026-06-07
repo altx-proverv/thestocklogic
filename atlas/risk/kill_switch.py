@@ -156,6 +156,51 @@ def check(signal: dict = None) -> KillSwitchResult:
             log.warning(f"KILL SWITCH: Conviction too low — {conviction}/{min_conv} in {mode} mode")
             return KillSwitchResult(False, f"Conviction {conviction} below threshold {min_conv}", details)
 
+    # CHECK 6b — Regime-conviction matrix
+    if signal:
+        direction  = str(signal.get("direction", "LONG")).upper()
+        conviction = float(signal.get("conviction", 0))
+
+        # Get current market regime
+        regime = "mixed"
+        try:
+            from datetime import date
+            today = date.today().isoformat()
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/sector_heatmap?signal_date=eq.{today}&limit=1",
+                headers=_headers()
+            )
+            if r.status_code == 200 and r.json():
+                regime = r.json()[0].get("market_direction", "mixed").lower()
+        except Exception:
+            pass
+
+        # Regime-conviction thresholds
+        if regime == "bullish":
+            min_long_conv  = 78   # Normal threshold for longs
+            min_short_conv = 85   # Counter-trend — higher bar
+        elif regime == "mixed":
+            min_long_conv  = 82   # Raise bar in mixed market
+            min_short_conv = 85   # Keep short bar high
+        elif regime == "bearish":
+            min_long_conv  = 999  # No longs in bearish — stay cash
+            min_short_conv = 78   # Normal threshold for shorts
+        else:
+            min_long_conv  = 82
+            min_short_conv = 85
+
+        if direction == "LONG" and conviction < min_long_conv:
+            log.warning(f"KILL SWITCH: Regime {regime.upper()} — LONG conviction {conviction:.0f} below {min_long_conv}")
+            return KillSwitchResult(False,
+                f"LONG blocked in {regime} regime — conviction {conviction:.0f} < {min_long_conv}", details)
+
+        if direction == "SHORT" and conviction < min_short_conv:
+            log.warning(f"KILL SWITCH: Regime {regime.upper()} — SHORT conviction {conviction:.0f} below {min_short_conv}")
+            return KillSwitchResult(False,
+                f"SHORT blocked in {regime} regime — conviction {conviction:.0f} < {min_short_conv}", details)
+
+        log.info(f"Regime check PASSED — {regime.upper()} | {direction} Conv:{conviction:.0f} >= {min_long_conv if direction=='LONG' else min_short_conv}")
+
     # CHECK 7 — Daily P&L approaching cap (warn at 75%)
     warning_threshold = daily_loss_cap * 0.75
     if daily_pnl <= -warning_threshold:
