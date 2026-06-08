@@ -1,5 +1,5 @@
 """
-ATLAS — Agentic Trading & Lifecycle Automation System
+ATLAS — Agentic Trading Lifecycle Automation System
 Central configuration. All modules import from here.
 """
 import os
@@ -29,7 +29,9 @@ ZERODHA_TOTP       = os.environ.get("ZERODHA_TOTP_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "100000"))
+# Capital configuration
+INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "150000"))
+CAPITAL_PER_TRADE    = 50000.0
 DAILY_LOSS_CAP_PCT   = 0.02
 WEEKLY_DRAWDOWN_PCT  = 0.05
 MAX_RISK_PER_TRADE   = 5000
@@ -72,8 +74,9 @@ def validate():
 
 if __name__ == "__main__":
     print(f"ATLAS v{VERSION}")
-    print(f"Capital:        INR {INITIAL_CAPITAL:,.0f}")
-    print(f"Daily loss cap: INR {INITIAL_CAPITAL * DAILY_LOSS_CAP_PCT:,.0f}")
-    print(f"Max risk/trade: INR {MAX_RISK_PER_TRADE:,.0f}")
-    print(f"Min conviction: {MIN_CONVICTION_SCORE}/100")
-    print(f"Config valid:   {validate()}")
+    print(f"Capital:           INR {INITIAL_CAPITAL:,.0f}")
+    print(f"Capital per trade: INR {CAPITAL_PER_TRADE:,.0f}")
+    print(f"Daily loss cap:    INR {INITIAL_CAPITAL * DAILY_LOSS_CAP_PCT:,.0f}")
+    print(f"Max risk/trade:    INR {MAX_RISK_PER_TRADE:,.0f}")
+    print(f"Min conviction:    {MIN_CONVICTION_SCORE}/100")
+    print(f"Config valid:      {validate()}")
