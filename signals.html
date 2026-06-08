@@ -397,7 +397,7 @@ function liveArchRow(ds){
     var cls=s.direction==='LONG'?'lc':'sc2';
     return '<span class="arch-chip '+cls+'">'+s.symbol+'</span>';
   }).join('');
-  return '<div class="arch-day" onclick="openLiveArchDay(''+ds+'')" style="border-top:none;padding-top:4px;opacity:0.8">'
+  return '<div class="arch-day" onclick="openLiveArchDay(\'' +ds+ '\')" style="border-top:none;padding-top:4px;opacity:0.8">'
     +'<div class="arch-date" style="font-size:9px;color:var(--amber)">LIVE BREAKOUTS</div>'
     +'<div class="arch-chips">'+chips+'</div>'
     +'<div class="arch-count" style="color:var(--amber)">'+sigs.length+'</div>'
