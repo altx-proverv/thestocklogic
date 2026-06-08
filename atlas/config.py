@@ -1,5 +1,5 @@
 """
-ATLAS — Agentic Trading Lifecycle Automation System
+ATLAS — Agentic Trading & Lifecycle Automation System
 Central configuration. All modules import from here.
 """
 import os
