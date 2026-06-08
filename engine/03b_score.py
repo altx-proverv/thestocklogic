@@ -106,7 +106,7 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     df.loc[mask, "disqualified"]      = True
     df.loc[mask, "disqualify_reason"] = "bear_regime_no_reversal"
 
-    # No SMC signal
+    # SMC signal columns
     near_ob  = df.get("near_demand_ob",    pd.Series(0, index=df.index)).fillna(0)
     bull_fvg = df.get("price_in_bull_fvg", pd.Series(0, index=df.index)).fillna(0)
     bos_bull = df.get("bos_bull",          pd.Series(0, index=df.index)).fillna(0)
@@ -120,10 +120,18 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     long_smc  = near_ob + bull_fvg + bos_bull + choch_b2 + liq_bull
     short_smc = sup_ob  + bear_fvg + bos_bear + liq_bear
 
+    # Hard gate 1: no SMC signal at all
     mask_long  = (~df["disqualified"]) & (direction_col == "long")  & (long_smc  == 0)
     mask_short = (~df["disqualified"]) & (direction_col == "short") & (short_smc == 0)
     df.loc[mask_long | mask_short, "disqualified"]      = True
     df.loc[mask_long | mask_short, "disqualify_reason"] = "no_smc_signal"
+
+    # Hard gate 2: BOS or CHOCH must have occurred within last 9 trading days
+    # Without structure confirmation, OB alone is insufficient
+    recent_bos = df.get("recent_bos_choch", pd.Series(0, index=df.index)).fillna(0)
+    mask_no_struct = (~df["disqualified"]) & (recent_bos == 0)
+    df.loc[mask_no_struct, "disqualified"]      = True
+    df.loc[mask_no_struct, "disqualify_reason"] = "no_recent_bos_choch"
 
     # ── SCORE DIMENSIONS (vectorized) ────────────────────────────
 
@@ -361,6 +369,14 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     qty     = np.maximum(qty, 1)
 
     risk_inr = (sl_dist * qty).round(2)
+
+    # OTE validation — disqualify if price already moved >2% away from OB entry zone
+    # This catches stale signals like ACUITAS (entry 4.9% below current price)
+    price_dist = (close - entry_ref).abs() / close.replace(0, np.nan)
+    stale_mask = price_dist > 0.02
+    df.loc[stale_mask, "disqualified"]      = True
+    df.loc[stale_mask, "disqualify_reason"] = "price_outside_ob_zone"
+    df.loc[stale_mask, "qualifies"]         = False
 
     df["entry_ref"]   = entry_ref.round(2)
     df["entry_low"]   = entry_low

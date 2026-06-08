@@ -527,6 +527,15 @@ def compute_smc_signals(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFra
         df["rs_20d"] = 1.0
         df["rs_positive"] = 0
 
+    # Recent BOS or CHOCH within 9 trading days — structure gate
+    bos_or_choch = (
+        df["bos_bull"].astype(int) |
+        df["bos_bear"].astype(int) |
+        df["choch_bull"].astype(int) |
+        df["choch_bear"].astype(int)
+    ).astype(int)
+    df["recent_bos_choch"] = bos_or_choch.rolling(9, min_periods=1).max().astype(int)
+
     # Warmup flag
     df["is_warmup"] = range(len(df))
     df["is_warmup"] = df["is_warmup"] < 50
