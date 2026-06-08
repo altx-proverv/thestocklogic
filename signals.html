@@ -600,11 +600,32 @@ async function render(){
     var tickerInner = document.getElementById('orbTickerInner');
     if(tickerEl && tickerInner && _tv >= _orbOpen && _tv <= _mktClose){
       tickerEl.classList.add('active');
-      var items = intradayList.map(function(item){
+      // PDH/PDL filter — only show confirmed breakouts in ticker
+      var confirmedList = intradayList.filter(function(item){
+        var s = item.sig;
+        var ltp = parseFloat(s.ltp || s.entry || 0);
+        var pdh = parseFloat(s.prev_day_high || 0);
+        var pdl = parseFloat(s.prev_day_low || 0);
+        if(s.direction === 'LONG'){
+          // Valid only if trending above previous day high
+          return pdh === 0 || ltp > pdh;
+        } else {
+          // Valid only if trending below previous day low
+          return pdl === 0 || ltp < pdl;
+        }
+      });
+      var tickerSource = confirmedList.length > 0 ? confirmedList : intradayList;
+      var items = tickerSource.map(function(item){
         var s = item.sig;
         var cls = s.direction==='LONG' ? 'orb-long' : 'orb-short';
         var arrow = s.direction==='LONG' ? '↑' : '↓';
-        return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted2)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>';
+        var pdLabel = '';
+        var pdh = parseFloat(s.prev_day_high || 0);
+        var pdl = parseFloat(s.prev_day_low || 0);
+        var ltp = parseFloat(s.ltp || s.entry || 0);
+        if(s.direction==='LONG' && pdh > 0 && ltp > pdh) pdLabel = ' <span style="font-size:9px;color:#ffb347">↑PDH</span>';
+        if(s.direction==='SHORT' && pdl > 0 && ltp < pdl) pdLabel = ' <span style="font-size:9px;color:#ffb347">↓PDL</span>';
+        return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted2)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>'+pdLabel;
       }).join('<span style="color:var(--line);margin:0 8px">|</span>');
       tickerInner.innerHTML = items+'<span style="margin:0 40px">·</span>'+items;
     } else if(tickerEl){

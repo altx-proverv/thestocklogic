@@ -99,6 +99,25 @@ def compute_orb(candles: pd.DataFrame) -> dict:
     }
 
 
+def get_prev_day_levels(symbol: str) -> dict:
+    """Get previous day high/low from parquet file."""
+    try:
+        import glob
+        parquet_files = list(Path("data/processed/smc").glob(f"{symbol}.parquet"))
+        if not parquet_files:
+            return {}
+        df = pd.read_parquet(parquet_files[0])
+        if len(df) < 2:
+            return {}
+        prev_day = df.iloc[-2]
+        return {
+            "prev_day_high": round(float(prev_day["high"]), 2),
+            "prev_day_low":  round(float(prev_day["low"]), 2),
+        }
+    except Exception as e:
+        return {}
+
+
 def detect_breakout(candles: pd.DataFrame, orb: dict, symbol: str) -> dict:
     """
     Detect if price has broken out of the ORB range.
@@ -141,39 +160,50 @@ def detect_breakout(candles: pd.DataFrame, orb: dict, symbol: str) -> dict:
     if range_pct > 4.0 or range_pct < 0.3:
         return {}
 
+    # Get previous day levels for PDH/PDL validation
+    prev = get_prev_day_levels(symbol)
+    pdh  = prev.get("prev_day_high", 0)
+    pdl  = prev.get("prev_day_low", 0)
+
     if long_breakout and vol_confirmed:
         return {
-            "symbol":      symbol,
-            "direction":   "LONG",
-            "setup_name":  "ORB Breakout — Long",
-            "entry":       round(orb_high * 1.001, 2),
-            "sl":          round(orb_low, 2),
-            "target_1":    round(orb_high + orb_range * 1.5, 2),
-            "target_2":    round(orb_high + orb_range * 2.5, 2),
-            "ltp":         round(ltp, 2),
-            "orb_high":    orb_high,
-            "orb_low":     orb_low,
+            "symbol":        symbol,
+            "direction":     "LONG",
+            "setup_name":    "ORB Breakout — Long",
+            "entry":         round(orb_high * 1.001, 2),
+            "sl":            round(orb_low, 2),
+            "target_1":      round(orb_high + orb_range * 1.5, 2),
+            "target_2":      round(orb_high + orb_range * 2.5, 2),
+            "ltp":           round(ltp, 2),
+            "orb_high":      orb_high,
+            "orb_low":       orb_low,
             "orb_range_pct": range_pct,
-            "rvol":        round(rvol, 2),
-            "signal_time": ltp_time,
-            "session":     "morning",
+            "rvol":          round(rvol, 2),
+            "signal_time":   ltp_time,
+            "session":       "morning",
+            "prev_day_high": pdh,
+            "prev_day_low":  pdl,
+            "pdh_confirmed": ltp > pdh if pdh > 0 else False,
         }
     elif short_breakout and vol_confirmed:
         return {
-            "symbol":      symbol,
-            "direction":   "SHORT",
-            "setup_name":  "ORB Breakdown — Short",
-            "entry":       round(orb_low * 0.999, 2),
-            "sl":          round(orb_high, 2),
-            "target_1":    round(orb_low - orb_range * 1.5, 2),
-            "target_2":    round(orb_low - orb_range * 2.5, 2),
-            "ltp":         round(ltp, 2),
-            "orb_high":    orb_high,
-            "orb_low":     orb_low,
+            "symbol":        symbol,
+            "direction":     "SHORT",
+            "setup_name":    "ORB Breakdown — Short",
+            "entry":         round(orb_low * 0.999, 2),
+            "sl":            round(orb_high, 2),
+            "target_1":      round(orb_low - orb_range * 1.5, 2),
+            "target_2":      round(orb_low - orb_range * 2.5, 2),
+            "ltp":           round(ltp, 2),
+            "orb_high":      orb_high,
+            "orb_low":       orb_low,
             "orb_range_pct": range_pct,
-            "rvol":        round(rvol, 2),
-            "signal_time": ltp_time,
-            "session":     "morning",
+            "rvol":          round(rvol, 2),
+            "signal_time":   ltp_time,
+            "session":       "morning",
+            "prev_day_high": pdh,
+            "prev_day_low":  pdl,
+            "pdl_confirmed": ltp < pdl if pdl > 0 else False,
         }
 
     return {}
@@ -210,8 +240,10 @@ def push_orb_signals(signals: list):
         "target_2":    s["target_2"],
         "ltp":         s["ltp"],
         "signal_time": s["signal_time"],
-        "rvol":        s.get("rvol", 0),
+        "rvol":          s.get("rvol", 0),
         "orb_range_pct": s.get("orb_range_pct", 0),
+        "prev_day_high": s.get("prev_day_high", None),
+        "prev_day_low":  s.get("prev_day_low", None),
     } for s in signals]
 
     r = requests.post(
