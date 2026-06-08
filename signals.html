@@ -304,6 +304,10 @@ var HDR={apikey:AK,Authorization:'Bearer '+AK};
 function fmt(n){if(n===null||n===undefined||n==='')return'&mdash;';var v=parseFloat(n);if(isNaN(v))return'&mdash;';return v.toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1});}
 function gc(g){return g==='A+'?'ring-ap':g==='A'?'ring-a':'ring-b';}
 function todayStr(){return new Date().toISOString().split('T')[0];}
+function todayIST(){
+  var d=new Date(Date.now()+(5.5*60*60*1000));
+  return d.toISOString().split('T')[0];
+}
 function fmtDate(ds){return new Date(ds).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});}
 function sj(s){return JSON.stringify(s).replace(/"/g,'&quot;');}
 async function fetchEOD(){var s=new Date();s.setDate(s.getDate()-30);var r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,score.desc&select=*',{headers:HDR});return r.json();}
@@ -315,7 +319,7 @@ async function fetchSectors(){
   var latestDate=data[0].signal_date;
   return data.filter(function(s){return s.signal_date===latestDate;});
 }
-async function fetchLive(){var r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+todayStr()+'&order=signal_time.asc',{headers:HDR});return r.json();}
+async function fetchLive(){var r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+todayIST()+'&order=signal_time.asc',{headers:HDR});return r.json();}
 async function fetchOutcomes(){var r=await fetch(SB+'/rest/v1/signal_outcomes?select=signal_id,outcome,pnl,exit_day,days_held',{headers:HDR});return r.json();}
 async function fetchPrices(){var r=await fetch(SB+'/rest/v1/live_prices?select=symbol,ltp,change_pct',{headers:HDR});return r.json();}
 function intradayCard(s,isMatch){
@@ -599,9 +603,13 @@ async function render(){
   window._outcomeMap=outcomeMap;
   window._priceMap=priceMap;
   var allDates=Object.keys(byDate).sort().reverse();
-  var latestDate=allDates[0];
+  var istToday=todayIST();
+  // Display gate: hide signals with signal_date > today IST (stored at 6:35 PM for next day)
+  // They become visible at midnight when istToday catches up to signal_date
+  var visibleDates=allDates.filter(function(d){return d<=istToday;});
+  var latestDate=visibleDates[0]||allDates[0];
   var latestEOD=byDate[latestDate]||[];
-  var today=todayStr();
+  var today=istToday;
   var todayLive=(liveAll||[]).filter(function(s){return s.signal_date===today;});
   window._allSignals=(eodAll||[]).concat(liveAll||[]);
   document.getElementById('liveLabel').textContent='LIVE';
@@ -681,11 +689,8 @@ async function render(){
   eodCards.sort(function(a,b){return (b.score||0)-(a.score||0);});
 
   var top10=eodCards.slice(0,10);var rest=eodCards.slice(10);
-  // Next trading day after latest signal date — skip weekends
-  var _base=new Date(latestDate+'T00:00:00');
-  _base.setDate(_base.getDate()+1);
-  while(_base.getDay()===0||_base.getDay()===6){_base.setDate(_base.getDate()+1);}
-  var _nds=_base.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+  // signal_date IS the display date (next trading day stored at 6:35 PM)
+  var _nds=new Date(latestDate+'T00:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
   html+='<div class="sec-header"><span class="sec-badge today">TODAY\'S WATCHLIST</span><span class="sec-date">For '+_nds+'</span><span class="sec-count">'+eodCards.length+' SIGNAL'+(eodCards.length!==1?'S':'')+'</span></div>';
   if(!eodCards.length){html+='<div class="stay-cash"><h3>STAY CASH</h3><p>No qualifying EOD setups today</p></div>';}
   else{
@@ -705,7 +710,7 @@ async function render(){
   var _tvNow=_nowIST2.getUTCHours()*60+_nowIST2.getUTCMinutes();
   var _afterMarket=_tvNow>15*60+15;
 
-  var archiveDates=allDates.slice(1);
+  var archiveDates=visibleDates.slice(1);
   if(archiveDates.length){
     var yest=archiveDates[0],twoDays=archiveDates[1],older=archiveDates.slice(2);
     html+='<div class="arch-toggle" id="archToggle" onclick="toggleArch()"><span class="arch-icon" id="archIcon">&#9660;</span><span>ARCHIVE</span><span style="margin-left:auto;color:var(--muted2)">'+archiveDates.length+' DAYS</span></div><div class="arch-body" id="archBody">';
