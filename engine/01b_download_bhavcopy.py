@@ -200,6 +200,38 @@ def download_all(trading_days: list) -> dict:
     return results
 
 
+# ── STEP 1b: DOWNLOAD DELIVERY DATA ─────────────────────────────
+
+def download_delivery_data(d: date) -> dict:
+    """
+    Download sec_bhavdata_full file which contains DELIV_PER.
+    Returns {symbol: delivery_pct} for the given date.
+    URL: https://archives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv
+    """
+    import requests as _req
+    url = f"https://archives.nseindia.com/products/content/sec_bhavdata_full_{d.strftime('%d%m%Y')}.csv"
+    try:
+        r = _req.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            log.warning(f"Delivery data not available for {d}: {r.status_code}")
+            return {}
+        import io
+        df = pd.read_csv(io.StringIO(r.text))
+        df.columns = [c.strip() for c in df.columns]
+        # Filter EQ series only
+        if "SERIES" in df.columns:
+            df = df[df["SERIES"].str.strip() == "EQ"].copy()
+        if "SYMBOL" not in df.columns or "DELIV_PER" not in df.columns:
+            return {}
+        df["SYMBOL"] = df["SYMBOL"].str.strip()
+        delivery_map = dict(zip(df["SYMBOL"], pd.to_numeric(df["DELIV_PER"], errors="coerce")))
+        log.info(f"Delivery data loaded for {d}: {len(delivery_map)} stocks")
+        return delivery_map
+    except Exception as e:
+        log.warning(f"Delivery data download failed for {d}: {e}")
+        return {}
+
+
 # ── STEP 2: BUILD PARQUETS ────────────────────────────────────────
 
 def build_parquets(trading_days: list):
@@ -226,6 +258,13 @@ def build_parquets(trading_days: list):
     log.info(f"Total rows: {len(combined):,} across {combined['symbol'].nunique()} symbols")
 
     # Build per-stock parquets
+    # Download delivery data for most recent trading day
+    latest_day = max(trading_days) if trading_days else None
+    delivery_map = {}
+    if latest_day:
+        delivery_map = download_delivery_data(latest_day)
+        log.info(f"Delivery map loaded: {len(delivery_map)} stocks")
+
     log.info("Building per-stock parquets...")
     ok, skipped = 0, 0
 
@@ -238,6 +277,11 @@ def build_parquets(trading_days: list):
             continue
 
         df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+        # Inject latest delivery_pct from sec_bhavdata_full
+        if delivery_map and symbol in delivery_map:
+            del_pct = delivery_map[symbol]
+            if not pd.isna(del_pct):
+                df.loc[df.index[-1], "delivery_pct"] = float(del_pct)
         out = STOCKS_DIR / f"{symbol}.parquet"
         df.to_parquet(out, index=False)
         ok += 1
