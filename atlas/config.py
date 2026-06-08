@@ -30,11 +30,11 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Capital configuration
-INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "150000"))
-CAPITAL_PER_TRADE    = 50000.0
-DAILY_LOSS_CAP_PCT   = 0.02
-WEEKLY_DRAWDOWN_PCT  = 0.05
-MAX_RISK_PER_TRADE   = 5000
+INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "150000"))  # INR 1.5L
+CAPITAL_PER_TRADE    = 50000.0   # Fixed INR 50K per CNC trade
+DAILY_LOSS_CAP_PCT   = 0.02      # 2% of allocated capital = INR 3,000
+WEEKLY_DRAWDOWN_PCT  = 0.05      # 5% of allocated capital = INR 7,500
+MAX_RISK_PER_TRADE   = 5000      # Max SL loss per trade INR 5,000
 MAX_OPEN_POSITIONS   = 3
 MIN_CONVICTION_SCORE = 75
 ELITE_CONVICTION     = 85
@@ -74,9 +74,9 @@ def validate():
 
 if __name__ == "__main__":
     print(f"ATLAS v{VERSION}")
-    print(f"Capital:           INR {INITIAL_CAPITAL:,.0f}")
-    print(f"Capital per trade: INR {CAPITAL_PER_TRADE:,.0f}")
-    print(f"Daily loss cap:    INR {INITIAL_CAPITAL * DAILY_LOSS_CAP_PCT:,.0f}")
-    print(f"Max risk/trade:    INR {MAX_RISK_PER_TRADE:,.0f}")
-    print(f"Min conviction:    {MIN_CONVICTION_SCORE}/100")
-    print(f"Config valid:      {validate()}")
+    print(f"Capital:          INR {INITIAL_CAPITAL:,.0f}")
+    print(f"Capital per trade:INR {CAPITAL_PER_TRADE:,.0f}")
+    print(f"Daily loss cap:   INR {INITIAL_CAPITAL * DAILY_LOSS_CAP_PCT:,.0f}")
+    print(f"Max risk/trade:   INR {MAX_RISK_PER_TRADE:,.0f}")
+    print(f"Min conviction:   {MIN_CONVICTION_SCORE}/100")
+    print(f"Config valid:     {validate()}")
