@@ -671,7 +671,7 @@ async function render(){
     }
   }
   // Merge BTST signals into Today's Watchlist
-  var btstCards = (window._allSignals||[]).filter(function(s){return s.trade_type==='BTST';});
+  var btstCards = (window._allSignals||[]).filter(function(s){return s.trade_type==='BTST' && s.signal_date===latestDate;});
   var btstSymbols = {};
   btstCards.forEach(function(s){ btstSymbols[s.symbol]=s; });
   // Mark EOD cards that have BTST confirmation
