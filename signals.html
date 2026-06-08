@@ -319,7 +319,15 @@ async function fetchSectors(){
   var latestDate=data[0].signal_date;
   return data.filter(function(s){return s.signal_date===latestDate;});
 }
-async function fetchLive(){var r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+todayIST()+'&order=signal_time.asc',{headers:HDR});return r.json();}
+async function fetchLive(){
+  var t=todayIST();
+  var yd=new Date(Date.now()+(5.5*60*60*1000));
+  yd.setDate(yd.getDate()-1);
+  while(yd.getDay()===0||yd.getDay()===6){yd.setDate(yd.getDate()-1);}
+  var ydStr=yd.toISOString().split('T')[0];
+  var r=await fetch(SB+'/rest/v1/live_signals?signal_date=in.('+t+','+ydStr+')&order=signal_time.asc',{headers:HDR});
+  return r.json();
+}
 async function fetchOutcomes(){var r=await fetch(SB+'/rest/v1/signal_outcomes?select=signal_id,outcome,pnl,exit_day,days_held',{headers:HDR});return r.json();}
 async function fetchPrices(){var r=await fetch(SB+'/rest/v1/live_prices?select=symbol,ltp,change_pct',{headers:HDR});return r.json();}
 function intradayCard(s,isMatch){
