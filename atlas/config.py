@@ -36,7 +36,7 @@ DAILY_LOSS_CAP_PCT   = 0.02      # 2% of allocated capital = INR 3,000
 WEEKLY_DRAWDOWN_PCT  = 0.05      # 5% of allocated capital = INR 7,500
 MAX_RISK_PER_TRADE   = 5000      # Max SL loss per trade INR 5,000
 MAX_OPEN_POSITIONS   = 3
-MIN_CONVICTION_SCORE = 75
+MIN_CONVICTION_SCORE = 82
 ELITE_CONVICTION     = 85
 
 MAX_LIVE_SIGNALS     = 3
