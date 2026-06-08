@@ -390,6 +390,23 @@ function openArchDay(ds){
   document.getElementById('modalInner').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+d+'</div><div class="modal-meta">'+sigs.length+' SIGNALS</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div style="padding:12px 18px">'+rows+'</div>';
   document.getElementById('modal').classList.add('open');
 }
+function openLiveArchDay(ds){
+  var sigs=byLiveDate&&byLiveDate[ds]||[];
+  if(!sigs.length)return;
+  var d=new Date(ds).toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});
+  var rows=sigs.map(function(s){
+    var isL=s.direction==='LONG';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line2);cursor:pointer;font-size:12px" onclick="openModal('+sj(s)+')">'
+      +'<div style="font-weight:700;width:100px">'+s.symbol+'</div>'
+      +'<div style="color:'+(isL?'var(--green)':'var(--red)')+';width:60px">'+(isL?'&#8593; LONG':'&#8595; SHORT')+'</div>'
+      +'<div style="color:var(--amber);font-size:9px;width:60px">ORB</div>'
+      +'<div style="color:var(--muted)">RVOL '+parseFloat(s.rvol||0).toFixed(1)+'x</div>'
+      +'<div style="color:var(--sky);margin-left:auto">&#8377;'+fmt(s.entry||s.entry_ref)+'</div>'
+      +'</div>';
+  }).join('');
+  document.getElementById('modalInner').innerHTML='<div class="modal-top"><div><div class="modal-sym">'+d+'</div><div class="modal-meta" style="color:var(--amber)">LIVE BREAKOUTS · '+sigs.length+' SIGNALS</div></div><button class="modal-close" onclick="closeModal()">&#215;</button></div><div style="padding:12px 18px">'+rows+'</div>';
+  document.getElementById('modal').classList.add('open');
+}
 function openModal(s){
   if(typeof s==='string')s=JSON.parse(s);
   var isL=s.direction==='LONG';
@@ -663,13 +680,46 @@ async function render(){
     if(rest.length){html+='<div class="see-more-wrap"><button class="see-more-btn" id="seeMoreBtn" onclick="toggleSeeMore()">SEE '+rest.length+' MORE &#9660;</button></div><div id="seeMoreDiv" style="display:none"><div class="cards-grid">'+rest.map(eodCard).join('')+'</div></div>';}
   }
   if(Object.keys(conflicts).length)html+='<div style="font-size:10px;color:var(--muted2);padding:6px 0">&#9889; '+Object.keys(conflicts).join(', ')+' removed (direction conflict)</div>';
+  // Build live signals by date map for archive
+  window.byLiveDate={}; var byLiveDate=window.byLiveDate;
+  (liveAll||[]).forEach(function(s){
+    var d=s.signal_date;
+    if(!byLiveDate[d])byLiveDate[d]=[];
+    byLiveDate[d].push(s);
+  });
+
+  // After market hours (after 3:15 PM IST) — show live signals in archive
+  var _nowIST2=new Date(Date.now()+(5.5*60*60*1000));
+  var _tvNow=_nowIST2.getUTCHours()*60+_nowIST2.getUTCMinutes();
+  var _afterMarket=_tvNow>15*60+15;
+
   var archiveDates=allDates.slice(1);
   if(archiveDates.length){
     var yest=archiveDates[0],twoDays=archiveDates[1],older=archiveDates.slice(2);
     html+='<div class="arch-toggle" id="archToggle" onclick="toggleArch()"><span class="arch-icon" id="archIcon">&#9660;</span><span>ARCHIVE</span><span style="margin-left:auto;color:var(--muted2)">'+archiveDates.length+' DAYS</span></div><div class="arch-body" id="archBody">';
-    if(yest&&byDate[yest])html+='<div class="arch-cluster-label">YESTERDAY</div>'+archDayRow(yest,byDate[yest]);
-    if(twoDays&&byDate[twoDays])html+='<div class="arch-cluster-label">2 DAYS AGO</div>'+archDayRow(twoDays,byDate[twoDays]);
-    if(older.length){html+='<div class="arch-cluster-label">OLDER</div>';older.forEach(function(d){if(byDate[d])html+=archDayRow(d,byDate[d]);});}
+
+    function archDayWithLive(ds, eodSigs){
+      var liveForDay = byLiveDate[ds]||[];
+      var row = archDayRow(ds, eodSigs);
+      // If after market hours and live signals exist for this date, append LIVE BREAKOUTS row
+      if(_afterMarket && liveForDay.length){
+        var d=new Date(ds).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+        var chips=liveForDay.map(function(s){
+          var cls=s.direction==='LONG'?'lc':'sc2';
+          return '<span class="arch-chip '+cls+'">'+s.symbol+'</span>';
+        }).join('');
+        row+='<div class="arch-day" onclick="openLiveArchDay(''+ds+'')" style="border-top:none;padding-top:4px;opacity:0.8">'
+          +'<div class="arch-date" style="font-size:9px;color:var(--amber)">LIVE BREAKOUTS</div>'
+          +'<div class="arch-chips">'+chips+'</div>'
+          +'<div class="arch-count" style="color:var(--amber)">'+liveForDay.length+'</div>'
+          +'<div style="color:var(--muted2)">&#8250;</div></div>';
+      }
+      return row;
+    }
+
+    if(yest&&byDate[yest])html+='<div class="arch-cluster-label">YESTERDAY</div>'+archDayWithLive(yest,byDate[yest]);
+    if(twoDays&&byDate[twoDays])html+='<div class="arch-cluster-label">2 DAYS AGO</div>'+archDayWithLive(twoDays,byDate[twoDays]);
+    if(older.length){html+='<div class="arch-cluster-label">OLDER</div>';older.forEach(function(d){if(byDate[d])html+=archDayWithLive(d,byDate[d]);});}
     html+='</div>';
   }
   document.getElementById('signalContainer').innerHTML=html;
