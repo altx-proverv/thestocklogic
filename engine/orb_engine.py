@@ -183,7 +183,7 @@ def detect_breakout(candles: pd.DataFrame, orb: dict, symbol: str) -> dict:
             "session":       "morning",
             "prev_day_high": pdh,
             "prev_day_low":  pdl,
-            "pdh_confirmed": ltp > pdh if pdh > 0 else False,
+            "pdh_confirmed": bool(ltp > pdh) if pdh > 0 else False,
         }
     elif short_breakout and vol_confirmed:
         return {
@@ -203,7 +203,7 @@ def detect_breakout(candles: pd.DataFrame, orb: dict, symbol: str) -> dict:
             "session":       "morning",
             "prev_day_high": pdh,
             "prev_day_low":  pdl,
-            "pdl_confirmed": ltp < pdl if pdl > 0 else False,
+            "pdl_confirmed": bool(ltp < pdl) if pdl > 0 else False,
         }
 
     return {}
