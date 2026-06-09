@@ -721,7 +721,7 @@ async function render(){
       html+='<div class="sec-header"><span class="sec-badge today">TOMORROW\'S WATCHLIST</span></div><div style="padding:12px 0;font-size:11px;color:var(--muted2)">Signals update at 6:35 PM IST</div>';
     }
   } else {
-    var srcDate=watchlistEOD.length?today:latestDate;
+    var srcDate=watchlistEOD.length?watchlistEOD[0].signal_date:latestDate;
     var _base=new Date(srcDate+'T00:00:00');
     _base.setDate(_base.getDate()+1);
     while(_base.getDay()===0||_base.getDay()===6){_base.setDate(_base.getDate()+1);}
