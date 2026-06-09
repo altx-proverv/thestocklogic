@@ -303,7 +303,7 @@ var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV
 var HDR={apikey:AK,Authorization:'Bearer '+AK};
 function fmt(n){if(n===null||n===undefined||n==='')return'&mdash;';var v=parseFloat(n);if(isNaN(v))return'&mdash;';return v.toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1});}
 function gc(g){return g==='A+'?'ring-ap':g==='A'?'ring-a':'ring-b';}
-function todayStr(){return new Date().toISOString().split('T')[0];}
+function todayStr(){var d=new Date(Date.now()+(5.5*60*60*1000));return d.toISOString().split('T')[0];}
 function todayIST(){
   var d=new Date(Date.now()+(5.5*60*60*1000));
   return d.toISOString().split('T')[0];
