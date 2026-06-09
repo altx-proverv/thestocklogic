@@ -736,8 +736,8 @@ async function render(){
     window.byLiveDate[s.signal_date].push(s);
   });
 
-  // Archive — exclude latestDate (current watchlist) and tomorrowDate
-  var archiveDates=allDates.filter(function(d){return d!==latestDate&&d!==tomorrowDate;});
+  // Archive — exclude today and tomorrow
+  var archiveDates=allDates.filter(function(d){return d!==today&&d!==tomorrowDate;});
   if(archiveDates.length){
     var yest=archiveDates[0],twoDays=archiveDates[1],older=archiveDates.slice(2);
     html+='<div class="arch-toggle" id="archToggle" onclick="toggleArch()"><span class="arch-icon" id="archIcon">▼</span><span>ARCHIVE</span><span style="margin-left:auto;color:var(--muted2)">'+archiveDates.length+' DAYS</span></div><div class="arch-body" id="archBody">';
