@@ -106,6 +106,20 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     df.loc[mask, "disqualified"]      = True
     df.loc[mask, "disqualify_reason"] = "bear_regime_no_reversal"
 
+    # ADX ranging disqualifier
+    adx_ranging = df.get("adx_ranging", pd.Series(0, index=df.index)).fillna(0)
+    mask = (~df["disqualified"]) & (adx_ranging == 1)
+    df.loc[mask, "disqualified"]      = True
+    df.loc[mask, "disqualify_reason"] = "adq_ranging_market"
+
+    # Weekly structure misalignment disqualifier
+    weekly_bull = df.get("weekly_bullish", pd.Series(0, index=df.index)).fillna(0)
+    weekly_bear = df.get("weekly_bearish", pd.Series(0, index=df.index)).fillna(0)
+    mask_long_weak  = (~df["disqualified"]) & (direction_col=="long")  & (weekly_bear==1)
+    mask_short_weak = (~df["disqualified"]) & (direction_col=="short") & (weekly_bull==1)
+    df.loc[mask_long_weak | mask_short_weak, "disqualified"]      = True
+    df.loc[mask_long_weak | mask_short_weak, "disqualify_reason"] = "weekly_structure_misaligned"
+
     # SMC signal columns
     near_ob  = df.get("near_demand_ob",    pd.Series(0, index=df.index)).fillna(0)
     bull_fvg = df.get("price_in_bull_fvg", pd.Series(0, index=df.index)).fillna(0)
@@ -158,9 +172,14 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     struct_pts_long  = structure.map({"uptrend":8.0,"ranging":4.0,"downtrend":0.0}).fillna(0.0)
     struct_pts_short = structure.map({"downtrend":8.0,"ranging":4.0,"uptrend":0.0}).fillna(0.0)
 
-    smc_long  = struct_pts_long  + near_ob*8 + bull_fvg*7 + liq_bull*7 + bos_bull*5 + choch_b2*8
+    in_discount = df.get("in_discount", pd.Series(0, index=df.index)).fillna(0)
+    in_premium  = df.get("in_premium",  pd.Series(0, index=df.index)).fillna(0)
+    adx_val     = df.get("adx", pd.Series(20.0, index=df.index)).fillna(20.0)
+    adx_boost   = np.where(adx_val > 30, 3.0, np.where(adx_val > 25, 1.5, 0.0))
+
+    smc_long  = struct_pts_long  + near_ob*8 + bull_fvg*7 + liq_bull*7 + bos_bull*5 + choch_b2*8 + in_discount*4 + adx_boost
     smc_short = struct_pts_short + sup_ob*8  + bear_fvg*7 + liq_bear*7 + bos_bear*5 + \
-                df.get("choch_bear", pd.Series(0,index=df.index)).fillna(0)*8
+                df.get("choch_bear", pd.Series(0,index=df.index)).fillna(0)*8 + in_premium*4 + adx_boost
 
     smc_score = np.where(direction_col == "long",
                          np.minimum(smc_long, 30.0),

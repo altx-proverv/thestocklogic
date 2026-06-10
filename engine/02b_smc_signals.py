@@ -270,7 +270,10 @@ def detect_fvgs(df: pd.DataFrame) -> pd.DataFrame:
                 df.loc[df.index[i], "fvg_size_pct"] = round(gap_size, 2)
                 bear_fvgs.append({"high": prev_low, "low": next_high, "idx": i})
 
-    # Check if current price is filling a previous FVG
+    # Track fully filled FVGs
+    bull_fvg_filled = set()
+    bear_fvg_filled = set()
+
     for i in range(2, n):
         cl = df["close"].iloc[i]
         lo = df["low"].iloc[i]
@@ -279,7 +282,11 @@ def detect_fvgs(df: pd.DataFrame) -> pd.DataFrame:
         for fvg in bull_fvgs:
             if fvg["idx"] >= i:
                 continue
-            # Price returning into bullish FVG from above
+            if fvg["idx"] in bull_fvg_filled:
+                continue
+            if lo < fvg["low"]:
+                bull_fvg_filled.add(fvg["idx"])
+                continue
             if lo <= fvg["high"] and cl >= fvg["low"]:
                 df.loc[df.index[i], "price_in_bull_fvg"] = True
                 break
@@ -287,10 +294,21 @@ def detect_fvgs(df: pd.DataFrame) -> pd.DataFrame:
         for fvg in bear_fvgs:
             if fvg["idx"] >= i:
                 continue
-            # Price returning into bearish FVG from below
+            if fvg["idx"] in bear_fvg_filled:
+                continue
+            if hi > fvg["high"]:
+                bear_fvg_filled.add(fvg["idx"])
+                continue
             if hi >= fvg["low"] and cl <= fvg["high"]:
                 df.loc[df.index[i], "price_in_bear_fvg"] = True
                 break
+
+    df["bull_fvg_filled"] = False
+    df["bear_fvg_filled"] = False
+    for idx in bull_fvg_filled:
+        df.loc[df.index[idx], "bull_fvg_filled"] = True
+    for idx in bear_fvg_filled:
+        df.loc[df.index[idx], "bear_fvg_filled"] = True
 
     return df
 
@@ -379,6 +397,13 @@ def compute_technicals(df: pd.DataFrame) -> pd.DataFrame:
     # ATR
     df["atr"]     = ta.volatility.AverageTrueRange(h, l, c, window=14, fillna=False).average_true_range()
     df["atr_pct"] = (df["atr"] / c * 100).round(2)
+
+    # ADX — trending market filter
+    from ta.trend import ADXIndicator
+    adx_ind = ADXIndicator(h, l, c, window=14, fillna=False)
+    df["adx"]          = adx_ind.adx().round(2)
+    df["adx_trending"] = (df["adx"] > 25).astype(int)
+    df["adx_ranging"]  = (df["adx"] < 20).astype(int)
 
     # RVOL
     df["vol_avg20"]      = v.rolling(20, min_periods=5).mean()
@@ -535,6 +560,35 @@ def compute_smc_signals(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFra
         df["choch_bear"].astype(int)
     ).astype(int)
     df["recent_bos_choch"] = bos_or_choch.rolling(9, min_periods=1).max().astype(int)
+
+    # ── PREMIUM / DISCOUNT ZONES ─────────────────────────────────
+    sh_prices_pd = df.loc[df["swing_high"], "high"]
+    sl_prices_pd = df.loc[df["swing_low"],  "low"]
+    df["last_swing_high"] = sh_prices_pd.reindex(df.index).ffill()
+    df["last_swing_low"]  = sl_prices_pd.reindex(df.index).ffill()
+    df["equilibrium"]     = (df["last_swing_high"] + df["last_swing_low"]) / 2
+    df["in_discount"]     = (df["close"] < df["equilibrium"]).astype(int)
+    df["in_premium"]      = (df["close"] > df["equilibrium"]).astype(int)
+
+    # ── WEEKLY STRUCTURE CHECK ────────────────────────────────────
+    try:
+        weekly = df.set_index("date").resample("W").agg({
+            "open": "first", "high": "max", "low": "min",
+            "close": "last", "volume": "sum"
+        }).dropna().reset_index()
+        if len(weekly) >= 10:
+            weekly = detect_swing_points(weekly.copy(), lookback=3)
+            weekly = detect_market_structure(weekly.copy())
+            weekly = weekly[["date","structure_trend"]].rename(columns={"structure_trend":"weekly_trend"})
+            df = df.merge(weekly, on="date", how="left")
+            df["weekly_trend"] = df["weekly_trend"].ffill().fillna("ranging")
+        else:
+            df["weekly_trend"] = "ranging"
+    except Exception:
+        df["weekly_trend"] = "ranging"
+
+    df["weekly_bullish"] = (df["weekly_trend"] == "uptrend").astype(int)
+    df["weekly_bearish"] = (df["weekly_trend"] == "downtrend").astype(int)
 
     # Warmup flag
     df["is_warmup"] = range(len(df))
