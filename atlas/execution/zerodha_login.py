@@ -98,7 +98,7 @@ def store_token(access_token: str, user_id: str = ""):
         "created_at":   datetime.now(IST).isoformat(),
     }
     r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/broker_tokens",
+        f"{SUPABASE_URL}/rest/v1/broker_tokens?on_conflict=broker",
         headers={**_headers(), "Prefer": "resolution=merge-duplicates,return=minimal"},
         json=record
     )
