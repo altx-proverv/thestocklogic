@@ -636,7 +636,9 @@ async function render(){
   var lc=allToday.filter(function(s){return s.direction==='LONG';}).length;
   var sc=allToday.filter(function(s){return s.direction==='SHORT';}).length;
   document.getElementById('mCount').innerHTML='<span style="color:var(--green)">'+lc+' ↑</span><span style="color:var(--muted2)"> | </span><span style="color:var(--red)">'+sc+' ↓</span>';
-  document.getElementById('mUpdated').textContent=new Date(latestDate).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+  // Use sector heatmap date for UPDATED label (reflects live intraday updates)
+  var _sectorDate=sectors&&sectors.length?sectors[0].signal_date:latestDate;
+  document.getElementById('mUpdated').textContent=new Date(_sectorDate).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
 
   // Intraday list for ticker
   var eodMapToday={};(todayEOD.length?todayEOD:(byDate[latestDate]||[])).forEach(function(s){eodMapToday[s.symbol]=s;});
