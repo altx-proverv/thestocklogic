@@ -267,17 +267,17 @@ def run_btst_scan() -> list:
 
 
 def push_btst_signals(signals: list) -> bool:
-    """Push BTST signals to Supabase."""
+    """Push BTST signals to live_signals table (not EOD signals table)."""
     if not signals:
         log.info("No BTST signals to push")
         return True
 
     today = date.today().isoformat()
 
-    # Clear existing BTST signals for today
+    # Clear existing BTST signals for today from live_signals
     requests.delete(
-        f"{SUPABASE_URL}/rest/v1/signals"
-        f"?signal_date=eq.{today}&signal_type=eq.BTST",
+        f"{SUPABASE_URL}/rest/v1/live_signals"
+        f"?signal_date=eq.{today}&session=eq.btst",
         headers=_headers()
     )
 
@@ -286,7 +286,7 @@ def push_btst_signals(signals: list) -> bool:
         def safe(v, default=0.0):
             try:
                 f = float(v)
-                return default if (f != f) else round(f, 2)  # NaN check
+                return default if (f != f) else round(f, 2)
             except:
                 return default
 
@@ -294,30 +294,32 @@ def push_btst_signals(signals: list) -> bool:
             "signal_date":  today,
             "symbol":       s["symbol"],
             "direction":    "LONG",
-            "grade":        s["grade"],
-            "score":        int(s["score"]),
-            "entry_ref":    safe(s["entry_ref"]),
+            "session":      "btst",
+            "trade_type":   "BTST",
+            "entry":        safe(s["entry_ref"]),
             "entry_low":    safe(s["entry_low"]),
             "entry_high":   safe(s["entry_high"]),
             "sl":           safe(s["sl"]),
             "target_1":     safe(s["target_1"]),
             "target_2":     safe(s["target_2"]),
             "setup_name":   s["setup_name"],
-            "trade_type":   "BTST",
             "delivery_pct": safe(s.get("delivery_pct", 0)),
             "rvol":         safe(s.get("rvol", 0)),
             "rsi":          safe(s.get("rsi", 0)),
             "sl_pct":       safe(s.get("sl_pct", 0)),
+            "score":        safe(s.get("score", 0)),
+            "grade":        s.get("grade", "B"),
+            "signal_time":  datetime.now(IST).strftime("%H:%M"),
         })
 
     r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/signals",
+        f"{SUPABASE_URL}/rest/v1/live_signals",
         headers=_headers(),
         json=records
     )
 
     if r.status_code in (200, 201):
-        log.info(f"Pushed {len(records)} BTST signals to Supabase")
+        log.info(f"Pushed {len(records)} BTST signals to live_signals")
         return True
     else:
         log.error(f"Push failed: {r.status_code} {r.text[:100]}")
