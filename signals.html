@@ -683,7 +683,7 @@ async function render(){
         if(s.direction==='SHORT'&&pdl>0&&ltp<pdl)pdLabel=' <span style="font-size:9px;color:#ffb347">↓PDL</span>';
         return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted2)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>'+pdLabel;
       }).join('<span style="color:var(--line);margin:0 8px">|</span>');
-      tickerInner.innerHTML=items+'<span style="margin:0 40px">·</span>'+items;
+      var _sep='<span style="margin:0 40px;color:var(--muted2)">\u00b7</span>';tickerInner.innerHTML=items+_sep+items+_sep;var _half=tickerInner.scrollWidth/2;var _dur=Math.max(8,Math.round(_half/70));tickerInner.style.animationDuration=_dur+'s';
     } else if(tickerEl){
       tickerEl.classList.remove('active');
     }
