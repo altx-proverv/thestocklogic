@@ -17,6 +17,10 @@
       "destination": "/atlas.html"
     },
     {
+      "source": "/tsl-dashboard",
+      "destination": "/tsl-dashboard.html"
+    },
+    {
       "source": "/",
       "destination": "/landing.html"
     }
