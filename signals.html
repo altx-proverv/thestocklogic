@@ -221,7 +221,6 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   <a href="/" class="logo" style="text-decoration:none">THE STOCK LOGIC</a>
   <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
     <a href="/dashboard" style="font-size:10px;letter-spacing:1px;color:var(--white);text-decoration:none;padding:4px 8px;border:1px solid var(--line);background:var(--s2)">EQUITY</a>
-    <a href="/tsl-dashboard" style="font-size:10px;letter-spacing:1px;color:var(--sky);text-decoration:none;padding:4px 8px;border:1px solid rgba(77,184,255,0.4);background:rgba(77,184,255,0.06)">TSL DASHBOARD</a>
     <span id="atlasNav" style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">ATLAS 🔒</span>
     <span style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">F&amp;O 🔒</span>
     <span style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">MCX 🔒</span>
@@ -803,6 +802,7 @@ function updateNavAuth() {
       '<button class="user-dropdown-btn" onclick="toggleDropdown()">'+name+' ▾</button>'+
       '<div class="user-dropdown-menu" id="userDropdownMenu">'+
         '<span style="font-size:10px;color:var(--muted2);padding:8px 14px;display:block;border-bottom:1px solid var(--line2)">'+_user.email+'</span>'+
+        '<a href="/tsl-dashboard" style="display:block;padding:8px 14px;font-size:11px;color:var(--sky);text-decoration:none;border-bottom:1px solid var(--line2)">TSL DASHBOARD</a>'+
         '<button onclick="showResetPassword()">CHANGE PASSWORD</button>'+
         '<button class="danger" onclick="signOut()">SIGN OUT</button>'+
       '</div>'+
