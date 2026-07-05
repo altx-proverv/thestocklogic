@@ -616,10 +616,13 @@ function renderSentimentPanel(sectors){
     else if(sc<-0.3){bg='rgba(255,77,109,'+(0.10+intensity*0.45)+')';txt='#ff4d6d';}
     else{bg='rgba(107,120,136,0.14)';txt='#9aa7b6';}
     var adv=s.advancing||0,dec=s.declining||0;
+    var r1=(s.ret_1d!=null)?s.ret_1d:0;
+    var rcol=(r1>0)?'#00d68f':(r1<0)?'#ff4d6d':'#6b7888';
     return '<div style="border-radius:8px;background:'+bg+';padding:10px 11px">'
       +'<div style="font-weight:700;font-size:12px;color:'+txt+'">'+s.sector+'</div>'
-      +'<div style="font-family:monospace;font-size:14px;font-weight:700;color:'+txt+';margin-top:3px">'+(sc>0?'+':'')+sc.toFixed(2)+'</div>'
-      +'<div style="font-family:monospace;font-size:9px;color:#6b7888;margin-top:2px">'+adv+'\u25b2 '+dec+'\u25bc</div>'
+      +'<div style="font-family:monospace;font-size:15px;font-weight:700;color:'+txt+';margin-top:3px">'+(sc>0?'+':'')+sc.toFixed(2)+'<span style="font-size:8px;color:#6b7888;font-weight:400;margin-left:3px">MOM</span></div>'
+      +'<div style="font-family:monospace;font-size:11px;font-weight:700;color:'+rcol+';margin-top:1px">'+(r1>0?'+':'')+r1.toFixed(2)+'%<span style="font-size:8px;color:#6b7888;font-weight:400;margin-left:3px">1D</span></div>'
+      +'<div style="font-family:monospace;font-size:9px;color:#6b7888;margin-top:3px">'+adv+'\u25b2 '+dec+'\u25bc</div>'
       +'</div>';
   }).join('');
   document.getElementById('sectorTiles').innerHTML=tiles;
