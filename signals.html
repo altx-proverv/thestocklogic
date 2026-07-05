@@ -242,6 +242,35 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   <div class="mkt-pill"><span class="mkt-key">TODAY</span><span class="mkt-val" id="mCount">&mdash;</span></div>
   <div class="mkt-pill"><span class="mkt-key">UPDATED</span><span class="mkt-val neut" id="mUpdated">&mdash;</span></div>
 </div>
+
+<div id="sentimentPanel" style="max-width:1240px;margin:20px auto 0;padding:0 20px;display:none">
+  <div style="display:grid;grid-template-columns:300px 1fr;gap:16px">
+    <div style="border:1px solid var(--line);border-radius:12px;background:#0f141c;padding:18px 16px">
+      <div style="font-family:monospace;font-size:10px;letter-spacing:.14em;color:#6b7888;text-transform:uppercase;margin-bottom:2px">Market Sentiment</div>
+      <div style="font-family:monospace;font-size:9px;color:#6b7888;margin-bottom:12px">EOD breadth</div>
+      <div style="position:relative;width:100%;max-width:240px;margin:0 auto">
+        <svg viewBox="0 0 200 118" style="width:100%">
+          <path d="M 20 108 A 80 80 0 0 1 180 108" fill="none" stroke="#1a222e" stroke-width="13" stroke-linecap="round"/>
+          <path d="M 20 108 A 80 80 0 0 1 62 44" fill="none" stroke="#ff4d6d" stroke-width="13" stroke-linecap="round"/>
+          <path d="M 138 44 A 80 80 0 0 1 180 108" fill="none" stroke="#00d68f" stroke-width="13" stroke-linecap="round"/>
+          <line id="sentNeedle" x1="100" y1="108" x2="100" y2="42" stroke="#e6edf3" stroke-width="3" stroke-linecap="round" transform="rotate(0 100 108)"/>
+          <circle cx="100" cy="108" r="5" fill="#e6edf3"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:8px;color:#6b7888;margin-top:-6px">
+          <span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:10px">
+        <div id="sentLabel" style="font-size:18px;font-weight:800;letter-spacing:.02em">&mdash;</div>
+        <div id="sentDetail" style="font-family:monospace;font-size:10px;color:#6b7888;margin-top:3px">&mdash;</div>
+      </div>
+    </div>
+    <div style="border:1px solid var(--line);border-radius:12px;background:#0f141c;padding:18px 16px">
+      <div style="font-family:monospace;font-size:10px;letter-spacing:.14em;color:#6b7888;text-transform:uppercase;margin-bottom:14px">Sector Heatmap &middot; momentum</div>
+      <div id="sectorTiles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:6px"></div>
+    </div>
+  </div>
+</div>
 <div class="main">
   <div id="userBar" style="display:none" class="user-bar">
     <span>Signed in as <span class="user-email" id="userEmailLabel"></span></span>
@@ -559,6 +588,44 @@ function filterCards(f){
     else if(f==='short') card.style.display=(dir==='SHORT'?'':'none');
   });
 }
+function renderSentimentPanel(sectors){
+  if(!sectors||!sectors.length)return;
+  var panel=document.getElementById('sentimentPanel');if(!panel)return;
+  var seen={},latest=[];
+  sectors.forEach(function(s){if(!(s.sector in seen)){seen[s.sector]=1;latest.push(s);}});
+  var totAdv=0,totDec=0;
+  latest.forEach(function(s){totAdv+=(s.advancing||0);totDec+=(s.declining||0);});
+  var totalStocks=totAdv+totDec;
+  var breadthPct=totalStocks?(totAdv/totalStocks*100):50;
+  var angle=(breadthPct-50)/50*90;
+  document.getElementById('sentNeedle').setAttribute('transform','rotate('+angle+' 100 108)');
+  var lbl,col;
+  if(breadthPct>=60){lbl='BULLISH';col='#00d68f';}
+  else if(breadthPct>=52){lbl='MILD BULLISH';col='#00d68f';}
+  else if(breadthPct>48){lbl='NEUTRAL';col='#9aa7b6';}
+  else if(breadthPct>40){lbl='MILD BEARISH';col='#ffb454';}
+  else{lbl='BEARISH';col='#ff4d6d';}
+  var sl=document.getElementById('sentLabel');sl.textContent=lbl;sl.style.color=col;
+  document.getElementById('sentDetail').textContent=Math.round(breadthPct)+'% advancing ('+totAdv+'/'+totalStocks+')';
+  var scores=latest.map(function(s){return s.momentum_score||0;});
+  var maxAbs=Math.max(1,Math.max.apply(null,scores.map(Math.abs)));
+  var sorted=latest.slice().sort(function(a,b){return (b.momentum_score||0)-(a.momentum_score||0);});
+  var tiles=sorted.map(function(s){
+    var sc=s.momentum_score||0;var intensity=Math.min(1,Math.abs(sc)/maxAbs);var bg,txt;
+    if(sc>0.3){bg='rgba(0,214,143,'+(0.10+intensity*0.45)+')';txt='#00d68f';}
+    else if(sc<-0.3){bg='rgba(255,77,109,'+(0.10+intensity*0.45)+')';txt='#ff4d6d';}
+    else{bg='rgba(107,120,136,0.14)';txt='#9aa7b6';}
+    var adv=s.advancing||0,dec=s.declining||0;
+    return '<div style="border-radius:8px;background:'+bg+';padding:10px 11px">'
+      +'<div style="font-weight:700;font-size:12px;color:'+txt+'">'+s.sector+'</div>'
+      +'<div style="font-family:monospace;font-size:14px;font-weight:700;color:'+txt+';margin-top:3px">'+(sc>0?'+':'')+sc.toFixed(2)+'</div>'
+      +'<div style="font-family:monospace;font-size:9px;color:#6b7888;margin-top:2px">'+adv+'\u25b2 '+dec+'\u25bc</div>'
+      +'</div>';
+  }).join('');
+  document.getElementById('sectorTiles').innerHTML=tiles;
+  panel.style.display='block';
+}
+
 async function render(){
   var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices()]);
   var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4];
@@ -596,6 +663,7 @@ async function render(){
     document.getElementById('mTop').innerHTML=topSecs||'&mdash;';
     document.getElementById('mBot').innerHTML=botSecs||'&mdash;';
   }
+  renderSentimentPanel(sectors);
   if(!eodAll||!eodAll.length){document.getElementById('liveLabel').textContent='NO DATA';document.getElementById('signalContainer').innerHTML='<div class="loading">No signals found.</div>';return;}
   var byDate={};
   eodAll.forEach(function(s){if(!byDate[s.signal_date])byDate[s.signal_date]=[];byDate[s.signal_date].push(s);});
