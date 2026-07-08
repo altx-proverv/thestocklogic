@@ -51,6 +51,7 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .orb-ticker-inner{display:flex;gap:20px;white-space:nowrap;font-size:11px;letter-spacing:1px;animation:orb-scroll 20s linear infinite}
 .orb-ticker-inner:hover{animation-play-state:paused}
 @keyframes orb-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+@keyframes orb-scroll-px{0%{transform:translateX(0)}100%{transform:translateX(calc(-1 * var(--orbShift)))}}
 .orb-long{color:#00d68f;font-weight:600}
 .orb-short{color:#ff4d6d;font-weight:600}
 .orb-label{color:var(--muted2);font-size:9px;letter-spacing:2px;margin-right:8px}
@@ -760,7 +761,29 @@ async function render(){
         if(s.direction==='SHORT'&&pdl>0&&ltp<pdl)pdLabel=' <span style="font-size:9px;color:#ffb347">↓PDL</span>';
         return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted2)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>'+pdLabel;
       }).join('<span style="color:var(--line);margin:0 8px">|</span>');
-      var _sep='<span style="margin:0 40px;color:var(--muted2)">\u00b7</span>';tickerInner.innerHTML=items+_sep+items+_sep;var _half=tickerInner.scrollWidth/2;var _dur=Math.max(8,Math.round(_half/70));tickerInner.style.animationDuration=_dur+'s';
+      var _sep='<span style="margin:0 40px;color:var(--muted2)">\u00b7</span>';
+      // render ONCE first to measure true content width
+      tickerInner.style.animation='none';
+      tickerInner.innerHTML=items;
+      (function(){
+        var containerW=tickerEl.offsetWidth;
+        var singleW=tickerInner.scrollWidth;
+        if(singleW<=containerW-20){
+          // FITS — no scroll (desktop / few symbols)
+          tickerInner.style.animation='none';
+          tickerInner.style.transform='translateX(0)';
+          tickerInner.style.justifyContent='center';
+        } else {
+          // OVERFLOWS — duplicate for seamless loop, scroll exactly one copy+sep width
+          tickerInner.style.justifyContent='flex-start';
+          tickerInner.innerHTML=items+_sep+items+_sep;
+          // one sequence = (singleW + sep width). measure it precisely:
+          var seqW=tickerInner.scrollWidth/2;
+          tickerInner.style.setProperty('--orbShift',seqW+'px');
+          var _dur=Math.max(8,Math.round(seqW/70));
+          tickerInner.style.animation='orb-scroll-px '+_dur+'s linear infinite';
+        }
+      })();
     } else if(tickerEl){
       tickerEl.classList.remove('active');
     }
