@@ -767,8 +767,12 @@ async function render(){
       tickerInner.innerHTML=items;
       requestAnimationFrame(function(){requestAnimationFrame(function(){
         var containerW=tickerEl.offsetWidth;
+        // measure TRUE content width: flex container reports container width via scrollWidth,
+        // so force max-content sizing to read the natural width of the symbols
+        tickerInner.style.width='max-content';
         var singleW=tickerInner.scrollWidth;
-        if(singleW<=containerW-20){
+        tickerInner.style.width='';
+        if(singleW<=containerW){
           // FITS — no scroll (desktop / few symbols)
           tickerInner.style.animation='none';
           tickerInner.style.transform='translateX(0)';
