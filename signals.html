@@ -765,7 +765,7 @@ async function render(){
       // render ONCE first to measure true content width
       tickerInner.style.animation='none';
       tickerInner.innerHTML=items;
-      (function(){
+      requestAnimationFrame(function(){requestAnimationFrame(function(){
         var containerW=tickerEl.offsetWidth;
         var singleW=tickerInner.scrollWidth;
         if(singleW<=containerW-20){
@@ -783,7 +783,7 @@ async function render(){
           var _dur=Math.max(8,Math.round(seqW/70));
           tickerInner.style.animation='orb-scroll-px '+_dur+'s linear infinite';
         }
-      })();
+      });});
     } else if(tickerEl){
       tickerEl.classList.remove('active');
     }
