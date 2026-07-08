@@ -759,7 +759,7 @@ async function render(){
         var ltp=parseFloat(s.ltp||s.entry||0);
         if(s.direction==='LONG'&&pdh>0&&ltp>pdh)pdLabel=' <span style="font-size:9px;color:#ffb347">↑PDH</span>';
         if(s.direction==='SHORT'&&pdl>0&&ltp<pdl)pdLabel=' <span style="font-size:9px;color:#ffb347">↓PDL</span>';
-        return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted2)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>'+pdLabel;
+        return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>'+pdLabel;
       }).join('<span style="color:var(--line);margin:0 8px">|</span>');
       var _sep='<span style="margin:0 40px;color:var(--muted2)">\u00b7</span>';
       // render ONCE first to measure true content width
