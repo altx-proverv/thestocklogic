@@ -748,7 +748,7 @@ async function render(){
         if(s.direction==='LONG'){return pdh===0||ltp>pdh;}
         else{return pdl===0||ltp<pdl;}
       });
-      var tickerSource=confirmedList.length>0?confirmedList:intradayList;
+      var tickerSource=intradayList;
       var items=tickerSource.map(function(item){
         var s=item.sig;
         var cls=s.direction==='LONG'?'orb-long':'orb-short';
