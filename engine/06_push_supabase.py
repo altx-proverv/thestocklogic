@@ -101,9 +101,27 @@ def push_signals(target_date: str = None):
     log.info(f"Signals to push: {len(day)}")
 
     # Build records
+    # Zone-entry gate: only signals with a validated zone + structural stop.
+    if "entry_valid" in day.columns:
+        _before = len(day)
+        day = day[day["entry_valid"].fillna(False).astype(bool)]
+        log.info(f"Zone-entry filter: {len(day)}/{_before} signals valid")
+        if day.empty:
+            log.warning("No signals passed zone-entry validation")
+            return
+
     records = []
+    _skipped = 0
     for _, row in day.iterrows():
-        entry = row.get("entry_ref", row.get("close", 0))
+        # NO fallback to close. That fallback was the original defect.
+        entry = row.get("entry_ref")
+        try:
+            entry = float(entry)
+        except (TypeError, ValueError):
+            entry = 0.0
+        if entry <= 0:
+            _skipped += 1
+            continue
         records.append({
             "signal_date":      d.strftime("%Y-%m-%d"),
             "symbol":           str(row.get("symbol", "")),
@@ -112,16 +130,16 @@ def push_signals(target_date: str = None):
             "score":            float(row.get("total_score", 0)),
             "setup_name":       str(row.get("setup_name", "")),
             "entry_ref":        float(entry) if entry else None,
-            "entry_low":        float(row.get("entry_low", entry*0.998)) if entry else None,
-            "entry_high":       float(row.get("entry_high", entry*1.002)) if entry else None,
+            "entry_low":        float(row.get("entry_low")) if row.get("entry_low") else None,
+            "entry_high":       float(row.get("entry_high")) if row.get("entry_high") else None,
             "sl":               float(row.get("sl", 0)) if row.get("sl") else None,
-            "target_1":         float(row.get("target_1", 0)) if row.get("target_1") else None,
-            "target_2":         float(row.get("target_2", 0)) if row.get("target_2") else None,
-            "sl_pct":           float(row.get("sl_pct", 0)) if row.get("sl_pct") else None,
+            "stop_pct":         float(row.get("stop_pct", 0)) if row.get("stop_pct") else None,
+            "entry_dist_pct":   float(row.get("entry_dist_pct", 0)) if row.get("entry_dist_pct") is not None else None,
+            "notional":         float(row.get("notional", 0)) if row.get("notional") else None,
+            "product":          str(row.get("product", "CNC")),
+            "zone_source":      str(row.get("active_zone_source", "")),
             "qty":              int(row.get("qty", 0)) if row.get("qty") else None,
             "risk_inr":         float(row.get("risk_inr", 0)) if row.get("risk_inr") else None,
-            "rr_1":             float(row.get("rr_1", 2.0)),
-            "rr_2":             float(row.get("rr_2", 3.0)),
             "rsi":              float(row.get("rsi", 0)) if row.get("rsi") else None,
             "rvol":             float(row.get("rvol", 0)) if row.get("rvol") else None,
             "atr_pct":          float(row.get("atr_pct", 0)) if row.get("atr_pct") else None,
@@ -187,8 +205,10 @@ def notify_atlas(records: list):
         from atlas.execution.trade_executor import queue_signal
         from atlas.config import MIN_CONVICTION_SCORE
 
-        qualifying = [r for r in records if float(r.get("score", 0)) >= MIN_CONVICTION_SCORE]
-        log.info(f"ATLAS: {len(qualifying)} signals qualify for notification (score >= {MIN_CONVICTION_SCORE})")
+        # Score gate removed: non-predictive per validation, and the 82 threshold
+        # sat above the observed max (~79), gating every signal to zero.
+        qualifying = records
+        log.info(f"ATLAS: {len(qualifying)} zone-validated signals available")
 
         for record in qualifying:
             signal = {
