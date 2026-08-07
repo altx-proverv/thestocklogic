@@ -107,12 +107,15 @@ def place_order(
     order_type: str = "MARKET",
     price: float = 0,
     sl: float = 0,
-    tag: str = "ATLAS"
+    tag: str = "ATLAS",
+    product: str = "MIS"
 ) -> dict:
     """
     Place an order via Zerodha.
     direction: LONG or SHORT
     order_type: MARKET or LIMIT
+    product: CNC (delivery -- longs held overnight) or MIS (intraday).
+             Defaults to MIS so existing callers are unaffected.
     Returns order result dict.
     """
     from atlas.risk.kill_switch import check as kill_switch_check
@@ -120,8 +123,10 @@ def place_order(
     # Kill switch check — non-bypassable
     ks = kill_switch_check()
     if not ks:
-        log.warning(f"Order BLOCKED by kill switch: {ks.reason}")
-        return {"success": False, "reason": ks.reason, "blocked_by": "kill_switch"}
+        # kill_switch_check may return a plain bool; do not assume .reason
+        _reason = getattr(ks, "reason", "kill switch active")
+        log.warning(f"Order BLOCKED by kill switch: {_reason}")
+        return {"success": False, "reason": _reason, "blocked_by": "kill_switch"}
 
     kite = get_kite()
     if not kite:
@@ -141,7 +146,9 @@ def place_order(
             "quantity":        qty,
             "order_type":      KiteConnect.ORDER_TYPE_MARKET if order_type == "MARKET"
                                else KiteConnect.ORDER_TYPE_LIMIT,
-            "product":         KiteConnect.PRODUCT_MIS,  # Intraday
+            "product":         (KiteConnect.PRODUCT_CNC
+                                if str(product).upper() == "CNC"
+                                else KiteConnect.PRODUCT_MIS),
             "validity":        KiteConnect.VALIDITY_DAY,
             "tag":             tag,
         }
@@ -161,6 +168,7 @@ def place_order(
             "direction": direction,
             "qty":      qty,
             "type":     order_type,
+            "product":  str(product).upper(),
         }
 
     except Exception as e:
