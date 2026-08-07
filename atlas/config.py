@@ -34,7 +34,7 @@ INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "150000"))  # INR 1
 CAPITAL_PER_TRADE    = 50000.0   # Fixed INR 50K per CNC trade
 DAILY_LOSS_CAP_PCT   = 0.02      # 2% of allocated capital = INR 3,000
 WEEKLY_DRAWDOWN_PCT  = 0.05      # 5% of allocated capital = INR 7,500
-MAX_RISK_PER_TRADE   = 5000      # Max SL loss per trade INR 5,000
+MAX_RISK_PER_TRADE   = 3000      # Max SL loss per trade INR 5,000
 MAX_OPEN_POSITIONS   = 3
 MIN_CONVICTION_SCORE = 82
 ELITE_CONVICTION     = 85
@@ -43,6 +43,52 @@ MAX_LIVE_SIGNALS     = 3
 SIGNAL_DECAY_MINUTES = 30
 MIN_RVOL             = 1.5
 MIN_RR               = 2.0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TSL ATLAS TRADING RULES — single source of truth (added 6 Jul 2026)
+# Phase: TRAINING — agent ENTERS trades only. No auto SL/target/exit.
+# ═══════════════════════════════════════════════════════════════════
+
+# Rule 3 — max notional exposure per trade
+MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
+
+# Rule 4 — quantity must be a multiple of this
+QUANTITY_MULTIPLE = 5
+
+# Rule 6 — hard daily trade cap
+MAX_TRADES_PER_DAY = 3
+
+# Rules 1, 2 — agent must NOT place SL or target orders
+ALLOW_AUTOMATED_STOP_LOSS = False
+ALLOW_AUTOMATED_TARGET     = False
+
+# Phase switch — exit management (SL/target/trailing/risk) OFF this phase.
+# Scalable seam: flip True in a later phase to enable end-to-end management.
+ENABLE_EXIT_MANAGEMENT = False
+
+# Master live-trading gate — DEFAULT DENY. Must be deliberately enabled.
+LIVE_TRADING_ENABLED = os.environ.get("ATLAS_LIVE", "false").lower() == "true"
+
+# Rules 8, 9, 10, 11 — regime → side hierarchy
+ALLOW_LONG_IN_BULLISH   = True
+ALLOW_SHORT_IN_BULLISH  = False
+ALLOW_LONG_IN_BEARISH   = False
+ALLOW_SHORT_IN_BEARISH  = True
+SHORT_PRODUCT_TYPE      = "MIS"          # rule 10 — shorts intraday only
+ALLOW_OVERNIGHT_SHORT   = False
+DEFAULT_ON_UNKNOWN_REGIME = "CASH"       # unknown/stale regime → no trade
+
+# Rule 16 — short margin. ~20% of notional for MIS intraday, but NEVER
+# treat as guaranteed — always prefer broker's live margin check when available.
+SHORT_MARGIN_PCT_ESTIMATE = 0.20         # estimate only; broker value wins
+
+# Entry-range gate — enter ONLY if live price is within the signal's
+# [entry_low, entry_high] band. Applies to LONG and SHORT. No chasing.
+ENFORCE_ENTRY_RANGE = True
+
+# Funds safety buffer (fees/taxes/slippage) — applied before funds check.
+FUNDS_SAFETY_BUFFER_PCT = 0.02           # 2% buffer; configurable
 
 SESSION_PRE_MARKET  = (9,  0,  9, 15)
 SESSION_OPENING     = (9, 15,  9, 45)

@@ -24,7 +24,7 @@ SMC_DIR     = Path("data/processed/smc")
 SIGNALS_DIR = Path("data/processed/signals_v2")
 PLAYBOOKS   = Path("data/processed/signals_v2/playbooks")
 
-MAX_LOSS_INR  = 5000.0
+MAX_LOSS_INR  = 3000.0
 MIN_SL_PCT    = 0.015
 MAX_SL_PCT    = 0.02
 MIN_RR        = 2.0

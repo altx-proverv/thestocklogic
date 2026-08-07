@@ -117,14 +117,23 @@ def evaluate(sig, stock_df):
         day_low  = float(stock_df.loc[d, "low"])
 
         if direction == "LONG":
-            if day_low <= sl:
+            hit_sl = day_low  <= sl
+            hit_t1 = day_high >= t1
+            # Both touched same day: sequence unknowable from daily OHLC
+            if hit_sl and hit_t1:
+                outcome = "AMBIGUOUS"; exit_price = None; exit_day = d; days_held = i+1; break
+            if hit_sl:
                 outcome = "LOSS"; exit_price = sl; exit_day = d; days_held = i+1; break
-            if day_high >= t1:
+            if hit_t1:
                 outcome = "WIN_T1"; exit_price = t1; exit_day = d; days_held = i+1; break
         else:
-            if day_high >= sl:
+            hit_sl = day_high >= sl
+            hit_t1 = day_low  <= t1
+            if hit_sl and hit_t1:
+                outcome = "AMBIGUOUS"; exit_price = None; exit_day = d; days_held = i+1; break
+            if hit_sl:
                 outcome = "LOSS"; exit_price = sl; exit_day = d; days_held = i+1; break
-            if day_low <= t1:
+            if hit_t1:
                 outcome = "WIN_T1"; exit_price = t1; exit_day = d; days_held = i+1; break
 
     if outcome == "WIN_T1":

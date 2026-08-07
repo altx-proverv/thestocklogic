@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import SUPABASE_URL, SUPABASE_KEY, MIN_CONVICTION_SCORE
-from atlas.execution.trade_executor import queue_signal
+from atlas.execution.atlas_entry import enter_trade
 from atlas.reporting.telegram import send
 
 logging.basicConfig(level=logging.INFO,
@@ -75,6 +75,9 @@ def run():
             "score":      float(sig.get("score", 0)),
             "entry_ref":  float(sig.get("entry_ref", 0)),
             "entry":      float(sig.get("entry_ref", 0)),
+            "entry_low":  float(sig.get("entry_low", 0) or 0),
+            "entry_high": float(sig.get("entry_high", 0) or 0),
+            "structure_trend": sig.get("structure_trend", ""),
             "sl":         float(sig.get("sl", 0)),
             "target_1":   float(sig.get("target_1", 0)),
             "target_2":   float(sig.get("target_2", 0)),
@@ -83,7 +86,7 @@ def run():
             "grade":      sig.get("grade", "B"),
             "session":    "opening",
         }
-        result = queue_signal(atlas_signal)
+        result = enter_trade(atlas_signal)
         log.info(f"Queued: {sig['symbol']} score:{sig.get('score')} — {result.get('status')}")
 
 

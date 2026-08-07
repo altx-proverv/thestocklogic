@@ -31,6 +31,72 @@ def conviction_multiplier(conviction: float) -> float:
     else: return 0.6
 
 
+def size_by_notional(entry_price: float, direction: str = "LONG", available_funds: float = None) -> dict:
+    """
+    ATLAS position sizing — rules 3,4,5,16,17.
+    Sizes off ₹1L NOTIONAL cap. No SL dependency (agent places no SL this phase).
+
+      raw_qty  = floor(MAX_NOTIONAL / entry_price)          # rule 3
+      qty      = floor(raw_qty / 5) * 5                      # rule 4 (round DOWN)
+      while qty * entry > MAX_NOTIONAL: qty -= 5             # rule 5
+      if qty < 5: reject                                    # rule 4 minimum
+
+    LONG (CNC)  : needs actual funds up to ₹1L              # rule 17
+    SHORT (MIS) : ₹1L gross sell value, ~20% margin used    # rule 16
+    """
+    from atlas.config import (
+        MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
+        SHORT_MARGIN_PCT_ESTIMATE, FUNDS_SAFETY_BUFFER_PCT,
+    )
+    direction = str(direction).upper()
+    product   = "MIS" if direction == "SHORT" else "CNC"
+
+    if not entry_price or entry_price <= 0:
+        return {"qty": 0, "error": "Invalid entry price"}
+
+    # rule 3 + 4: raw qty within ₹1L, rounded DOWN to multiple of 5
+    raw_qty = math.floor(MAX_NOTIONAL_PER_TRADE / entry_price)
+    qty     = (raw_qty // QUANTITY_MULTIPLE) * QUANTITY_MULTIPLE
+
+    # rule 5: reduce by 5 until notional fits ₹1L
+    while qty > 0 and qty * entry_price > MAX_NOTIONAL_PER_TRADE:
+        qty -= QUANTITY_MULTIPLE
+
+    # rule 4 minimum
+    if qty < QUANTITY_MULTIPLE:
+        return {"qty": 0, "error": f"Min {QUANTITY_MULTIPLE} shares exceeds ₹{MAX_NOTIONAL_PER_TRADE:,.0f} at ₹{entry_price:,.0f}"}
+
+    notional = qty * entry_price
+
+    if product == "CNC":  # LONG — rule 17: needs real funds
+        capital_required = notional
+        margin_note = "full funds"
+    else:                 # SHORT — rule 16: gross ₹1L, ~20% margin (estimate)
+        capital_required = notional * SHORT_MARGIN_PCT_ESTIMATE
+        margin_note = f"~{int(SHORT_MARGIN_PCT_ESTIMATE*100)}% margin (estimate — broker value wins)"
+
+    result = {
+        "qty":              qty,
+        "product":          product,
+        "direction":        direction,
+        "entry_price":      entry_price,
+        "notional":         round(notional, 2),
+        "capital_required": round(capital_required, 2),
+        "margin_note":      margin_note,
+        "within_cap":       notional <= MAX_NOTIONAL_PER_TRADE,
+    }
+
+    # funds check (if provided) with buffer
+    if available_funds is not None:
+        need = capital_required * (1 + FUNDS_SAFETY_BUFFER_PCT)
+        result["funds_ok"] = available_funds >= need
+        result["funds_need"] = round(need, 2)
+        result["funds_available"] = round(available_funds, 2)
+
+    log.info(f"Sizing[{product}] {direction}: {qty} @ ₹{entry_price:,.1f} | notional ₹{notional:,.0f} | need ₹{capital_required:,.0f} ({margin_note})")
+    return result
+
+
 def calculate(
     entry_price: float,
     sl_price: float,
