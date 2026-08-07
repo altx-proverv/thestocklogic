@@ -1,10 +1,20 @@
 """
-ATLAS Signal — Market Open Notifier
-=====================================
-Runs at 9:15 AM IST daily.
-Sends qualifying EOD signals from last night to Telegram.
-These are the SMC/OB-based daily chart setups ready for today.
-Only sends top 3 by conviction score.
+ATLAS Signal — Market Open Entry
+=================================
+Runs at 9:37 AM IST (AFTER the 9:30 opening range completes — index_state
+returns WAIT before 9:30, so an earlier cron can never pass Gate 1).
+
+Fetches the LATEST AVAILABLE signal batch (written ~18:35 IST the previous
+trading day) and routes each candidate through the atlas_entry gate stack.
+
+MIGRATION NOTES (step 1):
+  - REMOVED score gate. MIN_CONVICTION_SCORE=82 was blocking every signal
+    (real batches top out ~79) and score is non-predictive per validation.
+  - Date lookup no longer uses date.today() — that queried signals that would
+    not be written for another 9 hours. Now takes max(signal_date).
+  - Dedup by symbol (batches contain duplicates, e.g. BAJFINANCE x2).
+  - Ordering by score is PROVISIONAL and marked TODO-STEP4 — to be replaced
+    by cross-sectional momentum + RS ranking.
 """
 
 import sys, requests, logging
@@ -12,14 +22,26 @@ from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from atlas.config import SUPABASE_URL, SUPABASE_KEY, MIN_CONVICTION_SCORE
+from atlas.config import SUPABASE_URL, SUPABASE_KEY, MAX_TRADES_PER_DAY
 from atlas.execution.atlas_entry import enter_trade
 from atlas.reporting.telegram import send
 
-logging.basicConfig(level=logging.INFO,
-                   format="%(asctime)s [ATLAS-OPEN] %(message)s")
-log = logging.getLogger(__name__)
+# NOTE: getLogger, not basicConfig. kill_switch.py calls basicConfig at import
+# time and wins the root logger, so this module's lines were being tagged
+# [ATLAS-RISK]. Explicit logger avoids the hijack.
+log = logging.getLogger("ATLAS-OPEN")
+if not log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [ATLAS-OPEN] %(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# Abort if the newest signal batch is older than this. Catches a silently
+# broken EOD pipeline (bhavcopy/02b/03b failure) instead of trading stale data.
+MAX_BATCH_AGE_DAYS = 5
 
 
 def _headers():
@@ -30,64 +52,122 @@ def _headers():
     }
 
 
-def get_today_signals() -> list:
-    """Fetch today's EOD signals from Supabase."""
-    today = date.today().isoformat()
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/signals"
-        f"?signal_date=eq.{today}"
-        f"&score=gte.{MIN_CONVICTION_SCORE}"
-        f"&order=score.desc&limit=3",
-        headers=_headers()
-    )
-    if r.status_code == 200:
-        return r.json()
+def get_latest_batch_date() -> str:
+    """Newest signal_date present in the table. Calendar-free: handles
+    weekends and NSE holidays without a trading-calendar module."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/signals"
+            f"?select=signal_date&order=signal_date.desc&limit=1",
+            headers=_headers(), timeout=10)
+        if r.status_code == 200 and r.json():
+            return r.json()[0].get("signal_date", "")
+    except Exception as e:
+        log.warning(f"batch date fetch failed: {e}")
+    return ""
+
+
+def get_signals(batch_date: str) -> list:
+    """All signals for the given batch date. No score filter."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/signals"
+            f"?signal_date=eq.{batch_date}"
+            f"&order=score.desc",          # TODO-STEP4: momentum + RS ranking
+            headers=_headers(), timeout=15)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        log.warning(f"signal fetch failed: {e}")
     return []
+
+
+def dedupe(signals: list) -> list:
+    """One row per symbol. Input is score-ordered, so first occurrence wins."""
+    seen, out = set(), []
+    for s in signals:
+        sym = s.get("symbol")
+        if sym and sym not in seen:
+            seen.add(sym)
+            out.append(s)
+    return out
+
+
+def _stale(batch_date: str) -> bool:
+    try:
+        age = (datetime.now(IST).date() - date.fromisoformat(batch_date)).days
+        if age > MAX_BATCH_AGE_DAYS:
+            log.error(f"STALE BATCH — newest signals are {age} days old ({batch_date})")
+            return True
+        log.info(f"Batch {batch_date} — {age} day(s) old")
+    except Exception as e:
+        log.warning(f"staleness check failed: {e}")
+    return False
 
 
 def run():
     now = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
-    log.info(f"Market open signal delivery — {now}")
+    log.info(f"Market open entry run — {now}")
 
-    signals = get_today_signals()
-    if not signals:
-        log.info("No qualifying signals for today")
-        send(
-            f"📊 <b>ATLAS MARKET OPEN</b>\n"
-            f"No qualifying signals today (score < {MIN_CONVICTION_SCORE})\n"
-            f"Waiting for ORB scan at 9:35 AM"
-        )
+    batch_date = get_latest_batch_date()
+    if not batch_date:
+        log.error("No signal batch found at all")
+        send("<b>ATLAS</b>\nNo signal batch found — EOD pipeline may be down.")
         return
 
-    log.info(f"Sending {len(signals)} qualifying signals to ATLAS")
-    send(
-        f"🔔 <b>ATLAS MARKET OPEN — {now}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{len(signals)} qualifying signal(s) ready\n"
-        f"ORB scan in 20 minutes"
-    )
+    if _stale(batch_date):
+        send(f"<b>ATLAS — STALE DATA</b>\nNewest batch: {batch_date}. No trades taken.")
+        return
 
+    signals = dedupe(get_signals(batch_date))
+    if not signals:
+        log.info(f"Batch {batch_date} contained no signals")
+        send(f"<b>ATLAS MARKET OPEN</b>\nBatch {batch_date} — no signals.")
+        return
+
+    log.info(f"{len(signals)} unique candidate(s) from batch {batch_date}")
+
+    entered, results = 0, []
     for sig in signals:
+        if entered >= MAX_TRADES_PER_DAY:
+            log.info(f"Daily cap {MAX_TRADES_PER_DAY} reached — stopping")
+            break
+
         atlas_signal = {
             "symbol":     sig.get("symbol"),
-            "direction":  sig.get("direction", "").upper(),
-            "conviction": float(sig.get("score", 0)),
-            "score":      float(sig.get("score", 0)),
-            "entry_ref":  float(sig.get("entry_ref", 0)),
-            "entry":      float(sig.get("entry_ref", 0)),
+            "direction":  (sig.get("direction") or "").upper(),
+            "entry_ref":  float(sig.get("entry_ref", 0) or 0),
+            "entry":      float(sig.get("entry_ref", 0) or 0),
             "entry_low":  float(sig.get("entry_low", 0) or 0),
             "entry_high": float(sig.get("entry_high", 0) or 0),
             "structure_trend": sig.get("structure_trend", ""),
-            "sl":         float(sig.get("sl", 0)),
-            "target_1":   float(sig.get("target_1", 0)),
-            "target_2":   float(sig.get("target_2", 0)),
             "setup_name": sig.get("setup_name", ""),
             "sector":     sig.get("sector", ""),
-            "grade":      sig.get("grade", "B"),
+            # carried for attribution only — NOT used to gate or rank
+            "score":      float(sig.get("score", 0) or 0),
+            "grade":      sig.get("grade", ""),
             "session":    "opening",
         }
+
         result = enter_trade(atlas_signal)
-        log.info(f"Queued: {sig['symbol']} score:{sig.get('score')} — {result.get('status')}")
+        status = result.get("status", "?")
+        results.append(f"{sig.get('symbol')}: {status}")
+        log.info(f"{sig.get('symbol')} — {status} — {result.get('reason','')}")
+
+        if status in ("ENTERED", "SHADOW_INTENT"):
+            entered += 1
+
+        # Gate 1 is index-wide: if the market has no direction, no later
+        # candidate can pass either. Stop rather than hammer the API.
+        if status == "SKIPPED_MARKET_WAIT":
+            log.info("Market direction WAIT — no trades possible today")
+            break
+
+    send(
+        f"<b>ATLAS MARKET OPEN — {now}</b>\n"
+        f"Batch: {batch_date} | Candidates: {len(signals)} | Entered: {entered}\n"
+        + "\n".join(results[:10])
+    )
 
 
 if __name__ == "__main__":
