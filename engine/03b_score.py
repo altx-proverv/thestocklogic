@@ -312,102 +312,18 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     atr     = df.get("atr", close * 0.02).fillna(close * 0.02)
     direction = df.get("direction", pd.Series("long", index=df.index))
 
-    # ── SMC ORDER BLOCK ENTRY ──────────────────────────────────────
-    # Use nearest unmitigated OB as entry zone instead of close price
-    # LONG: nearest demand OB (ob_high/ob_low where is_demand_ob=True)
-    # SHORT: nearest supply OB (ob_high/ob_low where is_supply_ob=True)
+    # ── ZONE-BASED ENTRY + STRUCTURAL STOP ─────────────────────────
+    # Entry = active zone edge (demand OB / bull FVG for longs, supply side for
+    # shorts), forward-filled by engine.active_zones. Stop = last swing extreme
+    # forced outside the zone. Sizing = Rs3k risk / Rs1L notional, dual cap.
+    # No targets -- winners are trailed. See engine/zone_entry.py.
+    from engine.zone_entry import compute_zone_entries
+    df = compute_zone_entries(df)
 
-    ob_high_col = df.get("ob_high", pd.Series(np.nan, index=df.index))
-    ob_low_col  = df.get("ob_low",  pd.Series(np.nan, index=df.index))
-    is_demand   = df.get("is_demand_ob", pd.Series(False, index=df.index))
-    is_supply   = df.get("is_supply_ob", pd.Series(False, index=df.index))
-    mitigated   = df.get("ob_mitigated", pd.Series(False, index=df.index))
-
-    # For each row, find the nearest valid OB
-    # If no OB available, fall back to close ±0.2%
-    direction_col2 = df.get("direction", pd.Series("long", index=df.index))
-
-    ob_entry_high = pd.Series(np.nan, index=df.index)
-    ob_entry_low  = pd.Series(np.nan, index=df.index)
-
-    # Vectorized: use current row's OB if it's valid and unmitigated
-    # For LONG — use demand OB high/low
-    long_mask = (direction_col2 == "long") & is_demand & (~mitigated) & ob_high_col.notna()
-    ob_entry_high = ob_entry_high.where(~long_mask, ob_high_col)
-    ob_entry_low  = ob_entry_low.where(~long_mask,  ob_low_col)
-
-    # For SHORT — use supply OB high/low
-    short_mask = (direction_col2 == "short") & is_supply & (~mitigated) & ob_high_col.notna()
-    ob_entry_high = ob_entry_high.where(~short_mask, ob_high_col)
-    ob_entry_low  = ob_entry_low.where(~short_mask,  ob_low_col)
-
-    # Where OB entry is valid, use it; otherwise fall back to close ±0.2%
-    has_ob = ob_entry_high.notna() & ob_entry_low.notna()
-
-    entry_ref  = ob_entry_high.where(has_ob, close).round(2)
-    entry_high = ob_entry_high.where(has_ob, (close * 1.002)).round(2)
-    entry_low  = ob_entry_low.where(has_ob,  (close * 0.998)).round(2)
-
-    # For SHORT: entry_ref = OB low (enter on retracement UP into supply OB)
-    # For LONG:  entry_ref = OB high (enter on retracement DOWN into demand OB)
-    entry_ref = entry_ref.where(direction_col2 == "long", ob_entry_low.where(has_ob, close)).round(2)
-
-    atr_pct = (atr / close.replace(0, np.nan)).fillna(0.02)
-    sl_pct  = np.clip(atr_pct, MIN_SL_PCT, MAX_SL_PCT)
-
-    # ── STRUCTURAL SL ───────────────────────────────────────────────
-    # LONG: SL just below demand OB low (1% buffer)
-    # SHORT: SL just above supply OB high (1% buffer)
-    # Fallback to ATR-based SL if no OB
-
-    sl_buffer = 0.005  # 0.5% beyond OB
-
-    sl_long_ob  = (ob_entry_low  * (1 - sl_buffer)).round(2)
-    sl_short_ob = (ob_entry_high * (1 + sl_buffer)).round(2)
-
-    sl_long_atr  = (close * (1 - sl_pct)).round(2)
-    sl_short_atr = (close * (1 + sl_pct)).round(2)
-
-    sl_long  = sl_long_ob.where(has_ob,  sl_long_atr).round(2)
-    sl_short = sl_short_ob.where(has_ob, sl_short_atr).round(2)
-    sl = np.where(direction == "long", sl_long, sl_short)
-
-    sl_dist = np.abs(close - sl)
-    t1_long  = (close + sl_dist * 2.0).round(2)
-    t1_short = (close - sl_dist * 2.0).round(2)
-    t2_long  = (close + sl_dist * 3.0).round(2)
-    t2_short = (close - sl_dist * 3.0).round(2)
-    t1 = np.where(direction == "long", t1_long, t1_short)
-    t2 = np.where(direction == "long", t2_long, t2_short)
-
-    # Position sizing: ₹5,000 / SL distance
-    qty_raw = np.floor(MAX_LOSS_INR / sl_dist.replace(0, np.nan)).fillna(1).astype(int)
-    qty     = np.maximum(qty_raw, 1)
-    # Cap at 20% of ₹1L = ₹20,000
-    qty     = np.minimum(qty, np.floor(20000 / close.replace(0, np.nan)).fillna(1).astype(int))
-    qty     = np.maximum(qty, 1)
-
-    risk_inr = (sl_dist * qty).round(2)
-
-    # OTE validation — disqualify if price already moved >2% away from OB entry zone
-    # This catches stale signals like ACUITAS (entry 4.9% below current price)
-    price_dist = (close - entry_ref).abs() / close.replace(0, np.nan)
-    stale_mask = price_dist > 0.02
-    df.loc[stale_mask, "disqualified"]      = True
-    df.loc[stale_mask, "disqualify_reason"] = "price_outside_ob_zone"
-    df.loc[stale_mask, "qualifies"]         = False
-
-    df["entry_ref"]   = entry_ref.round(2)
-    df["entry_low"]   = entry_low
-    df["entry_high"]  = entry_high
-    df["sl"]          = pd.Series(sl, index=df.index).round(2)
-    df["target_1"]    = pd.Series(t1, index=df.index).round(2)
-    df["target_2"]    = pd.Series(t2, index=df.index).round(2)
-    df["sl_pct"]      = (sl_pct * 100).round(2)
-    df["qty"]         = pd.Series(qty, index=df.index)
-    df["risk_inr"]    = pd.Series(risk_inr, index=df.index)
-    df["rr_1"]        = 2.0
-    df["rr_2"]        = 3.0
+    invalid = ~df["entry_valid"]
+    df.loc[invalid, "disqualified"]      = True
+    df.loc[invalid, "disqualify_reason"] = df.loc[invalid, "reject_reason"]
+    df.loc[invalid, "qualifies"]         = False
 
     return df
 
@@ -445,8 +361,10 @@ def process_direction(combined: pd.DataFrame, direction: str,
     qual_mask = df["qualifies"]
     if qual_mask.sum() > 0:
         levels = compute_trade_levels_vectorized(df[qual_mask].copy())
-        for col in ["entry_ref","entry_low","entry_high","sl","target_1",
-                    "target_2","sl_pct","qty","risk_inr","rr_1","rr_2"]:
+        for col in ["entry_ref","entry_low","entry_high","sl","stop_pct",
+                    "entry_dist_pct","qty","risk_inr","notional","product",
+                    "entry_valid","reject_reason","qualifies",
+                    "disqualified","disqualify_reason"]:
             if col in levels.columns:
                 df.loc[qual_mask, col] = levels[col].values
 

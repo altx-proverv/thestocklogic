@@ -528,6 +528,12 @@ def compute_smc_signals(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFra
     df = detect_fvgs(df)
     df = detect_liquidity_sweeps(df)
 
+    # Forward-fill active OB/FVG zone levels. Without this, ob_high/ob_low are
+    # NaN on all but the formation candle and 03b's zone-entry branch never
+    # fires -- entry silently falls back to previous close.
+    from engine.active_zones import add_active_zones
+    df = add_active_zones(df)
+
     # Technical confirmation
     df = compute_technicals(df)
 
