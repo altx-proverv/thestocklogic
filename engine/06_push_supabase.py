@@ -200,36 +200,15 @@ def notify_atlas(records: list):
     Only Grade A signals (score >= 78) trigger Telegram alerts.
     ATLAS bot listener must be running to receive.
     """
-    try:
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from atlas.execution.trade_executor import queue_signal
-        from atlas.config import MIN_CONVICTION_SCORE
-
-        # Score gate removed: non-predictive per validation, and the 82 threshold
-        # sat above the observed max (~79), gating every signal to zero.
-        qualifying = records
-        log.info(f"ATLAS: {len(qualifying)} zone-validated signals available")
-
-        for record in qualifying:
-            signal = {
-                "symbol":     record.get("symbol"),
-                "direction":  record.get("direction"),
-                "conviction": float(record.get("score", 0)),
-                "score":      float(record.get("score", 0)),
-                "entry_ref":  float(record.get("entry_ref", 0)),
-                "entry":      float(record.get("entry_ref", 0)),
-                "sl":         float(record.get("sl", 0)),
-                "target_1":   float(record.get("target_1", 0)),
-                "target_2":   float(record.get("target_2", 0)),
-                "setup_name": record.get("setup_name", ""),
-                "sector":     record.get("sector", ""),
-                "grade":      record.get("grade", "B"),
-            }
-            result = queue_signal(signal)
-            log.info(f"ATLAS signal queued: {signal['symbol']} — {result.get('status')}")
-
-    except Exception as e:
-        log.warning(f"ATLAS notification failed (non-critical): {e}")
+    # ATLAS entry happens at 09:37 via atlas/signal/market_open.py, which
+    # reads zone-validated signals from Supabase directly.
+    #
+    # The old path here queued signals into the retired executor module, which
+    # carries rule-violating SL/GTT order calls, and passed fixed profit levels
+    # that no longer exist. It was inert only because the score >= 82 gate
+    # zeroed it out; with that gate removed it would have routed every signal
+    # into retired code. Removed entirely.
+    log.info(f"ATLAS: {len(records)} zone-validated signals available for 09:37 entry")
 
 
 def main():
