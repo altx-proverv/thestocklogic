@@ -17,7 +17,7 @@ from atlas.config import (
     MAX_OPEN_POSITIONS, AGENT_MODES, DEFAULT_AGENT_MODE
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [ATLAS-RISK] %(message)s")
+log = logging.getLogger("ATLAS-RISK")
 log = logging.getLogger(__name__)
 
 # ── SUPABASE HELPERS ──────────────────────────────────────────────
