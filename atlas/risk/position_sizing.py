@@ -1,209 +1,150 @@
 """
-ATLAS Risk Engine — Position Sizing
-=====================================
-CNC LONG: Fixed INR 50,000 per trade (capital/3)
-          Qty = floor(50,000 / entry_price)
-          Never blocks — sizes down to fit
-          Only blocks if qty = 0 (stock too expensive)
+ATLAS Position Sizing — Risk-Based (₹3,000/trade) with Notional Cap
+====================================================================
+Supersedes size_by_notional(). Reinstates risk-based sizing, which is
+correct again now that structural stops exist (it was archived 4 Aug only
+because the no-SL rule made it meaningless).
 
-MIS SHORT: Risk-capped sizing
-           Qty = floor(MAX_RISK_PER_TRADE / risk_per_share)
-           Capital deployed = margin (not real capital)
+    risk_per_share = |entry - stop|
+    qty_risk       = RISK_PER_TRADE / risk_per_share
+    qty_notional   = MAX_NOTIONAL / entry
+    qty            = floor_to_5( min(qty_risk, qty_notional) )
+
+BOTH caps apply, lower wins. Without the notional cap a tight stop produces
+absurd size: entry 2000, stop 1990 -> 300 sh -> ₹6L notional on a ₹3k budget.
+
+STOP-DISTANCE FILTER (quality gate, not just a guard):
+  < 1.5%  -> reject. Inside normal noise; also forces the notional cap to
+             bind, which breaks the ₹3k standardisation.
+  > 6.0%  -> reject. Position too small for costs to be worth it.
+Signals with clean, appropriately-distant structure are better signals.
+
+PRODUCT: longs CNC (delivery, hold winners, GTT-eligible).
+         shorts MIS (intraday only, bearish regime, morning session).
 """
 
-import sys, math, logging
-from pathlib import Path
+import logging
+from math import floor
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from atlas.config import (
-    INITIAL_CAPITAL, CAPITAL_PER_TRADE, MAX_RISK_PER_TRADE,
-    MIN_CONVICTION_SCORE, ELITE_CONVICTION,
-    AGENT_MODES, DEFAULT_AGENT_MODE
-)
+log = logging.getLogger("ATLAS-SIZE")
 
-log = logging.getLogger(__name__)
-
-
-def conviction_multiplier(conviction: float) -> float:
-    if conviction >= 90: return 1.0   # No oversize — keep it clean
-    elif conviction >= 85: return 1.0
-    elif conviction >= 80: return 0.8
-    else: return 0.6
+RISK_PER_TRADE = 3000.0     # rupees at risk if stop is hit
+MAX_NOTIONAL   = 100000.0   # ₹1L per trade
+QTY_MULTIPLE   = 5
+MIN_STOP_PCT   = 0.015      # 1.5%
+MAX_STOP_PCT   = 0.060      # 6.0%
 
 
-def size_by_notional(entry_price: float, direction: str = "LONG", available_funds: float = None) -> dict:
-    """
-    ATLAS position sizing — rules 3,4,5,16,17.
-    Sizes off ₹1L NOTIONAL cap. No SL dependency (agent places no SL this phase).
+def _floor_to_multiple(n: float, m: int = QTY_MULTIPLE) -> int:
+    return int(floor(n / m) * m)
 
-      raw_qty  = floor(MAX_NOTIONAL / entry_price)          # rule 3
-      qty      = floor(raw_qty / 5) * 5                      # rule 4 (round DOWN)
-      while qty * entry > MAX_NOTIONAL: qty -= 5             # rule 5
-      if qty < 5: reject                                    # rule 4 minimum
 
-    LONG (CNC)  : needs actual funds up to ₹1L              # rule 17
-    SHORT (MIS) : ₹1L gross sell value, ~20% margin used    # rule 16
-    """
-    from atlas.config import (
-        MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
-        SHORT_MARGIN_PCT_ESTIMATE, FUNDS_SAFETY_BUFFER_PCT,
-    )
-    direction = str(direction).upper()
-    product   = "MIS" if direction == "SHORT" else "CNC"
+def validate_stop(entry_price: float, stop_price: float, direction: str) -> tuple:
+    """(ok, stop_pct, reason). Checks side sanity and distance band."""
+    d = (direction or "").upper()
 
     if not entry_price or entry_price <= 0:
-        return {"qty": 0, "error": "Invalid entry price"}
+        return False, 0.0, "invalid entry price"
+    if not stop_price or stop_price <= 0:
+        return False, 0.0, "no structural stop -- zone/swing not resolved"
 
-    # rule 3 + 4: raw qty within ₹1L, rounded DOWN to multiple of 5
-    raw_qty = math.floor(MAX_NOTIONAL_PER_TRADE / entry_price)
-    qty     = (raw_qty // QUANTITY_MULTIPLE) * QUANTITY_MULTIPLE
+    if d == "LONG" and stop_price >= entry_price:
+        return False, 0.0, f"long stop {stop_price:.2f} must sit BELOW entry {entry_price:.2f}"
+    if d == "SHORT" and stop_price <= entry_price:
+        return False, 0.0, f"short stop {stop_price:.2f} must sit ABOVE entry {entry_price:.2f}"
 
-    # rule 5: reduce by 5 until notional fits ₹1L
-    while qty > 0 and qty * entry_price > MAX_NOTIONAL_PER_TRADE:
-        qty -= QUANTITY_MULTIPLE
+    stop_pct = abs(entry_price - stop_price) / entry_price
 
-    # rule 4 minimum
-    if qty < QUANTITY_MULTIPLE:
-        return {"qty": 0, "error": f"Min {QUANTITY_MULTIPLE} shares exceeds ₹{MAX_NOTIONAL_PER_TRADE:,.0f} at ₹{entry_price:,.0f}"}
+    if stop_pct < MIN_STOP_PCT:
+        return False, stop_pct, (f"stop {stop_pct*100:.2f}% too tight "
+                                 f"(min {MIN_STOP_PCT*100:.1f}%) -- inside noise")
+    if stop_pct > MAX_STOP_PCT:
+        return False, stop_pct, (f"stop {stop_pct*100:.2f}% too wide "
+                                 f"(max {MAX_STOP_PCT*100:.1f}%) -- size too small to justify costs")
 
-    notional = qty * entry_price
+    return True, stop_pct, f"stop {stop_pct*100:.2f}% within band"
 
-    if product == "CNC":  # LONG — rule 17: needs real funds
-        capital_required = notional
-        margin_note = "full funds"
-    else:                 # SHORT — rule 16: gross ₹1L, ~20% margin (estimate)
-        capital_required = notional * SHORT_MARGIN_PCT_ESTIMATE
-        margin_note = f"~{int(SHORT_MARGIN_PCT_ESTIMATE*100)}% margin (estimate — broker value wins)"
 
-    result = {
+def size_by_risk(entry_price: float, stop_price: float, direction: str,
+                 risk_per_trade: float = RISK_PER_TRADE,
+                 max_notional: float = MAX_NOTIONAL,
+                 available_funds: float = None) -> dict:
+    """
+    Returns dict with qty / notional / risk_actual / product, or qty=0 + error.
+    risk_actual is reported explicitly -- flooring to a multiple of 5 always
+    reduces real risk below the ₹3k budget, sometimes materially on high-priced
+    stocks. Never assume risk == 3000.
+    """
+    d = (direction or "").upper()
+    ok, stop_pct, reason = validate_stop(entry_price, stop_price, d)
+    if not ok:
+        return {"qty": 0, "error": reason, "stop_pct": stop_pct}
+
+    risk_per_share = abs(entry_price - stop_price)
+    qty_risk       = risk_per_trade / risk_per_share
+    qty_notional   = max_notional / entry_price
+    binding        = "risk" if qty_risk <= qty_notional else "notional"
+
+    qty = _floor_to_multiple(min(qty_risk, qty_notional))
+
+    if qty < QTY_MULTIPLE:
+        return {"qty": 0,
+                "error": (f"qty {qty} below minimum {QTY_MULTIPLE} -- "
+                          f"stock too expensive for ₹{risk_per_trade:,.0f} risk "
+                          f"at a {stop_pct*100:.2f}% stop"),
+                "stop_pct": stop_pct}
+
+    notional    = qty * entry_price
+    risk_actual = qty * risk_per_share
+    product     = "CNC" if d == "LONG" else "MIS"
+
+    # Longs are delivery: full value blocked. Shorts intraday: ~20% margin.
+    capital_required = notional if d == "LONG" else notional * 0.20
+
+    if available_funds is not None and capital_required > available_funds:
+        reduced = _floor_to_multiple(
+            available_funds / (entry_price if d == "LONG" else entry_price * 0.20))
+        if reduced < QTY_MULTIPLE:
+            return {"qty": 0,
+                    "error": f"insufficient funds: need ₹{capital_required:,.0f}, have ₹{available_funds:,.0f}",
+                    "stop_pct": stop_pct}
+        log.warning(f"reduced {qty} -> {reduced} to fit available funds")
+        qty              = reduced
+        notional         = qty * entry_price
+        risk_actual      = qty * risk_per_share
+        capital_required = notional if d == "LONG" else notional * 0.20
+        binding          = "funds"
+
+    return {
         "qty":              qty,
-        "product":          product,
-        "direction":        direction,
-        "entry_price":      entry_price,
+        "entry_price":      round(entry_price, 2),
+        "stop_price":       round(stop_price, 2),
+        "stop_pct":         round(stop_pct * 100, 2),
+        "risk_per_share":   round(risk_per_share, 2),
+        "risk_actual":      round(risk_actual, 2),
+        "risk_budget":      risk_per_trade,
         "notional":         round(notional, 2),
         "capital_required": round(capital_required, 2),
-        "margin_note":      margin_note,
-        "within_cap":       notional <= MAX_NOTIONAL_PER_TRADE,
+        "product":          product,
+        "binding_cap":      binding,
+        "reason":           reason,
     }
-
-    # funds check (if provided) with buffer
-    if available_funds is not None:
-        need = capital_required * (1 + FUNDS_SAFETY_BUFFER_PCT)
-        result["funds_ok"] = available_funds >= need
-        result["funds_need"] = round(need, 2)
-        result["funds_available"] = round(available_funds, 2)
-
-    log.info(f"Sizing[{product}] {direction}: {qty} @ ₹{entry_price:,.1f} | notional ₹{notional:,.0f} | need ₹{capital_required:,.0f} ({margin_note})")
-    return result
-
-
-def calculate(
-    entry_price: float,
-    sl_price: float,
-    target_price: float,
-    conviction: float = 75,
-    agent_mode: str = DEFAULT_AGENT_MODE,
-    capital: float = None,
-    win_rate: float = 0.5,
-    direction: str = "LONG",
-) -> dict:
-    """
-    Calculate position size.
-    CNC LONG: fixed INR 50K per trade, size down if needed
-    MIS SHORT: risk-capped, margin trade
-    """
-    if not entry_price or not sl_price or entry_price == sl_price:
-        return {"qty": 0, "error": "Invalid entry or SL price"}
-
-    cap        = capital or INITIAL_CAPITAL
-    product    = "MIS" if str(direction).upper() == "SHORT" else "CNC"
-    mode_config= AGENT_MODES.get(agent_mode, AGENT_MODES[DEFAULT_AGENT_MODE])
-
-    risk_per_share   = abs(entry_price - sl_price)
-    reward_per_share = abs(target_price - entry_price) if target_price else risk_per_share * 2
-    rr_ratio         = reward_per_share / risk_per_share if risk_per_share > 0 else 0
-
-    if product == "CNC":
-        # Fixed INR 50K per trade — size down never block
-        trade_capital = CAPITAL_PER_TRADE * mode_config["size_pct"]
-        qty = math.floor(trade_capital / entry_price)
-
-        if qty <= 0:
-            return {"qty": 0, "error": f"Stock too expensive — ₹{entry_price:,.0f} exceeds ₹{trade_capital:,.0f} per trade budget"}
-
-        capital_deployed = qty * entry_price
-        risk_inr         = qty * risk_per_share
-        reward_inr       = qty * reward_per_share
-
-    else:  # MIS SHORT
-        # Risk-capped — qty based on SL distance
-        conv_mult    = conviction_multiplier(conviction)
-        max_risk_inr = min(MAX_RISK_PER_TRADE * mode_config["size_pct"] * conv_mult, MAX_RISK_PER_TRADE)
-        qty          = math.floor(max_risk_inr / risk_per_share) if risk_per_share > 0 else 0
-
-        if qty <= 0:
-            return {"qty": 0, "error": "Position size too small"}
-
-        capital_deployed = risk_inr  = qty * risk_per_share  # Only risk counts for MIS
-        reward_inr       = qty * reward_per_share
-
-    result = {
-        "qty":               qty,
-        "product":           product,
-        "direction":         direction.upper(),
-        "entry_price":       entry_price,
-        "sl_price":          sl_price,
-        "target_1":          target_price,
-        "target_price":      target_price,
-        "capital_deployed":  round(capital_deployed, 2),
-        "risk_inr":          round(risk_inr, 2),
-        "reward_inr":        round(reward_inr, 2),
-        "rr_ratio":          round(rr_ratio, 2),
-        "size_pct":          round(capital_deployed / cap * 100, 2),
-        "conviction":        conviction,
-        "agent_mode":        agent_mode,
-    }
-
-    log.info(
-        f"Sizing [{product}] {direction}: {qty} shares @ ₹{entry_price:,.0f} | "
-        f"Capital: ₹{capital_deployed:,.0f} | Risk: ₹{risk_inr:,.0f} | RR: {rr_ratio:.1f}:1"
-    )
-    return result
-
-
-def validate(sizing: dict, capital: float = None) -> tuple:
-    """Validate position sizing. Returns (is_valid, reason)."""
-    if sizing.get("qty", 0) <= 0:
-        return False, sizing.get("error", "Zero quantity")
-    if sizing.get("rr_ratio", 0) < 1.5:
-        return False, f"RR too low: {sizing['rr_ratio']:.1f}:1 (min 1.5:1)"
-    if sizing.get("product") == "MIS" and sizing.get("risk_inr", 0) > MAX_RISK_PER_TRADE:
-        return False, f"MIS risk exceeds cap: ₹{sizing['risk_inr']:,.0f}"
-    return True, "Valid"
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO,
-                       format="%(asctime)s [ATLAS-SIZING] %(message)s")
-    print("=== ATLAS POSITION SIZING ===\n")
-
-    # SUNTV LONG CNC — the trade that was blocked
-    r1 = calculate(entry_price=521.0, sl_price=510.0, target_price=542.0,
-                   conviction=78, agent_mode="NORMAL", capital=150000, direction="LONG")
-    v1, reason1 = validate(r1)
-    print(f"SUNTV LONG CNC (was blocked before):")
-    print(f"  Qty:      {r1['qty']} shares")
-    print(f"  Capital:  ₹{r1['capital_deployed']:,.0f} ({r1['size_pct']:.1f}%)")
-    print(f"  Risk:     ₹{r1['risk_inr']:,.0f}")
-    print(f"  RR:       {r1['rr_ratio']:.1f}:1")
-    print(f"  Valid:    {v1} — {reason1}\n")
-
-    # NHPC SHORT MIS
-    r2 = calculate(entry_price=75.1, sl_price=76.5, target_price=73.0,
-                   conviction=79, agent_mode="NORMAL", capital=150000, direction="SHORT")
-    v2, reason2 = validate(r2)
-    print(f"NHPC SHORT MIS:")
-    print(f"  Qty:      {r2['qty']} shares")
-    print(f"  Risk:     ₹{r2['risk_inr']:,.0f} (hard cap)")
-    print(f"  RR:       {r2['rr_ratio']:.1f}:1")
-    print(f"  Valid:    {v2} — {reason2}")
+    logging.basicConfig(level=logging.INFO)
+    cases = [
+        ("normal long",      2008.0, 1960.0, "LONG"),
+        ("tight stop",       2008.0, 1998.0, "LONG"),   # rejected: 0.5%
+        ("wide stop",        2008.0, 1850.0, "LONG"),   # rejected: 7.9%
+        ("expensive stock",  5720.0, 5490.0, "LONG"),   # notional cap binds
+        ("short intraday",   1078.0, 1105.0, "SHORT"),
+        ("inverted stop",    2008.0, 2050.0, "LONG"),   # rejected: wrong side
+    ]
+    for label, e, s, d in cases:
+        r = size_by_risk(e, s, d)
+        if r["qty"]:
+            print(f"{label:18} qty={r['qty']:>5}  notional=₹{r['notional']:>10,.0f}  "
+                  f"risk=₹{r['risk_actual']:>7,.0f}  stop={r['stop_pct']}%  cap={r['binding_cap']}")
+        else:
+            print(f"{label:18} REJECTED — {r['error']}")
