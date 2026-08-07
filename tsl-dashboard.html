@@ -144,7 +144,10 @@ async function loadData(){
     const byId={};
     for(const r of merged){const i=r.id; if(!(i in byId)||(RANK[r.outcome]||0)>(RANK[byId[i].outcome]||0))byId[i]=r;}
     ALL=Object.values(byId).sort((a,b)=>a.signal_date<b.signal_date?1:-1);
-    DATA=ALL.slice(0,100);
+    // Window on latest 100 RESOLVED signals (exclude not-yet-scored recent ones)
+    // so the summary reflects real rolling performance, not the scoring lag.
+    const scored=ALL.filter(r=>r.outcome!=='NOT_SCORED');
+    DATA=scored.slice(0,100);
     renderSummary(); render();
   }catch(e){
     document.getElementById('sub').textContent='Failed to load data: '+e.message;
