@@ -21,6 +21,10 @@
       "destination": "/tsl-dashboard.html"
     },
     {
+      "source": "/atlas-live",
+      "destination": "/atlas-live.html"
+    },
+    {
       "source": "/",
       "destination": "/landing.html"
     }
