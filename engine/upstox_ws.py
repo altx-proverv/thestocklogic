@@ -443,29 +443,6 @@ def run_session_update():
     log.info(f"\nSession update complete: {session}")
 
 
-if __name__ == "__main__":
-    os.chdir(Path(__file__).parent.parent)
-
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "--update"
-
-    if cmd == "--update":
-        run_session_update()
-    elif cmd == "--test":
-        # Test mode — just fetch a few quotes
-        log.info("Test mode — fetching sample quotes...")
-        from universe import INSTRUMENT_KEYS
-        sample_keys = list(INSTRUMENT_KEYS.values())[:10]
-        quotes = get_market_quotes(sample_keys)
-        for sym, q in quotes.items():
-            ltp = q.get("last_price", 0)
-            ohlc = q.get("ohlc", {})
-            log.info(f"{sym:<30} LTP:{ltp:>10.2f}  H:{ohlc.get('high',0):.2f}  L:{ohlc.get('low',0):.2f}")
-    else:
-        print("Usage:")
-        print("  python3 engine/upstox_ws.py --update   # run session update")
-        print("  python3 engine/upstox_ws.py --test     # test quotes")
-
-
 def push_live_prices(quotes: dict, instrument_keys: dict):
     """Push latest LTP for all stocks to live_prices table."""
     supabase_url = os.environ.get("SUPABASE_URL", "https://eibdlcanpudjgmkjxrga.supabase.co")
@@ -511,3 +488,28 @@ def push_live_prices(quotes: dict, instrument_keys: dict):
             log.warning(f"live_prices push failed: {r.status_code}")
 
     log.info(f"Live prices updated: {len(records)} stocks")
+
+
+if __name__ == "__main__":
+    os.chdir(Path(__file__).parent.parent)
+
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "--update"
+
+    if cmd == "--update":
+        run_session_update()
+    elif cmd == "--test":
+        # Test mode — just fetch a few quotes
+        log.info("Test mode — fetching sample quotes...")
+        from universe import INSTRUMENT_KEYS
+        sample_keys = list(INSTRUMENT_KEYS.values())[:10]
+        quotes = get_market_quotes(sample_keys)
+        for sym, q in quotes.items():
+            ltp = q.get("last_price", 0)
+            ohlc = q.get("ohlc", {})
+            log.info(f"{sym:<30} LTP:{ltp:>10.2f}  H:{ohlc.get('high',0):.2f}  L:{ohlc.get('low',0):.2f}")
+    else:
+        print("Usage:")
+        print("  python3 engine/upstox_ws.py --update   # run session update")
+        print("  python3 engine/upstox_ws.py --test     # test quotes")
+
+
