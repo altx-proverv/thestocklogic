@@ -1,36 +1,36 @@
 """
-ATLAS Entry Logic -- TSL Rules Compliant (Phase: TRAINING)
-==========================================================
-Agent IDENTIFIES and ENTERS trades only. No SL, no target, no exit orders.
-All exits are MANUAL this phase. Exit management is a separate module gated by
-ENABLE_EXIT_MANAGEMENT (off now).
+ATLAS Entry Logic -- Accumulation Architecture (Phase: TRAINING)
+=================================================================
+Agent IDENTIFIES and ENTERS. No SL, no target, no exit orders. Exits manual.
 
-Gate stack (all must pass, in order):
-  1. Market direction -- Nifty opening-range (LONG/SHORT/WAIT). WAIT -> cash.
-  2. Regime -> side   -- bullish=long, bearish=short, mixed=either, unknown=cash
-  3. Daily limit      -- MAX_TRADES_PER_DAY, counting LIVE trades only
-  4. Entry range      -- LTP within the zone band, else skip (no chasing)
-  5. Sizing           -- Rs3k risk / Rs1L notional dual cap, structural stop
-  6. Kill switch
-Then: ENTER ONLY. Never places SL/target. Notify MANUAL RISK REQUIRED.
+GATE STACK
+  0. Structural stop present      -- required for risk-based sizing
+  1. Regime -> side               -- accumulation in bull+sideways;
+                                     shorts only when extreme_bearish
+  2. Opening range                -- SHORTS ONLY (intraday directional check)
+  3. Open positions               -- MAX_OPEN_POSITIONS
+  4. New entries today            -- MAX_TRADES_PER_DAY (secondary)
+  5. Entry range                  -- inside zone -> enter; above zone on a
+                                     LONG -> rest a GTT at the zone edge
+  6. Sizing                       -- Rs3k risk / Rs1L notional dual cap
+  7. Capital deployed             -- MAX_CAPITAL_DEPLOYED, the real limit
+  8. Kill switch
 
-CHANGES THIS REVISION
----------------------
-  - size_by_notional -> size_by_risk. Sizing now derives qty from the distance
-    between entry and the STRUCTURAL STOP (swing low/high), giving a standard
-    Rs3,000 risk budget per trade with a Rs1L notional ceiling. A signal
-    without a valid stop cannot be sized and is rejected.
-  - Stop-distance band (1.5-7%) enforced inside sizing -- doubles as a quality
-    filter: signals with clean, appropriately-distant structure survive.
-  - Daily trade count now filters agent_mode=LIVE. Shadow intents were
-    consuming live slots.
-  - _log_intent writes session/score/grade/sector/stop_price/zone_source.
-    Without these, /atlas-live shows "--" and the learning loop has no
-    attribution data to work from.
+WHAT CHANGED FROM THE INTRADAY VERSION
+--------------------------------------
+OPENING-RANGE GATE now applies to SHORTS only. It asks whether Nifty broke its
+first 15 minutes -- meaningful for an intraday hedge, noise for a multi-year
+hold. Applied to longs it returned WAIT on flat days, which is exactly when
+institutions accumulate and retail stops watching.
 
-NOTE: the stop is recorded, NOT placed. ATLAS does not send SL orders in this
-phase -- the operator places them manually. stop_price is the sizing input and
-the trade's invalidation level.
+DAILY TRADE COUNT is no longer the binding constraint. Accumulation longs are
+held indefinitely, so capital does not recycle. MAX_CAPITAL_DEPLOYED is what
+actually stops further entries; the daily count is a secondary guard.
+
+REGIME now comes from data/processed/market.parquet (bull / sideways / bear,
+200 DMA with a 3% neutral band) rather than sector_heatmap's
+bullish/bearish/mixed vocabulary. Falls back to sector_heatmap if the parquet
+is absent, so nothing breaks before build_market.py is wired into cron.
 """
 import sys, requests, logging
 from datetime import datetime, timezone, timedelta
@@ -39,9 +39,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    MAX_TRADES_PER_DAY, ENFORCE_ENTRY_RANGE,
-    ALLOW_LONG_IN_BULLISH, ALLOW_SHORT_IN_BULLISH,
-    ALLOW_LONG_IN_BEARISH, ALLOW_SHORT_IN_BEARISH,
+    MAX_TRADES_PER_DAY, MAX_OPEN_POSITIONS, MAX_CAPITAL_DEPLOYED,
+    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
+    ALLOW_LONG_IN_BULLISH, ALLOW_LONG_IN_SIDEWAYS,
+    ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
 from atlas.risk.position_sizing import size_by_risk
@@ -51,54 +52,114 @@ from atlas.execution.broker import place_order, get_ltp
 log = logging.getLogger("ATLAS-ENTRY")
 IST = timezone(timedelta(hours=5, minutes=30))
 
+MARKET_FILE = Path(__file__).parent.parent.parent / "data" / "processed" / "market.parquet"
+OPEN_STATUSES = ("OPEN", "GTT_PENDING")
+
 
 def _headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json", "Prefer": "return=representation"}
 
 
-def get_market_regime() -> str:
-    """Latest market_direction from sector_heatmap. bullish/bearish/mixed/unknown."""
+# ─────────────────────────────────────────────────────────────────────
+# MARKET CONTEXT
+# ─────────────────────────────────────────────────────────────────────
+
+def get_market_context() -> dict:
+    """Regime from market.parquet. Falls back to sector_heatmap if absent."""
+    try:
+        import pandas as pd
+        if MARKET_FILE.exists():
+            d = pd.read_parquet(MARKET_FILE).sort_values("date")
+            if len(d):
+                last = d.iloc[-1]
+                return {
+                    "regime":             str(last.get("market_regime", "unknown")),
+                    "allow_accumulation": bool(last.get("allow_accumulation", False)),
+                    "extreme_bearish":    bool(last.get("extreme_bearish", False)),
+                    "as_of":              str(last.get("date", ""))[:10],
+                    "source":             "market.parquet",
+                }
+    except Exception as e:
+        log.warning(f"market.parquet read failed: {e}")
+
+    # Fallback -- sector_heatmap uses bullish/bearish/mixed
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/sector_heatmap?select=market_direction,signal_date"
             f"&order=signal_date.desc&limit=1", headers=_headers(), timeout=10)
         if r.status_code == 200 and r.json():
             d = (r.json()[0].get("market_direction") or "unknown").lower()
-            return d if d in ("bullish", "bearish", "mixed") else "unknown"
+            mapped = {"bullish": "bull", "bearish": "bear", "mixed": "sideways"}.get(d, "unknown")
+            return {
+                "regime":             mapped,
+                "allow_accumulation": mapped in ("bull", "sideways"),
+                # Fallback cannot establish extreme_bearish -- it needs the
+                # 200DMA and VIX. Deny shorts rather than guess.
+                "extreme_bearish":    False,
+                "as_of":              r.json()[0].get("signal_date", ""),
+                "source":             "sector_heatmap (fallback)",
+            }
     except Exception as e:
-        log.warning(f"Regime fetch failed: {e}")
-    return "unknown"
+        log.warning(f"regime fallback failed: {e}")
+
+    return {"regime": "unknown", "allow_accumulation": False,
+            "extreme_bearish": False, "as_of": "", "source": "none"}
 
 
-def regime_allows_side(regime: str, direction: str) -> tuple:
-    """Rules 8,9,10,11. Returns (allowed, reason)."""
+def regime_allows_side(ctx: dict, direction: str) -> tuple:
+    """Accumulation in bull+sideways. Shorts only when genuinely bearish."""
     d = direction.upper()
-    if regime == "bullish":
-        if d == "LONG" and ALLOW_LONG_IN_BULLISH: return True, "bullish->long ok"
-        return False, "bullish regime -- shorts blocked (rule 8)"
-    if regime == "bearish":
-        if d == "SHORT" and ALLOW_SHORT_IN_BEARISH: return True, "bearish->short ok"
-        return False, "bearish regime -- longs blocked (rule 10)"
-    if regime == "mixed":
-        return True, "mixed regime -- side permitted, other gates apply"
-    return False, f"regime unknown/stale -> {DEFAULT_ON_UNKNOWN_REGIME} (no trade)"
+    regime = ctx.get("regime", "unknown")
+
+    if regime == "unknown":
+        return False, f"regime unknown/stale -> {DEFAULT_ON_UNKNOWN_REGIME}"
+
+    if d == "LONG":
+        if not ctx.get("allow_accumulation"):
+            return False, f"{regime} regime -- accumulation blocked"
+        if regime == "bull" and not ALLOW_LONG_IN_BULLISH:
+            return False, "longs disabled in bull"
+        if regime == "sideways" and not ALLOW_LONG_IN_SIDEWAYS:
+            return False, "longs disabled in sideways"
+        return True, f"{regime} -> accumulation permitted"
+
+    if d == "SHORT":
+        if REQUIRE_EXTREME_BEARISH_FOR_SHORTS and not ctx.get("extreme_bearish"):
+            return False, ("hedge shorts require extreme_bearish "
+                           "(200DMA-3%, 50<200DMA, VIX>18)")
+        if not ALLOW_SHORT_IN_BEARISH:
+            return False, "shorts disabled"
+        return True, "extreme bearish -> hedge short permitted"
+
+    return False, f"unknown direction {d}"
 
 
-def check_entry_range(direction: str, ltp: float, entry_low: float, entry_high: float) -> tuple:
-    """Enter ONLY if LTP is inside the zone band. Both directions."""
-    if not ENFORCE_ENTRY_RANGE:
-        return True, "range check off"
-    if not entry_low or not entry_high or entry_low <= 0 or entry_high <= 0:
-        return False, "no entry band defined -- cannot verify range"
-    lo, hi = min(entry_low, entry_high), max(entry_low, entry_high)
-    if lo <= ltp <= hi:
-        return True, f"LTP Rs{ltp:.1f} within zone Rs{lo:.1f}-Rs{hi:.1f}"
-    return False, f"LTP Rs{ltp:.1f} outside zone Rs{lo:.1f}-Rs{hi:.1f} -- no chase"
+# ─────────────────────────────────────────────────────────────────────
+# EXPOSURE
+# ─────────────────────────────────────────────────────────────────────
+
+def get_exposure() -> dict:
+    """Live positions and capital deployed. GTT_PENDING counts -- the capital
+    is committed the moment the trigger rests, even before it fills."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/atlas_trades"
+            f"?agent_mode=eq.LIVE&status=in.({','.join(OPEN_STATUSES)})"
+            f"&select=entry_price,qty,status", headers=_headers(), timeout=10)
+        if r.status_code != 200:
+            return {"positions": 0, "deployed": 0.0, "ok": False}
+        rows = r.json() or []
+        deployed = sum(float(x.get("entry_price") or 0) * float(x.get("qty") or 0)
+                       for x in rows)
+        return {"positions": len(rows), "deployed": deployed, "ok": True}
+    except Exception as e:
+        log.warning(f"exposure fetch failed: {e}")
+        return {"positions": 0, "deployed": 0.0, "ok": False}
 
 
-def get_today_trade_count() -> int:
-    """LIVE trades taken today. Shadow intents do NOT consume live slots."""
+def get_today_entry_count() -> int:
+    """New LIVE entries recorded today."""
     today = datetime.now(IST).date().isoformat()
     try:
         r = requests.get(
@@ -110,9 +171,23 @@ def get_today_trade_count() -> int:
         return 0
 
 
+def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float) -> tuple:
+    """Enter ONLY if LTP is inside the zone band."""
+    if not ENFORCE_ENTRY_RANGE:
+        return True, "range check off"
+    if not lo_in or not hi_in or lo_in <= 0 or hi_in <= 0:
+        return False, "no entry band defined"
+    lo, hi = min(lo_in, hi_in), max(lo_in, hi_in)
+    if lo <= ltp <= hi:
+        return True, f"LTP Rs{ltp:.1f} inside zone Rs{lo:.1f}-Rs{hi:.1f}"
+    return False, f"LTP Rs{ltp:.1f} outside zone Rs{lo:.1f}-Rs{hi:.1f}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# ENTRY
+# ─────────────────────────────────────────────────────────────────────
+
 def enter_trade(signal: dict) -> dict:
-    """Full gate stack + enter-only. Returns status dict.
-    SHADOW (LIVE_TRADING_ENABLED=false): logs intent, places NO order."""
     symbol     = signal.get("symbol", "")
     direction  = signal.get("direction", "LONG").upper()
     entry_ref  = float(signal.get("entry_ref", signal.get("entry", 0)) or 0)
@@ -123,81 +198,83 @@ def enter_trade(signal: dict) -> dict:
 
     log.info(f"[{mode}] Evaluating {symbol} {direction}")
 
-    # GATE 0 -- structural stop is mandatory for risk-based sizing
+    # GATE 0 -- structural stop mandatory
     if stop_price <= 0:
         return {"status": "REJECTED_NO_STOP",
-                "reason": "no structural stop on signal -- cannot size by risk"}
+                "reason": "no structural stop -- cannot size by risk"}
 
-    # GATE 1 -- MARKET DIRECTION (Nifty opening range). WAIT -> cash.
-    try:
-        from atlas.execution.index_state import get_market_direction
-        mkt = get_market_direction()
-        mkt_dir = mkt.get("direction", "WAIT")
-    except Exception as e:
-        log.warning(f"market direction check failed: {e}")
-        mkt_dir = "WAIT"
-    if mkt_dir == "WAIT":
-        return {"status": "SKIPPED_MARKET_WAIT",
-                "reason": "No clear Nifty opening-range direction -- staying cash"}
-    if mkt_dir == "LONG" and direction != "LONG":
-        return {"status": "SKIPPED_MARKET_DIR", "reason": f"Market is LONG -- {direction} blocked"}
-    if mkt_dir == "SHORT" and direction != "SHORT":
-        return {"status": "SKIPPED_MARKET_DIR", "reason": f"Market is SHORT -- {direction} blocked"}
-
-    # GATE 2 -- regime -> side
-    regime = get_market_regime()
-    ok, reason = regime_allows_side(regime, direction)
+    # GATE 1 -- regime -> side
+    ctx = get_market_context()
+    ok, reason = regime_allows_side(ctx, direction)
     if not ok:
-        return {"status": "SKIPPED_REGIME", "reason": reason, "regime": regime}
+        return {"status": "SKIPPED_REGIME", "reason": reason,
+                "regime": ctx.get("regime"), "regime_source": ctx.get("source")}
 
-    # GATE 3 -- daily limit (LIVE trades only)
-    count = get_today_trade_count()
-    if count >= MAX_TRADES_PER_DAY:
-        return {"status": "SKIPPED_LIMIT", "reason": f"Daily limit {count}/{MAX_TRADES_PER_DAY}"}
+    # GATE 2 -- opening range. SHORTS ONLY.
+    if direction in OPENING_RANGE_GATE_APPLIES_TO:
+        try:
+            from atlas.execution.index_state import get_market_direction
+            mkt_dir = get_market_direction().get("direction", "WAIT")
+        except Exception as e:
+            log.warning(f"opening-range check failed: {e}")
+            mkt_dir = "WAIT"
+        if mkt_dir != "SHORT":
+            return {"status": "SKIPPED_MARKET_WAIT",
+                    "reason": f"opening range is {mkt_dir} -- hedge short needs SHORT"}
 
-    # GATE 4 -- entry range (live price must be inside the zone)
+    # GATE 3 -- open positions
+    exp = get_exposure()
+    if exp["positions"] >= MAX_OPEN_POSITIONS:
+        return {"status": "SKIPPED_LIMIT",
+                "reason": f"open positions {exp['positions']}/{MAX_OPEN_POSITIONS}"}
+
+    # GATE 4 -- new entries today (secondary; capital usually binds first)
+    todays = get_today_entry_count()
+    if todays >= MAX_TRADES_PER_DAY:
+        return {"status": "SKIPPED_LIMIT",
+                "reason": f"entries today {todays}/{MAX_TRADES_PER_DAY}"}
+
+    # GATE 5 -- entry range, or rest a GTT at the zone
     ltp = get_ltp(symbol) or entry_ref
-    ok, reason = check_entry_range(direction, ltp, entry_low, entry_high)
-    if not ok:
-        return {"status": "SKIPPED_RANGE", "reason": reason}
+    in_range, range_reason = check_entry_range(direction, ltp, entry_low, entry_high)
 
-    # GATE 5 -- sizing (Rs3k risk / Rs1L notional, stop-distance band enforced)
+    if not in_range:
+        if direction != "LONG":
+            return {"status": "SKIPPED_RANGE",
+                    "reason": f"{range_reason} (no GTT for shorts -- CNC-only)"}
+        if entry_ref <= 0 or entry_ref >= ltp:
+            return {"status": "SKIPPED_RANGE",
+                    "reason": f"{range_reason} (zone not below LTP -- no GTT)"}
+        return _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx, exp)
+
+    # GATE 6 -- sizing
     sizing = size_by_risk(entry_price=ltp, stop_price=stop_price, direction=direction)
     if sizing.get("qty", 0) <= 0:
         return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
 
-    # GATE 6 -- kill switch
-    signal["capital_required"] = sizing.get("capital_required", 0)
+    # GATE 7 -- capital deployed
+    need = sizing["capital_required"]
+    if exp["deployed"] + need > MAX_CAPITAL_DEPLOYED:
+        return {"status": "SKIPPED_CAPITAL",
+                "reason": (f"deployed Rs{exp['deployed']:,.0f} + Rs{need:,.0f} "
+                           f"exceeds cap Rs{MAX_CAPITAL_DEPLOYED:,.0f}")}
+
+    # GATE 8 -- kill switch
+    signal["capital_required"] = need
     if not kill_switch_check(signal):
         return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}
 
-    qty = sizing["qty"]
-    intent = {
-        "symbol": symbol, "direction": direction, "qty": qty,
-        "entry_price": round(ltp, 2), "stop_price": sizing["stop_price"],
-        "stop_pct": sizing["stop_pct"], "risk_actual": sizing["risk_actual"],
-        "notional": sizing["notional"], "product": sizing["product"],
-        "binding_cap": sizing["binding_cap"], "regime": regime,
-        "capital_required": sizing["capital_required"],
-        "setup_name": signal.get("setup_name", ""),
-        "session": signal.get("session", ""),
-        "score": signal.get("score", 0),
-        "grade": signal.get("grade", ""),
-        "sector": signal.get("sector", ""),
-        "zone_source": signal.get("zone_source", ""),
-    }
+    intent = _build_intent(signal, symbol, direction, ltp, sizing, ctx)
 
-    # SHADOW -- log intent, place NO order
     if not LIVE_TRADING_ENABLED:
-        log.info(f"[SHADOW] WOULD ENTER {direction} {qty} {symbol} @ Rs{ltp:.1f} "
+        log.info(f"[SHADOW] WOULD ENTER {direction} {sizing['qty']} {symbol} @ Rs{ltp:.1f} "
                  f"| stop Rs{stop_price:.1f} ({sizing['stop_pct']}%) "
-                 f"| risk Rs{sizing['risk_actual']:,.0f} | notional Rs{sizing['notional']:,.0f}")
+                 f"| risk Rs{sizing['risk_actual']:,.0f}")
         _log_intent(intent, shadow=True)
         return {"status": "SHADOW_INTENT", **intent}
 
-    # LIVE -- place ENTRY order only (NO SL, NO target)
-    order = place_order(symbol=symbol, direction=direction, qty=qty,
-                        order_type="MARKET", tag="ATLAS")
+    order = place_order(symbol=symbol, direction=direction, qty=sizing["qty"],
+                        order_type="MARKET", tag="ATLAS", product=sizing["product"])
     if not order.get("success"):
         return {"status": "ORDER_FAILED", "reason": order.get("reason", "order failed")}
 
@@ -206,14 +283,67 @@ def enter_trade(signal: dict) -> dict:
     return {"status": "ENTERED", **intent}
 
 
-def _log_intent(intent: dict, shadow: bool):
-    """Persist the entry (or shadow intent) to atlas_trades, with the
-    attribution fields the learning loop needs."""
+def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
+    return {
+        "symbol": symbol, "direction": direction, "qty": sizing["qty"],
+        "entry_price": round(price, 2), "stop_price": sizing["stop_price"],
+        "stop_pct": sizing["stop_pct"], "risk_actual": sizing["risk_actual"],
+        "notional": sizing["notional"], "product": sizing["product"],
+        "binding_cap": sizing["binding_cap"], "regime": ctx.get("regime", ""),
+        "capital_required": sizing["capital_required"],
+        "setup_name": signal.get("setup_name", ""), "session": signal.get("session", ""),
+        "score": signal.get("score", 0), "grade": signal.get("grade", ""),
+        "sector": signal.get("sector", ""), "zone_source": signal.get("zone_source", ""),
+    }
+
+
+def _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx, exp) -> dict:
+    """Price sits above the zone on a LONG. Size at the ZONE price -- that is
+    where the fill happens -- and rest a GTT trigger there."""
+    from atlas.execution.gtt import place_zone_gtt
+
+    sizing = size_by_risk(entry_price=entry_ref, stop_price=stop_price, direction="LONG")
+    if sizing.get("qty", 0) <= 0:
+        return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
+
+    need = sizing["capital_required"]
+    if exp["deployed"] + need > MAX_CAPITAL_DEPLOYED:
+        return {"status": "SKIPPED_CAPITAL",
+                "reason": (f"deployed Rs{exp['deployed']:,.0f} + Rs{need:,.0f} "
+                           f"exceeds cap Rs{MAX_CAPITAL_DEPLOYED:,.0f}")}
+
+    if not kill_switch_check({**signal, "capital_required": need}):
+        return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}
+
+    intent = _build_intent(signal, symbol, "LONG", entry_ref, sizing, ctx)
+    intent["product"] = "CNC"
+
+    if not LIVE_TRADING_ENABLED:
+        log.info(f"[SHADOW] WOULD PLACE GTT {sizing['qty']} {symbol} "
+                 f"trigger Rs{entry_ref:.1f} (LTP Rs{ltp:.1f})")
+        _log_intent(intent, shadow=True)
+        return {"status": "SHADOW_GTT", **intent}
+
+    gtt = place_zone_gtt(symbol=symbol, qty=sizing["qty"],
+                         trigger_price=entry_ref, last_price=ltp)
+    if not gtt.get("success"):
+        return {"status": "GTT_FAILED", "reason": gtt.get("reason", "gtt failed")}
+
+    intent["gtt_trigger_id"] = gtt["trigger_id"]
+    intent["trigger_price"]  = gtt["trigger_price"]
+    _log_intent(intent, shadow=False, gtt=True)
+    return {"status": "GTT_PLACED", **intent}
+
+
+def _log_intent(intent: dict, shadow: bool, gtt: bool = False):
+    """status: SHADOW | GTT_PENDING (trigger resting) | OPEN (filled)."""
     rec = {
         "symbol": intent["symbol"], "direction": intent["direction"],
         "entry_price": intent["entry_price"], "qty": intent["qty"],
         "stop_price": intent.get("stop_price"),
-        "status": "SHADOW" if shadow else "OPEN",
+        "gtt_trigger_id": intent.get("gtt_trigger_id"),
+        "trigger_price": intent.get("trigger_price"),
+        "status": "SHADOW" if shadow else ("GTT_PENDING" if gtt else "OPEN"),
         "entry_date": datetime.now(IST).date().isoformat(),
         "agent_mode": "SHADOW" if shadow else "LIVE",
         "setup_name": intent.get("setup_name", ""),
@@ -223,14 +353,19 @@ def _log_intent(intent: dict, shadow: bool):
         "sector": intent.get("sector", ""),
         "zone_source": intent.get("zone_source", ""),
         "notes": (
-            f"SHADOW intent -- no order placed | stop Rs{intent.get('stop_price',0)} "
+            f"SHADOW -- no order placed | stop Rs{intent.get('stop_price',0)} "
             f"({intent.get('stop_pct',0)}%) | risk Rs{intent.get('risk_actual',0):,.0f} "
-            f"| notional Rs{intent.get('notional',0):,.0f} | cap:{intent.get('binding_cap','')} "
-            f"| {intent.get('regime','')}"
+            f"| notional Rs{intent.get('notional',0):,.0f} | {intent.get('regime','')}"
             if shadow else
-            f"MANUAL RISK REQUIRED - place SL at Rs{intent.get('stop_price',0)} "
-            f"| Order {intent.get('order_id','')} | risk Rs{intent.get('risk_actual',0):,.0f} "
-            f"| notional Rs{intent.get('notional',0):,.0f}"
+            (f"GTT RESTING at Rs{intent.get('trigger_price',0)} -- not filled. "
+             f"On fill place SL at Rs{intent.get('stop_price',0)} "
+             f"| trigger {intent.get('gtt_trigger_id','')} "
+             f"| risk Rs{intent.get('risk_actual',0):,.0f}"
+             if gtt else
+             f"MANUAL RISK REQUIRED - place SL at Rs{intent.get('stop_price',0)} "
+             f"| Order {intent.get('order_id','')} "
+             f"| risk Rs{intent.get('risk_actual',0):,.0f} "
+             f"| notional Rs{intent.get('notional',0):,.0f}")
         ),
     }
     try:
