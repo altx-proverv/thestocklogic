@@ -22,17 +22,31 @@ WHAT THIS WRITES
 ----------------
     date, nifty_open, nifty_high, nifty_low, nifty_close,
     vix_close, advance_count, decline_count, ad_ratio,
-    nifty_50dma, nifty_200dma, market_regime, extreme_bearish
+    nifty_50dma, nifty_200dma, market_regime, extreme_bearish,
+    allow_accumulation
 
 REGIME (matching 02b's expected vocabulary -- bull/sideways/bear, NOT the
 bullish/bearish/mixed vocabulary ATLAS uses for sector_heatmap):
-    bull      nifty > 200DMA AND 50DMA > 200DMA
-    bear      nifty < 200DMA
-    sideways  everything else
+    bull      close > 200DMA AND 50DMA > 200DMA
+    bear      close < 200DMA - 3%
+    sideways  everything else (within the band, or above without the DMA stack)
 
-extreme_bearish -- gate for hedge shorts. True when regime is bear AND nifty
-closes below its 200 DMA. Rare by design: shorts are defensive, not a profit
-engine.
+The 3% neutral band exists because without it a 0.78% dip below the average
+flipped the whole system from accumulation to shorts. Regime should not
+oscillate on noise.
+
+extreme_bearish -- gate for hedge shorts ONLY. Requires all three:
+    close < 200DMA - 3%   price genuinely broken down, not brushing the average
+    50DMA < 200DMA        the trend structure has actually turned
+    VIX > 18              fear is present, not just drift
+An earlier version defined this as "bear regime AND below 200DMA", which was
+tautological -- bear already meant below the 200DMA -- and flagged 111 of 139
+classified days as extreme.
+
+allow_accumulation -- True in bull AND sideways.
+A flat, disinterested market is when institutions accumulate and retail is not
+watching. Blocking longs there would refuse the exact conditions the strategy
+is built to find. Only a genuine bear stops accumulation.
 
 SOURCES
 -------
@@ -67,11 +81,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 STOCKS_DIR  = Path("data/processed/stocks")
 MARKET_FILE = Path("data/processed/market.parquet")
 
+NEUTRAL_BAND = 0.03   # +/-3% dead zone around the 200 DMA
+VIX_FEAR     = 18.0   # VIX above this = fear actually present
+
 NIFTY_KEY = "NSE_INDEX|Nifty 50"
 VIX_KEY   = "NSE_INDEX|India VIX"
 
-# 200 DMA needs 200 trading days ~= 290 calendar days. Pull extra for safety.
-BACKFILL_DAYS = 500
+# 200 DMA needs 200 TRADING days ~= 290 calendar days. At 500 days, 199 of 338
+# rows came back 'unknown' because the average could not warm up inside the
+# window. 800 calendar days ~= 540 trading days leaves a usable history.
+BACKFILL_DAYS = 800
 
 
 def _fetch_index_daily(index_key: str, days: int = BACKFILL_DAYS) -> pd.DataFrame:
@@ -147,17 +166,23 @@ def _classify(df: pd.DataFrame) -> pd.DataFrame:
     df["nifty_50dma"]  = df["nifty_close"].rolling(50,  min_periods=50).mean().round(2)
     df["nifty_200dma"] = df["nifty_close"].rolling(200, min_periods=200).mean().round(2)
 
-    above200 = df["nifty_close"] > df["nifty_200dma"]
-    below200 = df["nifty_close"] < df["nifty_200dma"]
-    stacked  = df["nifty_50dma"] > df["nifty_200dma"]
+    above200   = df["nifty_close"] > df["nifty_200dma"]
+    broken     = df["nifty_close"] < df["nifty_200dma"] * (1 - NEUTRAL_BAND)
+    stacked    = df["nifty_50dma"] > df["nifty_200dma"]
+    downstack  = df["nifty_50dma"] < df["nifty_200dma"]
 
     df["market_regime"] = "sideways"
     df.loc[above200 & stacked, "market_regime"] = "bull"
-    df.loc[below200,           "market_regime"] = "bear"
+    df.loc[broken,             "market_regime"] = "bear"
     df.loc[df["nifty_200dma"].isna(), "market_regime"] = "unknown"
 
-    # Hedge-short gate. Deliberately strict.
-    df["extreme_bearish"] = (df["market_regime"] == "bear") & below200
+    # Hedge-short gate. Three conditions, all required. Deliberately rare.
+    vix = df["vix_close"] if "vix_close" in df.columns else pd.Series(np.nan, index=df.index)
+    df["extreme_bearish"] = broken & downstack & (vix > VIX_FEAR)
+
+    # Accumulation runs in bull AND sideways -- a quiet market is the setup,
+    # not a reason to stand aside. Blocked only in a genuine bear.
+    df["allow_accumulation"] = df["market_regime"].isin(["bull", "sideways"])
     return df
 
 
@@ -196,12 +221,17 @@ def build() -> pd.DataFrame:
     log.info(f"Wrote {MARKET_FILE} -- {len(out)} rows")
     log.info(f"Latest {last['date'].date()}: Nifty {last['nifty_close']:.0f} | "
              f"200DMA {last['nifty_200dma'] if pd.notna(last['nifty_200dma']) else 'n/a'} | "
-             f"regime {last['market_regime']} | extreme_bearish {bool(last['extreme_bearish'])} | "
+             f"regime {last['market_regime']} | accumulate {bool(last['allow_accumulation'])} | "
+             f"extreme_bearish {bool(last['extreme_bearish'])} | "
              f"VIX {last['vix_close'] if pd.notna(last['vix_close']) else 'n/a'} | "
              f"A/D {last['ad_ratio'] if pd.notna(last['ad_ratio']) else 'n/a'}")
 
     counts = out["market_regime"].value_counts().to_dict()
+    known = out[out["market_regime"] != "unknown"]
     log.info(f"Regime distribution: {counts}")
+    if len(known):
+        log.info(f"Accumulation allowed: {int(known['allow_accumulation'].sum())}/{len(known)} classified days | "
+                 f"extreme_bearish: {int(known['extreme_bearish'].sum())}")
     return out
 
 
