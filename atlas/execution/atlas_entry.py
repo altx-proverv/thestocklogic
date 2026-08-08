@@ -197,8 +197,7 @@ def enter_trade(signal: dict) -> dict:
 
     # LIVE -- place ENTRY order only (NO SL, NO target)
     order = place_order(symbol=symbol, direction=direction, qty=qty,
-                        order_type="MARKET", tag="ATLAS",
-                        product=sizing["product"])
+                        order_type="MARKET", tag="ATLAS")
     if not order.get("success"):
         return {"status": "ORDER_FAILED", "reason": order.get("reason", "order failed")}
 
