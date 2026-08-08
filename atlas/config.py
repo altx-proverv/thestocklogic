@@ -30,19 +30,38 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Capital configuration
-INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "150000"))  # INR 1.5L
-CAPITAL_PER_TRADE    = 50000.0   # Fixed INR 50K per CNC trade
-DAILY_LOSS_CAP_PCT   = 0.02      # 2% of allocated capital = INR 3,000
-WEEKLY_DRAWDOWN_PCT  = 0.05      # 5% of allocated capital = INR 7,500
-MAX_RISK_PER_TRADE   = 3000      # Max SL loss per trade INR 5,000
-MAX_OPEN_POSITIONS   = 3
-MIN_CONVICTION_SCORE = 82
-ELITE_CONVICTION     = 85
+INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "300000"))  # INR 3L
 
-MAX_LIVE_SIGNALS     = 3
-SIGNAL_DECAY_MINUTES = 30
-MIN_RVOL             = 1.5
-MIN_RR               = 2.0
+# Risk architecture: Rs3,000 risked per trade, Rs1,00,000 max notional.
+# Quantity is DERIVED from stop distance -- see risk/position_sizing.py.
+MAX_RISK_PER_TRADE   = 3000.0    # INR at risk if the structural stop is hit
+MAX_CAPITAL_DEPLOYED = 300000.0  # THE binding constraint. 3 x Rs1L.
+MAX_OPEN_POSITIONS   = 6         # secondary bound; capital usually binds first
+
+# Absolute, not percentage. 3 trades x Rs3k = Rs9,000 worst case in one day.
+# The old 2%-of-1.5L rule produced Rs3,000 -- one stop-out halted the system.
+DAILY_LOSS_CAP_INR   = 9000.0
+WEEKLY_DRAWDOWN_INR  = 22500.0
+# Retained for any legacy caller; derived from the absolute values above.
+DAILY_LOSS_CAP_PCT   = DAILY_LOSS_CAP_INR / INITIAL_CAPITAL
+WEEKLY_DRAWDOWN_PCT  = WEEKLY_DRAWDOWN_INR / INITIAL_CAPITAL
+
+# ACCUMULATION SCREEN -- institutional footprint is QUIET tape, not loud.
+# MIN_RVOL = 1.5 previously demanded above-average volume, which is the
+# opposite of what accumulation looks like.
+MAX_RVOL_ACCUMULATION = 1.0      # relative volume at or below average
+MIN_DELIVERY_PCT      = 50.0     # delivery-based buying, not churn
+DISCOUNT_MIN_PCT      = 5.0      # at least 5% off the 52-week high
+DISCOUNT_MAX_PCT      = 20.0     # but not a broken chart
+
+# --- DEPRECATED. Retained as names so imports do not break. Not used to gate.
+CAPITAL_PER_TRADE    = 0.0       # superseded by the Rs3k/Rs1L dual cap
+MIN_CONVICTION_SCORE = 0         # score is non-predictive; gate removed
+ELITE_CONVICTION     = 0
+MAX_LIVE_SIGNALS     = 0         # GTT rests at the broker; no live queue
+SIGNAL_DECAY_MINUTES = 0         # GTT lifetime is broker-side
+MIN_RVOL             = 0.0       # see MAX_RVOL_ACCUMULATION
+MIN_RR               = 0.0       # undefined with open targets
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -56,7 +75,9 @@ MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 # Rule 4 — quantity must be a multiple of this
 QUANTITY_MULTIPLE = 5
 
-# Rule 6 — hard daily trade cap
+# Rule 6 — new entries per day. NOTE: for accumulation this is rarely the
+# binding limit. Longs are held indefinitely, so capital does not recycle --
+# MAX_CAPITAL_DEPLOYED is what actually stops further entries.
 MAX_TRADES_PER_DAY = 3
 
 # Rules 1, 2 — agent must NOT place SL or target orders
@@ -75,6 +96,21 @@ ALLOW_LONG_IN_BULLISH   = True
 ALLOW_SHORT_IN_BULLISH  = False
 ALLOW_LONG_IN_BEARISH   = False
 ALLOW_SHORT_IN_BEARISH  = True
+
+# Accumulation runs in SIDEWAYS as well as BULL. A quiet, directionless market
+# is when institutions accumulate and retail stops watching -- it is the setup,
+# not a reason to stay in cash. Only a genuine bear (200DMA -3%) blocks longs.
+ALLOW_LONG_IN_SIDEWAYS  = True
+ALLOW_SHORT_IN_SIDEWAYS = False
+
+# Hedge shorts require the extreme_bearish flag from market.parquet:
+# close < 200DMA-3% AND 50DMA < 200DMA AND VIX > 18. Deliberately rare.
+REQUIRE_EXTREME_BEARISH_FOR_SHORTS = True
+
+# The Nifty opening-range gate is an INTRADAY directional check. It applies to
+# hedge shorts only. Applied to accumulation longs it blocked entries on flat
+# days -- precisely the days the strategy targets.
+OPENING_RANGE_GATE_APPLIES_TO = ("SHORT",)
 SHORT_PRODUCT_TYPE      = "MIS"          # rule 10 — shorts intraday only
 ALLOW_OVERNIGHT_SHORT   = False
 DEFAULT_ON_UNKNOWN_REGIME = "CASH"       # unknown/stale regime → no trade
@@ -98,12 +134,16 @@ SESSION_AFTERNOON   = (13,30, 14, 30)
 SESSION_POWER_HOUR  = (14,30, 15, 15)
 SESSION_CLOSING     = (15,15, 15, 30)
 
+# max_trades here is read by kill_switch CHECK 4 as the OPEN POSITION limit,
+# so it must track MAX_OPEN_POSITIONS, not the daily entry count.
+# min_conviction is retained at 0 -- the conviction gates were removed from
+# kill_switch; leaving the key avoids KeyError in any legacy reader.
 AGENT_MODES = {
-    "AGGRESSIVE": {"size_pct": 1.0, "min_conviction": 75, "max_trades": 3},
-    "NORMAL":     {"size_pct": 0.7, "min_conviction": 78, "max_trades": 3},
-    "CAUTIOUS":   {"size_pct": 0.5, "min_conviction": 82, "max_trades": 2},
-    "DEFENSIVE":  {"size_pct": 0.3, "min_conviction": 87, "max_trades": 1},
-    "PAUSED":     {"size_pct": 0.0, "min_conviction": 100,"max_trades": 0},
+    "AGGRESSIVE": {"size_pct": 1.0, "min_conviction": 0, "max_trades": MAX_OPEN_POSITIONS},
+    "NORMAL":     {"size_pct": 1.0, "min_conviction": 0, "max_trades": MAX_OPEN_POSITIONS},
+    "CAUTIOUS":   {"size_pct": 0.7, "min_conviction": 0, "max_trades": 3},
+    "DEFENSIVE":  {"size_pct": 0.5, "min_conviction": 0, "max_trades": 2},
+    "PAUSED":     {"size_pct": 0.0, "min_conviction": 0, "max_trades": 0},
 }
 DEFAULT_AGENT_MODE = "NORMAL"
 VERSION = "1.0.0"
