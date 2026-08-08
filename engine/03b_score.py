@@ -355,6 +355,17 @@ def process_direction(combined: pd.DataFrame, direction: str,
     df = combined.copy()
     df["direction"] = direction
     df = score_vectorized(df, sector_bias, symbol_sector)
+
+    # Accumulation screen -- undoes the momentum-era disqualifiers that reject
+    # quiet, consolidating stocks. Longs only; shorts keep the original logic.
+    from engine.accumulation import apply_accumulation_screen
+    df = apply_accumulation_screen(df)
+
+    # Recompute after the screen: rows it recovered must become qualified, and
+    # MIN_SCORE (65) was the last surviving score gate. Score is non-predictive
+    # per validation -- disqualifiers alone decide qualification now.
+    df["qualifies"] = ~df["disqualified"].fillna(False)
+
     df["setup_name"] = determine_setup_names(df)
 
     # Compute levels for qualifying signals

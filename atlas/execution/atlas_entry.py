@@ -148,13 +148,14 @@ def get_exposure() -> dict:
             f"?agent_mode=eq.LIVE&status=in.({','.join(OPEN_STATUSES)})"
             f"&select=entry_price,qty,status", headers=_headers(), timeout=10)
         if r.status_code != 200:
+            log.error(f"exposure query failed: HTTP {r.status_code}")
             return {"positions": 0, "deployed": 0.0, "ok": False}
         rows = r.json() or []
         deployed = sum(float(x.get("entry_price") or 0) * float(x.get("qty") or 0)
                        for x in rows)
         return {"positions": len(rows), "deployed": deployed, "ok": True}
     except Exception as e:
-        log.warning(f"exposure fetch failed: {e}")
+        log.error(f"exposure fetch failed: {e}")
         return {"positions": 0, "deployed": 0.0, "ok": False}
 
 
@@ -223,7 +224,13 @@ def enter_trade(signal: dict) -> dict:
                     "reason": f"opening range is {mkt_dir} -- hedge short needs SHORT"}
 
     # GATE 3 -- open positions
+    # FAIL CLOSED. If exposure cannot be read, we do not know how much capital
+    # is already committed. Trading blind here could breach every capital limit
+    # at once, so refuse rather than assume zero.
     exp = get_exposure()
+    if not exp.get("ok"):
+        return {"status": "BLOCKED_NO_EXPOSURE_DATA",
+                "reason": "cannot read current exposure -- refusing to trade blind"}
     if exp["positions"] >= MAX_OPEN_POSITIONS:
         return {"status": "SKIPPED_LIMIT",
                 "reason": f"open positions {exp['positions']}/{MAX_OPEN_POSITIONS}"}
