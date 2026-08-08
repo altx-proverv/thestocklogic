@@ -363,6 +363,7 @@ def process_direction(combined: pd.DataFrame, direction: str,
         levels = compute_trade_levels_vectorized(df[qual_mask].copy())
         for col in ["entry_ref","entry_low","entry_high","sl","stop_pct",
                     "entry_dist_pct","qty","risk_inr","notional","product",
+                    "target_1","target_2","rr_1","rr_2",
                     "entry_valid","reject_reason","qualifies",
                     "disqualified","disqualify_reason"]:
             if col in levels.columns:

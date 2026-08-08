@@ -134,6 +134,14 @@ def push_signals(target_date: str = None):
             "entry_high":       float(row.get("entry_high")) if row.get("entry_high") else None,
             "sl":               float(row.get("sl", 0)) if row.get("sl") else None,
             "stop_pct":         float(row.get("stop_pct", 0)) if row.get("stop_pct") else None,
+            # MEASUREMENT ONLY -- consumed by update_outcomes.py and the
+            # screener's accuracy record. ATLAS ignores these entirely:
+            # accumulation longs are held open with manual exits.
+            # 2R / 3R off the structural stop, not off the previous close.
+            "target_1":         float(row.get("target_1", 0)) if row.get("target_1") else None,
+            "target_2":         float(row.get("target_2", 0)) if row.get("target_2") else None,
+            "rr_1":             float(row.get("rr_1", 0)) if row.get("rr_1") else None,
+            "rr_2":             float(row.get("rr_2", 0)) if row.get("rr_2") else None,
             "entry_dist_pct":   float(row.get("entry_dist_pct", 0)) if row.get("entry_dist_pct") is not None else None,
             "notional":         float(row.get("notional", 0)) if row.get("notional") else None,
             "product":          str(row.get("product", "CNC")),
