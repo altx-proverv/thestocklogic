@@ -317,7 +317,10 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     # shorts), forward-filled by engine.active_zones. Stop = last swing extreme
     # forced outside the zone. Sizing = Rs3k risk / Rs1L notional, dual cap.
     # No targets -- winners are trailed. See engine/zone_entry.py.
-    from engine.zone_entry import compute_zone_entries
+    try:
+        from engine.zone_entry import compute_zone_entries
+    except ModuleNotFoundError:
+        from zone_entry import compute_zone_entries
     df = compute_zone_entries(df)
 
     invalid = ~df["entry_valid"]
@@ -358,7 +361,10 @@ def process_direction(combined: pd.DataFrame, direction: str,
 
     # Accumulation screen -- undoes the momentum-era disqualifiers that reject
     # quiet, consolidating stocks. Longs only; shorts keep the original logic.
-    from engine.accumulation import apply_accumulation_screen
+    try:
+        from engine.accumulation import apply_accumulation_screen
+    except ModuleNotFoundError:
+        from accumulation import apply_accumulation_screen
     df = apply_accumulation_screen(df)
 
     # Recompute after the screen: rows it recovered must become qualified, and
