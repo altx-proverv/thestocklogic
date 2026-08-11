@@ -59,12 +59,40 @@ def load_symbol_sector() -> dict:
         return {}
 
 
+# Every scoring input is read via df.get(col, <default>), which silently
+# substitutes a constant when the column is absent or misspelled. That is how
+# the macd_positive / macd_hist_positive mismatch survived unnoticed and put a
+# standing +2 on every short. Warn once per missing column so the next typo is
+# visible in the log instead of quietly biasing the score.
+_EXPECTED_SCORING_COLS = (
+    "no_trade_zone", "rvol", "atr_pct", "market_regime", "adx_ranging", "adx",
+    "weekly_bullish", "weekly_bearish", "recent_bos_choch", "structure_trend",
+    "near_demand_ob", "near_supply_ob", "price_in_bull_fvg", "price_in_bear_fvg",
+    "bos_bull", "bos_bear", "choch_bull", "choch_bear",
+    "bull_liq_sweep", "bear_liq_sweep", "in_discount", "in_premium",
+    "vix_close", "ad_ratio", "rsi", "macd_hist_rising", "macd_positive",
+    "price_above_ema20", "ema20_above_ema50", "ema50_above_ema200",
+    "institutional_buying", "high_delivery", "rs_positive", "pct_from_52w_high",
+)
+_warned_missing = set()
+
+
+def _warn_missing_cols(df: pd.DataFrame):
+    missing = [c for c in _EXPECTED_SCORING_COLS
+               if c not in df.columns and c not in _warned_missing]
+    if missing:
+        _warned_missing.update(missing)
+        log.warning(f"SCORING INPUTS MISSING -- falling back to defaults for: "
+                    f"{', '.join(missing)}. Scores are biased until this is fixed.")
+
+
 def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -> pd.DataFrame:
     """
     Scores all rows using vectorized pandas operations.
     No loops. No iterrows. Pure numpy/pandas.
     """
     n = len(df)
+    _warn_missing_cols(df)
 
     # ── Add sector context ────────────────────────────────────────
     df["sector"]      = df["symbol"].map(symbol_sector).fillna("OTHER")
@@ -192,7 +220,12 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     ema20_50 = df.get("ema20_above_ema50",  pd.Series(0,index=df.index)).fillna(0)
     ema50_200= df.get("ema50_above_ema200", pd.Series(0,index=df.index)).fillna(0)
     macd_r   = df.get("macd_hist_rising",   pd.Series(0,index=df.index)).fillna(0)
-    macd_p   = df.get("macd_hist_positive", pd.Series(0,index=df.index)).fillna(0)
+    # 02b writes this as "macd_positive" (not "macd_hist_positive" -- its two
+    # MACD columns are named inconsistently). Reading the wrong name meant
+    # .get() returned its all-zero default on every row: longs silently lost
+    # the 2-point macd_positive component, and shorts silently GAINED a
+    # permanent +2 from (1 - 0) * 2. Read the name the producer actually writes.
+    macd_p   = df.get("macd_positive",      pd.Series(0,index=df.index)).fillna(0)
 
     ema_long  = p_ema20*4 + ema20_50*3 + ema50_200*3
     ema_short = (1-p_ema20)*4 + (1-ema20_50)*3 + (1-ema50_200)*3
