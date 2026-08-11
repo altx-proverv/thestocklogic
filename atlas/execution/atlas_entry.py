@@ -29,11 +29,12 @@ actually stops further entries; the daily count is a secondary guard.
 
 REGIME now comes from data/processed/market.parquet (bull / sideways / bear,
 200 DMA with a 3% neutral band) rather than sector_heatmap's
-bullish/bearish/mixed vocabulary. Falls back to sector_heatmap if the parquet
-is absent, so nothing breaks before build_market.py is wired into cron.
+bullish/bearish/mixed vocabulary. build_market.py writes it nightly in the EOD
+chain, ahead of 02b. Falls back to sector_heatmap if the parquet is absent or
+STALE; if both sources are stale the regime is 'unknown', which means no trade.
 """
 import sys, requests, logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -55,6 +56,14 @@ IST = timezone(timedelta(hours=5, minutes=30))
 MARKET_FILE = Path(__file__).parent.parent.parent / "data" / "processed" / "market.parquet"
 OPEN_STATUSES = ("OPEN", "GTT_PENDING")
 
+# Refuse a regime older than this. market.parquet is rebuilt nightly by
+# build_market.py (EOD chain, ahead of 02b); a gap this wide means that job
+# stopped running. Reading iloc[-1] unconditionally meant a months-old regime
+# could gate live entries with no signal that anything was wrong. Sized to
+# survive a long weekend plus an NSE holiday, and matched to
+# market_open.MAX_BATCH_AGE_DAYS so the two staleness guards agree.
+MAX_REGIME_AGE_DAYS = 5
+
 
 def _headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -65,21 +74,49 @@ def _headers():
 # MARKET CONTEXT
 # ─────────────────────────────────────────────────────────────────────
 
+def _stale(as_of: str, label: str) -> bool:
+    """True if `as_of` (YYYY-MM-DD) is older than MAX_REGIME_AGE_DAYS.
+
+    An unparseable date is treated as STALE. This gate is fail-closed by
+    design: a regime we cannot date is a regime we cannot trust, and
+    regime_allows_side() turns 'unknown' into no-trade.
+    """
+    if not as_of:
+        log.error(f"{label}: no date on regime row -- treating as stale")
+        return True
+    try:
+        age = (datetime.now(IST).date() - date.fromisoformat(str(as_of)[:10])).days
+    except Exception as e:
+        log.error(f"{label}: unparseable regime date {as_of!r} ({e}) -- treating as stale")
+        return True
+    if age > MAX_REGIME_AGE_DAYS:
+        log.error(f"STALE REGIME -- {label} is {age} days old ({as_of}); "
+                  f"max {MAX_REGIME_AGE_DAYS}. Is build_market.py still running?")
+        return True
+    log.info(f"{label} regime {as_of} -- {age} day(s) old")
+    return False
+
+
 def get_market_context() -> dict:
-    """Regime from market.parquet. Falls back to sector_heatmap if absent."""
+    """Regime from market.parquet. Falls back to sector_heatmap if the parquet
+    is absent OR stale; returns 'unknown' (-> no trade) if both are stale."""
     try:
         import pandas as pd
         if MARKET_FILE.exists():
             d = pd.read_parquet(MARKET_FILE).sort_values("date")
             if len(d):
                 last = d.iloc[-1]
-                return {
-                    "regime":             str(last.get("market_regime", "unknown")),
-                    "allow_accumulation": bool(last.get("allow_accumulation", False)),
-                    "extreme_bearish":    bool(last.get("extreme_bearish", False)),
-                    "as_of":              str(last.get("date", ""))[:10],
-                    "source":             "market.parquet",
-                }
+                as_of = str(last.get("date", ""))[:10]
+                # Do NOT trust iloc[-1] on date alone -- build_market.py is the
+                # only writer, and if it stops the last row sits there forever.
+                if not _stale(as_of, "market.parquet"):
+                    return {
+                        "regime":             str(last.get("market_regime", "unknown")),
+                        "allow_accumulation": bool(last.get("allow_accumulation", False)),
+                        "extreme_bearish":    bool(last.get("extreme_bearish", False)),
+                        "as_of":              as_of,
+                        "source":             "market.parquet",
+                    }
     except Exception as e:
         log.warning(f"market.parquet read failed: {e}")
 
@@ -89,20 +126,29 @@ def get_market_context() -> dict:
             f"{SUPABASE_URL}/rest/v1/sector_heatmap?select=market_direction,signal_date"
             f"&order=signal_date.desc&limit=1", headers=_headers(), timeout=10)
         if r.status_code == 200 and r.json():
-            d = (r.json()[0].get("market_direction") or "unknown").lower()
-            mapped = {"bullish": "bull", "bearish": "bear", "mixed": "sideways"}.get(d, "unknown")
-            return {
-                "regime":             mapped,
-                "allow_accumulation": mapped in ("bull", "sideways"),
-                # Fallback cannot establish extreme_bearish -- it needs the
-                # 200DMA and VIX. Deny shorts rather than guess.
-                "extreme_bearish":    False,
-                "as_of":              r.json()[0].get("signal_date", ""),
-                "source":             "sector_heatmap (fallback)",
-            }
+            row = r.json()[0]
+            as_of = row.get("signal_date", "")
+            # The fallback needs the same guard: it orders by signal_date desc
+            # with no lower bound, so a dead 07_sector_momentum yields an
+            # arbitrarily old row that still looks like a live answer.
+            if not _stale(as_of, "sector_heatmap"):
+                d = (row.get("market_direction") or "unknown").lower()
+                mapped = {"bullish": "bull", "bearish": "bear",
+                          "mixed": "sideways"}.get(d, "unknown")
+                return {
+                    "regime":             mapped,
+                    "allow_accumulation": mapped in ("bull", "sideways"),
+                    # Fallback cannot establish extreme_bearish -- it needs the
+                    # 200DMA and VIX. Deny shorts rather than guess.
+                    "extreme_bearish":    False,
+                    "as_of":              as_of,
+                    "source":             "sector_heatmap (fallback)",
+                }
     except Exception as e:
         log.warning(f"regime fallback failed: {e}")
 
+    log.error("No usable regime source -- both market.parquet and sector_heatmap "
+              "are absent or stale. Refusing to trade.")
     return {"regime": "unknown", "allow_accumulation": False,
             "extreme_bearish": False, "as_of": "", "source": "none"}
 

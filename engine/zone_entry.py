@@ -179,12 +179,55 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
     df["reject_reason"] = reason
     df["product"]       = np.where(direction == "short", "MIS", "CNC")
 
-    # Explicitly retired -- open target, trailing exit.
+    # Explicitly retired as TRADE levels -- open target, trailing exit.
+    # A fixed 2R/3R yardstick still exists for MEASUREMENT only; it is applied
+    # at push/scoring time, never here. See measurement_targets() below.
     for dead in ("target_1", "target_2", "rr_1", "rr_2", "sl_pct"):
         if dead in df.columns:
             df.drop(columns=[dead], inplace=True)
 
     return df
+
+
+# Measurement yardstick. NOT trade levels.
+#
+# The live strategy holds with an open target and trails winners, so
+# compute_zone_entries() drops target_1/target_2 above. But scoring signal
+# accuracy needs SOME fixed reference, otherwise every outcome is "OPEN"
+# forever and there is no accuracy record at all.
+#
+# 06_push_supabase.py already documented the intent -- "2R / 3R off the
+# structural stop, not off the previous close" -- but nothing computed it once
+# the columns were dropped, so target_1 pushed as NULL and both consumers
+# (update_outcomes.py, trade_review.py) skipped every signal on their
+# `t1 <= 0 -> SKIP` guard. Defined here, in one place, so the two consumers and
+# the push agree on what is being measured.
+#
+# ATLAS never reads these. atlas/signal/market_open.py builds its signal dict
+# without target_1/target_2 and atlas_entry.enter_trade() sizes off the
+# structural stop alone.
+MEASURE_R1 = 2.0
+MEASURE_R2 = 3.0
+
+
+def measurement_targets(entry: float, stop: float, direction: str = "long") -> tuple:
+    """(target_1, target_2) at 2R/3R off the structural stop, for accuracy
+    measurement only. Returns (None, None) if the geometry is unusable."""
+    try:
+        e, s = float(entry), float(stop)
+    except (TypeError, ValueError):
+        return None, None
+    if not np.isfinite(e) or not np.isfinite(s) or e <= 0 or s <= 0:
+        return None, None
+
+    is_long = str(direction or "long").strip().lower() != "short"
+    r = (e - s) if is_long else (s - e)
+    if r <= 0:                     # stop on the wrong side of entry
+        return None, None
+
+    if is_long:
+        return round(e + MEASURE_R1 * r, 2), round(e + MEASURE_R2 * r, 2)
+    return round(e - MEASURE_R1 * r, 2), round(e - MEASURE_R2 * r, 2)
 
 
 def reject_report(df: pd.DataFrame) -> dict:

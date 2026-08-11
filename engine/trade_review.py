@@ -20,6 +20,10 @@ PARQUET_DIR  = Path("data/processed/stocks")
 
 # NSE holidays 2025-2026
 from trading_calendar import is_trading_day, next_n_trading_days, friday_gap_risk_flag
+try:
+    from engine.zone_entry import measurement_targets
+except ModuleNotFoundError:
+    from zone_entry import measurement_targets
 
 def next_trading_days(from_date, n=5):
     return next_n_trading_days(from_date, n)
@@ -57,6 +61,14 @@ def evaluate_signal(sig, stock_df):
     t2          = float(sig.get("target_2") or 0)
     qty         = int(sig.get("qty") or 1)
     risk_inr    = float(sig.get("risk_inr") or 0)
+
+    # Same NULL-target blindness as update_outcomes.py -- derive the 2R/3R
+    # measurement yardstick when the stored row has none.
+    if t1 <= 0 and entry_ref > 0 and sl > 0:
+        _t1, _t2 = measurement_targets(entry_ref, sl, direction)
+        t1 = float(_t1 or 0)
+        if t2 <= 0:
+            t2 = float(_t2 or 0)
 
     if entry_ref <= 0 or sl <= 0 or t1 <= 0:
         return {"entry_status": "NO_LEVELS", "outcome": "SKIP"}

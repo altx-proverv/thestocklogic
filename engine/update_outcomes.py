@@ -13,6 +13,10 @@ from datetime import date, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent))
 from trading_calendar import next_n_trading_days, is_trading_day
+try:
+    from engine.zone_entry import measurement_targets
+except ModuleNotFoundError:
+    from zone_entry import measurement_targets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -75,6 +79,14 @@ def evaluate(sig, stock_df):
     t1          = float(sig.get("target_1") or 0)
     qty         = int(sig.get("qty") or 1)
     risk_inr    = float(sig.get("risk_inr") or 0)
+
+    # Signals pushed before the measurement yardstick was restored carry a NULL
+    # target_1 and used to fall straight through the guard below as SKIP --
+    # which is why this job reported "Processed: 0" while looking healthy.
+    # Derive the same 2R/3R yardstick so the historical record is scored too.
+    if t1 <= 0 and entry_ref > 0 and sl > 0:
+        _t1, _ = measurement_targets(entry_ref, sl, direction)
+        t1 = float(_t1 or 0)
 
     if entry_ref <= 0 or sl <= 0 or t1 <= 0:
         return {"entry_status": "NO_LEVELS", "outcome": "SKIP"}

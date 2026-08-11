@@ -13,6 +13,13 @@ from datetime import date
 import pandas as pd
 import requests
 
+# Measurement yardstick (2R/3R off the structural stop). Single definition --
+# update_outcomes.py and trade_review.py import the same helper.
+try:
+    from engine.zone_entry import measurement_targets
+except ModuleNotFoundError:
+    from zone_entry import measurement_targets
+
 warnings.filterwarnings("ignore")
 Path("reports").mkdir(exist_ok=True)
 logging.basicConfig(
@@ -122,6 +129,17 @@ def push_signals(target_date: str = None):
         if entry <= 0:
             _skipped += 1
             continue
+
+        # Measurement targets. zone_entry drops target_1/target_2 as TRADE
+        # levels (open target, trailed exits) -- these are the fixed 2R/3R
+        # yardstick the accuracy record is scored against. ATLAS ignores them.
+        _sl_raw = row.get("sl")
+        try:
+            _sl_val = float(_sl_raw)
+        except (TypeError, ValueError):
+            _sl_val = 0.0
+        _t1, _t2 = measurement_targets(entry, _sl_val, row.get("direction", "long"))
+
         records.append({
             "signal_date":      d.strftime("%Y-%m-%d"),
             "symbol":           str(row.get("symbol", "")),
@@ -138,10 +156,13 @@ def push_signals(target_date: str = None):
             # screener's accuracy record. ATLAS ignores these entirely:
             # accumulation longs are held open with manual exits.
             # 2R / 3R off the structural stop, not off the previous close.
-            "target_1":         float(row.get("target_1", 0)) if row.get("target_1") else None,
-            "target_2":         float(row.get("target_2", 0)) if row.get("target_2") else None,
-            "rr_1":             float(row.get("rr_1", 0)) if row.get("rr_1") else None,
-            "rr_2":             float(row.get("rr_2", 0)) if row.get("rr_2") else None,
+            # Computed above via zone_entry.measurement_targets(); reading them
+            # off `row` returned NULL for every signal once zone_entry started
+            # dropping the columns, which silently blinded both consumers.
+            "target_1":         _t1,
+            "target_2":         _t2,
+            "rr_1":             2.0 if _t1 else None,
+            "rr_2":             3.0 if _t2 else None,
             "entry_dist_pct":   float(row.get("entry_dist_pct", 0)) if row.get("entry_dist_pct") is not None else None,
             "notional":         float(row.get("notional", 0)) if row.get("notional") else None,
             "product":          str(row.get("product", "CNC")),
