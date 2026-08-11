@@ -9,7 +9,7 @@ All order placement goes through this layer.
 Kill switch is checked before every order.
 """
 
-import os, sys, logging, requests
+import os, sys, logging, requests, threading, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -23,6 +23,53 @@ from atlas.config import (
 log = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
+HTTP_TIMEOUT = 10
+
+# Token + client cache.
+#
+# get_kite() used to do a fresh Supabase round-trip AND build a new KiteConnect
+# on EVERY call, and it is called by get_ltp, get_positions, get_holdings,
+# place_order, place_sl_order, cancel_order, get_order_status,
+# get_account_balance, all three gtt.py helpers, trade_management and
+# trade_outcome_checker. market_open evaluates up to ~150 candidates at 09:37,
+# each costing a get_ltp -> get_kite -> Supabase fetch, so a signal batch that
+# grew from 4 to 154 multiplied that traffic by ~38x on the latency-sensitive
+# path.
+#
+# A Kite access token is valid for the whole trading day, so this is pure waste.
+# TTL is short enough that a mid-day re-login is picked up quickly. Empty tokens
+# are never cached, so a login completing after a failed lookup takes effect on
+# the next call rather than after the TTL.
+KITE_CACHE_TTL = 300.0   # seconds
+
+_cache_lock = threading.Lock()
+_cache = {"token": "", "kite": None, "at": 0.0}
+
+
+_AUTH_ERROR_MARKERS = (
+    "TokenException", "PermissionException",
+    "Incorrect `api_key` or `access_token`",
+    "Invalid `api_key` or `access_token`",
+)
+
+
+def _note_broker_error(e: Exception):
+    """If the broker rejected our credentials, drop the cache so the next call
+    re-reads the token rather than reusing a dead one for the rest of the TTL.
+    Matched on text so kiteconnect.exceptions stays an optional import."""
+    blob = f"{type(e).__name__}: {e}"
+    if any(m in blob for m in _AUTH_ERROR_MARKERS):
+        log.warning("Broker rejected the access token — invalidating cache")
+        invalidate_kite_cache()
+
+
+def invalidate_kite_cache():
+    """Drop the cached token and client. Call after a re-login, or when the
+    broker rejects the token mid-session."""
+    with _cache_lock:
+        _cache.update({"token": "", "kite": None, "at": 0.0})
+    log.info("Kite cache invalidated")
+
 
 def _headers():
     return {
@@ -33,32 +80,65 @@ def _headers():
     }
 
 
-def get_access_token() -> str:
-    """Fetch stored Zerodha access token from Supabase."""
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/broker_tokens"
-        f"?broker=eq.zerodha&order=created_at.desc&limit=1",
-        headers=_headers()
-    )
+def _fetch_access_token() -> str:
+    """Uncached read of the stored Zerodha access token."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/broker_tokens"
+            f"?broker=eq.zerodha&order=created_at.desc&limit=1",
+            headers=_headers(), timeout=HTTP_TIMEOUT
+        )
+    except requests.RequestException as e:
+        log.error(f"broker_tokens fetch failed: {type(e).__name__}: {e}")
+        return ""
     if r.status_code == 200 and r.json():
-        return r.json()[0].get("access_token", "")
+        return r.json()[0].get("access_token") or ""
+    if r.status_code != 200:
+        log.error(f"broker_tokens fetch failed: HTTP {r.status_code}")
     return ""
 
 
-def get_kite():
-    """Get authenticated KiteConnect instance."""
+def get_access_token(force_refresh: bool = False) -> str:
+    """Stored Zerodha access token, cached for KITE_CACHE_TTL seconds."""
+    with _cache_lock:
+        fresh = (not force_refresh
+                 and _cache["token"]
+                 and (time.monotonic() - _cache["at"]) < KITE_CACHE_TTL)
+        if fresh:
+            return _cache["token"]
+
+    token = _fetch_access_token()          # network call outside the lock
+    if token:
+        with _cache_lock:
+            _cache["token"] = token
+            _cache["at"] = time.monotonic()
+    return token
+
+
+def get_kite(force_refresh: bool = False):
+    """Authenticated KiteConnect instance, cached alongside the token."""
+    with _cache_lock:
+        fresh = (not force_refresh
+                 and _cache["kite"] is not None
+                 and (time.monotonic() - _cache["at"]) < KITE_CACHE_TTL)
+        if fresh:
+            return _cache["kite"]
+
+    token = get_access_token(force_refresh=force_refresh)
+    if not token:
+        log.error("No Zerodha access token found — login required")
+        return None
     try:
         from kiteconnect import KiteConnect
         kite = KiteConnect(api_key=ZERODHA_API_KEY)
-        token = get_access_token()
-        if token:
-            kite.set_access_token(token)
-            return kite
-        log.error("No Zerodha access token found — login required")
-        return None
+        kite.set_access_token(token)
     except Exception as e:
         log.error(f"KiteConnect init failed: {e}")
         return None
+
+    with _cache_lock:
+        _cache["kite"] = kite
+    return kite
 
 
 def get_ltp(symbol: str, exchange: str = "NSE") -> float:
@@ -72,6 +152,7 @@ def get_ltp(symbol: str, exchange: str = "NSE") -> float:
         return float(data[instrument]["last_price"])
     except Exception as e:
         log.error(f"LTP fetch failed for {symbol}: {e}")
+        _note_broker_error(e)
         return 0.0
 
 
@@ -85,6 +166,7 @@ def get_positions() -> list:
         return positions.get("net", [])
     except Exception as e:
         log.error(f"Positions fetch failed: {e}")
+        _note_broker_error(e)
         return []
 
 
@@ -97,6 +179,7 @@ def get_holdings() -> list:
         return kite.holdings()
     except Exception as e:
         log.error(f"Holdings fetch failed: {e}")
+        _note_broker_error(e)
         return []
 
 
@@ -173,6 +256,7 @@ def place_order(
 
     except Exception as e:
         log.error(f"Order placement failed for {symbol}: {e}")
+        _note_broker_error(e)
         return {"success": False, "reason": str(e)}
 
 
@@ -220,6 +304,7 @@ def place_sl_order(
 
     except Exception as e:
         log.error(f"SL order failed for {symbol}: {e}")
+        _note_broker_error(e)
         return {"success": False, "reason": str(e)}
 
 
@@ -235,6 +320,7 @@ def cancel_order(order_id: str) -> bool:
         return True
     except Exception as e:
         log.error(f"Cancel order failed {order_id}: {e}")
+        _note_broker_error(e)
         return False
 
 
@@ -251,6 +337,7 @@ def get_order_status(order_id: str) -> dict:
         return {}
     except Exception as e:
         log.error(f"Order status failed {order_id}: {e}")
+        _note_broker_error(e)
         return {}
 
 
@@ -269,6 +356,7 @@ def get_account_balance() -> dict:
         }
     except Exception as e:
         log.error(f"Balance fetch failed: {e}")
+        _note_broker_error(e)
         return {}
 
 
