@@ -15,7 +15,7 @@ Run: python3 engine/upstox_ws.py
 
 import os, sys, json, logging, asyncio, time
 from pathlib import Path
-from datetime import datetime, date, time as dtime
+from datetime import datetime, date, time as dtime, timezone, timedelta
 import pandas as pd
 import requests
 
@@ -26,6 +26,27 @@ log = logging.getLogger(__name__)
 BASE_URL = "https://api.upstox.com/v2"
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
+
+# The deployment box runs Etc/UTC and cron fires in UTC. Every session window
+# below is IST, so a naive datetime.now() compared them against UTC wall clock:
+# three of the four scheduled --update runs matched no window at all and exited
+# at "Market closed", and the fourth (09:45 UTC = 15:15 IST, the closing bell)
+# landed inside the 09:15-11:30 window and tagged its data session="morning".
+# live_prices was therefore written once a day, at the close, and btst_engine
+# read day-old LTPs from it. Everything else in the repo is IST-aware; this
+# module was the exception.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def today_ist() -> date:
+    """IST calendar date. date.today() is the host's date -- after 18:30 UTC
+    that is already the NEXT IST day, which would mis-stamp signal_date."""
+    return now_ist().date()
+
 
 # Session definitions (IST)
 SESSIONS = {
@@ -51,9 +72,15 @@ def get_headers() -> dict:
 
 
 def get_current_session() -> str:
-    now = datetime.now().time()
+    """Current IST session name, or 'closed'.
+
+    Windows are half-open [start, end). The previous inclusive `<= end` made
+    the boundaries ambiguous -- 11:30 matched both `morning` and `afternoon`,
+    and dict order silently decided it was morning.
+    """
+    now = now_ist().time()
     for name, (start, end) in SESSIONS.items():
-        if start <= now <= end:
+        if start <= now < end:
             return name
     return "closed"
 
@@ -191,7 +218,7 @@ def compute_orb(quotes: dict, symbol_map: dict, orb_data: dict = None) -> list:
     Detect Opening Range Breakout signals.
     ORB = high/low of first 15 minutes (9:15-9:30 AM)
     """
-    now = datetime.now()
+    now = now_ist()
     signals = []
 
     for sym, inst_key in symbol_map.items():
@@ -274,7 +301,7 @@ def push_live_signals(signals: list, session: str):
         "Prefer": "resolution=merge-duplicates"
     }
 
-    today = date.today().isoformat()
+    today = today_ist().isoformat()
 
     # Delete existing live signals for today's session
     requests.delete(
@@ -313,8 +340,7 @@ def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
     if not supabase_key or sector_df.empty:
         return
 
-    today = date.today().isoformat()
-    now   = datetime.now().strftime("%H:%M")
+    today = today_ist().isoformat()
 
     headers = {
         "apikey":        supabase_key,
@@ -400,7 +426,7 @@ def run_session_update():
         log.info(f"{icon} {int(row['rank']):<3} {row['sector']:<12} {row['ret_median']:>+6.2f}%  {row['trade_bias']}")
 
     # Save sector data
-    sector_df["signal_date"] = date.today().isoformat()
+    sector_df["signal_date"] = today_ist().isoformat()
     sector_df["session"]     = session
     sector_df.to_parquet(DATA_DIR / f"live_sector_{session}.parquet", index=False)
 
@@ -470,7 +496,7 @@ def push_live_prices(quotes: dict, instrument_keys: dict):
             "symbol":     symbol,
             "ltp":        round(float(ltp), 2),
             "change_pct": change_pct,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": now_ist().isoformat(),
         })
 
     if not records:
