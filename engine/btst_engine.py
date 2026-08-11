@@ -67,6 +67,20 @@ def get_market_regime() -> str:
     return "mixed"
 
 
+def _latest(df: pd.DataFrame, col: str):
+    """Latest value of `col` as a float, or None if the column is absent or the
+    value is NaN.
+
+    Callers must treat None as a reject. Returning a sentinel like 0.0 would be
+    wrong in the other direction for some gates, and returning NaN silently
+    inverts every `<` comparison it touches.
+    """
+    if col not in df.columns:
+        return None
+    v = df[col].iloc[-1]
+    return None if pd.isna(v) else float(v)
+
+
 def compute_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
@@ -101,26 +115,34 @@ def score_btst(row: dict, df: pd.DataFrame, live_ltp: float) -> dict:
     ltp    = live_ltp if live_ltp > 0 else close
 
     # ── PRIMARY FILTERS ───────────────────────────────────────────
+    # Each is a `value < THRESHOLD -> reject` test, and NaN makes EVERY such
+    # comparison False -- so a stock with missing data used to sail through a
+    # mandatory filter rather than fail it. Worse for delivery: the score line
+    # below does min(20, (nan - 45)/2), and min() returns its first argument
+    # when the comparison is False, so a missing delivery figure scored +20 --
+    # the maximum. On 2026-08-11 four of five A+ candidates were NaN-delivery
+    # stocks scoring 100. Missing data is now an explicit reject.
 
-    # 1. Delivery % — must be >= MIN_DELIVERY_PCT
-    delivery_pct = float(df["delivery_pct"].iloc[-1] if "delivery_pct" in df.columns else 0)
-    if delivery_pct < MIN_DELIVERY_PCT:
+    # 1. Delivery % — the primary BTST filter. No figure, no thesis.
+    delivery_pct = _latest(df, "delivery_pct")
+    if delivery_pct is None or delivery_pct < MIN_DELIVERY_PCT:
         return None
 
     # 2. Volume — must meet minimum liquidity
-    avg_vol = float(df["vol_avg20"].iloc[-1] if "vol_avg20" in df.columns else 0)
-    if avg_vol < MIN_VOLUME:
+    avg_vol = _latest(df, "vol_avg20")
+    if avg_vol is None or avg_vol < MIN_VOLUME:
         return None
 
     # 3. RVOL — must show expansion
-    rvol = float(df["rvol"].iloc[-1] if "rvol" in df.columns else 1.0)
-    if rvol < MIN_RVOL_CLOSE:
+    rvol = _latest(df, "rvol")
+    if rvol is None or rvol < MIN_RVOL_CLOSE:
         return None
 
     # 4. Price above 20 EMA — trend intact
-    ema20 = float(compute_ema(df["close"], 20).iloc[-1])
-    if ltp < ema20:
+    ema20 = compute_ema(df["close"], 20).iloc[-1]
+    if pd.isna(ema20) or ltp < float(ema20):
         return None
+    ema20 = float(ema20)
 
     # ── SCORING ───────────────────────────────────────────────────
     score = 50  # base score

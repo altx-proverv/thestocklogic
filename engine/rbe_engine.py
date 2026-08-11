@@ -85,9 +85,11 @@ class RBEngine:
             data = json.load(f)
         self.ranges = data["stocks"]
         self.curve  = data["volume_curve"]
+        self.generated_at = data.get("generated_at", "")
         self.fired  = self._load_fired_today()
         self.tick_count = 0
         log.info(f"Range map loaded: {len(self.ranges)} stocks | "
+                 f"generated {self.generated_at or 'unknown'} | "
                  f"Already fired today: {len(self.fired)}")
 
     def _load_fired_today(self) -> set:
@@ -188,6 +190,14 @@ class RBEngine:
 
     def on_connect(self, ws, response):
         tokens = [ZERODHA_TOKEN_MAP[s] for s in self.ranges if s in ZERODHA_TOKEN_MAP]
+        if not tokens:
+            # Kite answers subscribe([]) with "error parsing request" and then
+            # sits there. main() should have caught this already; belt and
+            # braces so we never hold an idle socket for a whole session.
+            log.error("No subscribable tokens — closing socket instead of "
+                      "subscribing to an empty list.")
+            ws.close()
+            return
         ws.subscribe(tokens)
         ws.set_mode(ws.MODE_QUOTE, tokens)
         log.info(f"WebSocket connected — subscribed {len(tokens)} tokens (quote mode)")
@@ -215,6 +225,25 @@ def main():
 
     from kiteconnect import KiteTicker
     engine = RBEngine()
+
+    # Validate the map BEFORE opening a socket. On 2026-08-11 an expired token
+    # left rbe_startup writing a map with 0 stocks; this process then subscribed
+    # to an empty token list, Kite replied "error parsing request", and it ran
+    # 09:14-15:16 IST logging 0-tick heartbeats. Neither condition is
+    # recoverable at runtime, so refuse to start.
+    if not engine.ranges:
+        log.error("Range map is EMPTY (0 stocks) — refusing to start. "
+                  "Re-run rbe_startup.py; if it also reports 0, the Zerodha "
+                  "access token is missing or expired.")
+        sys.exit(1)
+
+    today = now_ist().date().isoformat()
+    if engine.generated_at != today:
+        log.error(f"Range map is STALE — generated {engine.generated_at or 'unknown'}, "
+                  f"today is {today}. Ranges and PDH/PDL would be wrong. "
+                  f"Re-run rbe_startup.py.")
+        sys.exit(1)
+
     kws = KiteTicker(ZERODHA_API_KEY, token)
     kws.on_ticks   = engine.on_ticks
     kws.on_connect = engine.on_connect

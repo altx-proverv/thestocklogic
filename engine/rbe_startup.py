@@ -18,7 +18,17 @@ Run: python3 engine/rbe_startup.py
 """
 import os, sys, json, time, logging
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
+
+# rbe_engine validates generated_at against the IST date. Stamping it with a
+# naive date.today() (box-local = UTC) agrees only while both jobs run in the
+# early UTC morning; past 18:30 UTC the dates diverge and the engine would
+# reject a map that had just been built. Match the rest of the repo.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def today_ist() -> date:
+    return datetime.now(IST).date()
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -37,6 +47,11 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger(__name__)
 
 RBE_DIR = Path("data/processed/rbe")
+
+# Per-symbol exceptions were swallowed entirely, so 500 auth rejections looked
+# identical to 500 symbols with no data. Log the first few reasons.
+MAX_LOGGED_ERRORS = 5
+MAX_FAIL_PCT      = 20.0   # warn above this; a total failure aborts outright
 
 # NSE intraday volume distribution (U-shape) — fraction of daily volume
 # traded by the END of each 15-min bucket from 9:15 to 15:30
@@ -102,13 +117,14 @@ def main():
         log.error("No Zerodha session — aborting. Run morning login first.")
         sys.exit(1)
 
-    to_date   = date.today() - timedelta(days=1)
+    to_date   = today_ist() - timedelta(days=1)
     from_date = to_date - timedelta(days=45)  # 45 cal days ≈ 30 trading days
 
     range_map, failed = {}, []
     symbols = list(ZERODHA_TOKEN_MAP.items())
     log.info(f"Fetching 30-day OHLC for {len(symbols)} stocks...")
 
+    logged_errors = 0
     for i, (sym, token) in enumerate(symbols):
         try:
             candles = kite.historical_data(token, from_date, to_date, "day")
@@ -123,6 +139,14 @@ def main():
                 failed.append(sym)
         except Exception as e:
             failed.append(sym)
+            # Log the REASON for the first few. Swallowing every exception is
+            # how an expired access token turned into 500 silent failures, an
+            # empty range map, and a clean exit 0.
+            if logged_errors < MAX_LOGGED_ERRORS:
+                log.error(f"  {sym}: {type(e).__name__}: {str(e)[:160]}")
+                logged_errors += 1
+                if logged_errors == MAX_LOGGED_ERRORS:
+                    log.error("  (further per-symbol errors suppressed)")
             if "Too many requests" in str(e):
                 time.sleep(1)
         # Zerodha rate limit: 3 req/sec
@@ -130,8 +154,22 @@ def main():
         if (i + 1) % 100 == 0:
             log.info(f"  {i+1}/{len(symbols)} done")
 
+    fail_pct = len(failed) / max(len(symbols), 1) * 100
+
+    # Do NOT write an empty map. rbe_engine reads this file and used to
+    # subscribe to zero tokens on it, which Kite rejects outright and which
+    # produced a full 6-hour session of empty heartbeats. Leaving the previous
+    # file in place is strictly better -- rbe_engine rejects it as stale.
+    if not range_map:
+        log.error(f"ABORT: 0 of {len(symbols)} symbols returned data "
+                  f"({len(failed)} failures). range_map.json NOT written; the "
+                  f"existing file is left untouched.")
+        log.error("Most likely cause: the Zerodha access token is missing or "
+                  "expired. Complete the 08:30 IST Telegram login, then re-run.")
+        sys.exit(1)
+
     out = {
-        "generated_at": date.today().isoformat(),
+        "generated_at": today_ist().isoformat(),
         "volume_curve": VOLUME_CURVE,
         "stocks": range_map,
     }
@@ -139,6 +177,9 @@ def main():
         json.dump(out, f)
 
     log.info(f"Range map: {len(range_map)} stocks | Failed: {len(failed)}")
+    if fail_pct > MAX_FAIL_PCT:
+        log.warning(f"{len(failed)}/{len(symbols)} symbols failed ({fail_pct:.0f}%) "
+                    f"-- range map is incomplete, coverage will be partial.")
     if failed[:10]:
         log.info(f"Failed sample: {failed[:10]}")
     log.info(f"Written: {RBE_DIR / 'range_map.json'}")
