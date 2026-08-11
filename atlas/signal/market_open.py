@@ -26,7 +26,9 @@ from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from atlas.config import SUPABASE_URL, SUPABASE_KEY, MAX_TRADES_PER_DAY
+from atlas.config import (
+    SUPABASE_URL, SUPABASE_KEY, MAX_TRADES_PER_DAY, LIVE_TRADING_ENABLED,
+)
 from atlas.execution.atlas_entry import enter_trade
 from atlas.reporting.telegram import send
 
@@ -115,6 +117,37 @@ def _stale(batch_date: str) -> bool:
     return False
 
 
+def log_decision(sig: dict, result: dict):
+    """Record what was decided about one signal, at the moment it was decided.
+
+    atlas_trades only receives ENTERED / GTT_PENDING / SHADOW rows, so every
+    skip and block used to exist only in a Telegram message. daily_report needs
+    the reasons, and re-deriving them hours later would report the gates as they
+    stand then -- different regime, prices and funds -- rather than the decision
+    actually taken. Best-effort: a logging failure must never stop trading.
+    """
+    rec = {
+        "run_date":    datetime.now(IST).date().isoformat(),
+        "symbol":      sig.get("symbol"),
+        "direction":   (sig.get("direction") or "").upper(),
+        "status":      result.get("status", "?"),
+        "reason":      (result.get("reason") or "")[:500],
+        "qty":         result.get("qty"),
+        "entry_price": result.get("entry_price"),
+        "stop_price":  result.get("stop_price"),
+        "risk_inr":    result.get("risk_actual"),
+        "agent_mode":  "LIVE" if LIVE_TRADING_ENABLED else "SHADOW",
+    }
+    try:
+        r = requests.post(f"{SUPABASE_URL}/rest/v1/atlas_entry_log",
+                          headers=_headers(), json=rec, timeout=10)
+        if r.status_code not in (200, 201, 204):
+            log.warning(f"entry-log write failed for {rec['symbol']}: "
+                        f"HTTP {r.status_code} {r.text[:120]}")
+    except Exception as e:
+        log.warning(f"entry-log write failed for {rec['symbol']}: {e}")
+
+
 def run():
     now = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
     log.info(f"Market open entry run -- {now}")
@@ -168,6 +201,7 @@ def run():
         status = result.get("status", "?")
         results.append(f"{sig.get('symbol')}: {status}")
         log.info(f"{sig.get('symbol')} -- {status} -- {result.get('reason','')}")
+        log_decision(atlas_signal, result)
 
         if status in ("ENTERED", "SHADOW_INTENT"):
             entered += 1
