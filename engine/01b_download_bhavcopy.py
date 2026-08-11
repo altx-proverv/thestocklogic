@@ -48,30 +48,23 @@ PROCESSED_DIR = Path("data/processed")
 STOCKS_DIR    = Path("data/processed/stocks")
 DELAY         = 0.3   # seconds between requests
 
-NSE_HOLIDAYS = {
-    date(2023, 1, 26), date(2023, 3, 7),  date(2023, 3, 30),
-    date(2023, 4, 4),  date(2023, 4, 7),  date(2023, 4, 14),
-    date(2023, 5, 1),  date(2023, 8, 15), date(2023, 10, 2),
-    date(2023, 10, 24),date(2023, 11, 27),date(2023, 12, 25),
-    date(2024, 1, 22), date(2024, 1, 26), date(2024, 3, 25),
-    date(2024, 3, 29), date(2024, 4, 14), date(2024, 5, 23),
-    date(2024, 8, 15), date(2024, 10, 2), date(2024, 10, 14),
-    date(2024, 11, 1), date(2024, 11, 15),date(2024, 12, 25),
-    date(2025, 2, 26), date(2025, 3, 14), date(2025, 3, 31),
-    date(2025, 4, 14), date(2025, 4, 18), date(2025, 5, 1),
-}
-
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from universe import ALL_SYMBOLS as _ALL_SYMS, SYMBOL_SECTOR_MAP
 NIFTY100_SYMBOLS = set(_ALL_SYMS)
 
+# Holiday calendar comes from engine/trading_calendar.py. This module used to
+# keep its own set, which stopped at 2025-05-01 and had drifted apart from that
+# one (this list had 2025-02-26, the other had 2025-01-26). Both are merged
+# there now; every NSE holiday after May 2025 was previously treated as a
+# trading day here, producing a failed download and a warning for each.
+try:
+    from engine.trading_calendar import is_trading_day
+except ModuleNotFoundError:
+    from trading_calendar import is_trading_day
+
 
 # ── HELPERS ───────────────────────────────────────────────────────
-
-def is_trading_day(d: date) -> bool:
-    return d.weekday() < 5 and d not in NSE_HOLIDAYS
-
 
 def get_trading_days(start: date, end: date) -> list:
     days, cur = [], start

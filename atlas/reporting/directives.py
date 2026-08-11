@@ -226,9 +226,21 @@ def handle_directive(text: str) -> str:
 
 def poll(duration_seconds: int = 120):
     """
-    Poll for directives for a given duration.
-    Called after daily report — waits for your response.
+    Poll for directives for a given duration. MANUAL USE ONLY.
+
+    WARNING: this competes with bot_listener.py for the same Telegram bot
+    token. getUpdates has a single logical consumer -- whichever process polls
+    first receives an update and the other never sees it. bot_listener runs
+    @reboot and is kept alive by scripts/bot_watchdog.sh, so in normal operation
+    it is already consuming the stream and this function will silently steal
+    from it (or be starved by it).
+
+    daily_report used to call this for 300s after each evening report, which is
+    why the prompt reported "No directive received" while the listener was
+    healthy. That call is removed. Do not wire this into anything scheduled.
     """
+    log.warning("directives.poll() competes with bot_listener for getUpdates — "
+                "manual use only; stop the listener first if you need this.")
     log.info(f"Listening for directives for {duration_seconds}s...")
     send("💬 <b>Awaiting your directive.</b>\nSend /help for options.")
 

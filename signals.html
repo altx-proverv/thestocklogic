@@ -70,6 +70,11 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .ring-ap{border-color:var(--sky);color:var(--sky);background:var(--sky2)}
 .ring-a{border-color:var(--green);color:var(--green);background:var(--green2)}
 .ring-b{border-color:var(--muted);color:var(--muted)}
+/* Grade C: qualifying but below the old 65 score floor. Mostly accumulation
+   setups, which score low by construction (quiet tape scores 0 on rvol, a
+   ranging market scores 0 on adx). Real signals, so they get their own chip
+   rather than falling through to the B style. */
+.ring-c{border-color:var(--amber);color:var(--amber)}
 .ring-orb{border-color:var(--amber);color:var(--amber);background:var(--amber2)}
 .sc-levels{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line2)}
 .sc-lv{background:var(--s1);padding:8px 10px;text-align:center}
@@ -338,7 +343,7 @@ var SB='https://eibdlcanpudjgmkjxrga.supabase.co';
 var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
 var HDR={apikey:AK,Authorization:'Bearer '+AK};
 function fmt(n){if(n===null||n===undefined||n==='')return'&mdash;';var v=parseFloat(n);if(isNaN(v))return'&mdash;';return v.toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1});}
-function gc(g){return g==='A+'?'ring-ap':g==='A'?'ring-a':'ring-b';}
+function gc(g){return g==='A+'?'ring-ap':g==='A'?'ring-a':g==='C'?'ring-c':'ring-b';}
 function todayStr(){var d=new Date(Date.now()+(5.5*60*60*1000));return d.toISOString().split('T')[0];}
 function todayIST(){
   var d=new Date(Date.now()+(5.5*60*60*1000));

@@ -40,10 +40,15 @@ from zerodha_tokens import ZERODHA_TOKEN_MAP
 from atlas.execution.broker import get_kite
 
 Path("reports").mkdir(exist_ok=True)
+# StreamHandler ONLY. The crontab already redirects stdout to reports/rbe.log,
+# and a FileHandler on that same path wrote every line a second time -- which is
+# how the "error parsing request" that explained a whole dead session ended up
+# buried under ~370 duplicated heartbeat lines. Other engine scripts keep a
+# FileHandler safely because cron sends their stdout to a DIFFERENT file
+# (reports/cron.log); RBE was the only collision.
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("reports/rbe.log"),
-              logging.StreamHandler(sys.stdout)])
+    handlers=[logging.StreamHandler(sys.stdout)])
 log = logging.getLogger(__name__)
 
 RBE_DIR = Path("data/processed/rbe")

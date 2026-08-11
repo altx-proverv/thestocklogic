@@ -30,10 +30,11 @@ from zerodha_tokens import ZERODHA_TOKEN_MAP, TOKEN_SYMBOL_MAP
 from atlas.execution.broker import get_access_token
 
 Path("reports").mkdir(exist_ok=True)
+# StreamHandler ONLY -- cron redirects stdout to reports/rbe.log, so a
+# FileHandler on the same path duplicated every line. See rbe_startup.py.
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("reports/rbe.log"),
-              logging.StreamHandler(sys.stdout)])
+    handlers=[logging.StreamHandler(sys.stdout)])
 log = logging.getLogger("RBE")
 
 IST = timezone(timedelta(hours=5, minutes=30))

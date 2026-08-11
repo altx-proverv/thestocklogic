@@ -5,3 +5,10 @@ reports/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Superseded pre-SMC pipeline (00_generate_synthetic_data, 01_build_dataset,
+# 02_indicators, 03_signals, 05_report). Replaced by 01b/02b/03b/06 and
+# referenced by nothing — no imports, no cron. Ignored rather than committed so
+# `git clean -fd` cannot delete the box's copy, and rather than deleted because
+# it is the only record of the original pipeline.
+engine/legacy/

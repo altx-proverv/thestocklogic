@@ -47,7 +47,7 @@
   .pill{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:4px;font-weight:600;display:inline-block}
   .dir-long{color:var(--green);border:1px solid rgba(0,214,143,.35);background:rgba(0,214,143,.07)}
   .dir-short{color:var(--red);border:1px solid rgba(255,77,109,.35);background:rgba(255,77,109,.07)}
-  .g-aplus{color:var(--sky);font-weight:700}.g-a{color:var(--green);font-weight:700}.g-b{color:var(--muted);font-weight:700}
+  .g-aplus{color:var(--sky);font-weight:700}.g-a{color:var(--green);font-weight:700}.g-b{color:var(--muted);font-weight:700}.g-c{color:var(--amber);font-weight:700}
   .o-win{color:var(--green);border:1px solid rgba(0,214,143,.35);background:rgba(0,214,143,.07)}
   .o-loss{color:var(--red);border:1px solid rgba(255,77,109,.35);background:rgba(255,77,109,.07)}
   .o-open{color:var(--sky);border:1px solid rgba(77,184,255,.3);background:rgba(77,184,255,.06)}
@@ -177,7 +177,7 @@ function renderSummary(){
   document.getElementById('sub').textContent=ALL.length+' total signals \u00b7 showing latest '+DATA.length+(DATA.length?(' \u00b7 '+DATA[DATA.length-1].signal_date+' \u2192 '+DATA[0].signal_date):'');
 }
 function dirPill(d){return '<span class="pill '+(d==='LONG'?'dir-long':'dir-short')+'">'+(d==='LONG'?'\u2191':'\u2193')+' '+d+'</span>';}
-function grade(g){const c=g==='A+'?'g-aplus':g==='A'?'g-a':'g-b';return '<span class="'+c+'">'+(g||'-')+'</span>';}
+function grade(g){const c=g==='A+'?'g-aplus':g==='A'?'g-a':g==='C'?'g-c':'g-b';return '<span class="'+c+'">'+(g||'-')+'</span>';}
 function outPill(o){const m={WIN_T1:['o-win','WIN'],WIN_T2:['o-win','WIN T2'],LOSS:['o-loss','LOSS'],OPEN:['o-open','OPEN'],MISSED:['o-missed','MISSED'],INVALIDATED:['o-inval','INVALID'],NOT_SCORED:['o-ns','UNSCORED']};const a=m[o]||['o-ns',o];return '<span class="pill '+a[0]+'">'+a[1]+'</span>';}
 function pnl(p){const v=parseFloat(p)||0;if(!v)return '<span class="num pnl-zero">\u2014</span>';return '<span class="num '+(v>0?'pnl-pos':'pnl-neg')+'">'+(v>0?'+':'')+Math.round(v).toLocaleString('en-IN')+'</span>';}
 function nm(x){const v=parseFloat(x);return isNaN(v)?'\u2014':v.toLocaleString('en-IN',{maximumFractionDigits:2});}

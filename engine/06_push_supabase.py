@@ -196,20 +196,54 @@ def push_signals(target_date: str = None):
         return v
     records = [{k: clean(v) for k, v in r.items()} for r in records]
 
-    # Delete existing signals for this date first (clean re-run)
-    del_url = f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{d.strftime('%Y-%m-%d')}"
-    del_r = requests.delete(del_url, headers=headers)
-    log.info(f"Cleared existing signals for {d.date()}: {del_r.status_code}")
+    # INSERT FIRST, THEN DELETE THE OLD ROWS.
+    #
+    # This used to delete the date and then insert. If the insert failed the
+    # script exited 1 having already removed the day's signals, leaving the
+    # date EMPTY -- worse than leaving it stale, because market_open takes
+    # max(signal_date) and would silently fall back to an older batch and trade
+    # it, inside the 5-day staleness window, with nothing indicating a problem.
+    #
+    # Inverted, the failure modes become:
+    #   insert fails  -> old rows still present, nothing deleted. Stale, visible,
+    #                    and the next run fixes it.
+    #   delete fails  -> both old and new present. Duplicates are recoverable by
+    #                    hand and are logged loudly; the new data IS live.
+    #
+    # The window where both sets exist is milliseconds, and the only reader
+    # (market_open, 09:37 IST) runs ~15 hours after this job.
+    day_str  = d.strftime("%Y-%m-%d")
+    base_url = f"{SUPABASE_URL}/rest/v1/signals"
 
-    # Insert new signals
-    ins_url = f"{SUPABASE_URL}/rest/v1/signals"
-    ins_r = requests.post(ins_url, headers=headers, json=records)
+    old_ids = []
+    try:
+        r_old = requests.get(f"{base_url}?signal_date=eq.{day_str}&select=id",
+                             headers=headers, timeout=30)
+        if r_old.status_code == 200:
+            old_ids = [row["id"] for row in r_old.json()]
+    except requests.RequestException as e:
+        log.warning(f"Could not list existing rows for {day_str}: {e}")
+    log.info(f"Existing rows for {day_str}: {len(old_ids)}")
 
-    if ins_r.status_code in (200, 201):
-        log.info(f"✓ Pushed {len(records)} signals to Supabase")
-    else:
-        log.error(f"Push failed: {ins_r.status_code} — {ins_r.text}")
+    ins_r = requests.post(base_url, headers=headers, json=records, timeout=60)
+    if ins_r.status_code not in (200, 201):
+        log.error(f"Push failed: {ins_r.status_code} — {ins_r.text[:300]}")
+        log.error(f"Nothing was deleted — the {len(old_ids)} existing row(s) for "
+                  f"{day_str} are intact.")
         sys.exit(1)
+    log.info(f"✓ Pushed {len(records)} signals to Supabase")
+
+    if old_ids:
+        del_r = requests.delete(
+            f"{base_url}?signal_date=eq.{day_str}&id=in.({','.join(map(str, old_ids))})",
+            headers=headers, timeout=30)
+        if del_r.status_code in (200, 204):
+            log.info(f"Superseded {len(old_ids)} previous row(s) for {day_str}")
+        else:
+            log.error(f"DUPLICATE ROWS: new signals inserted but the {len(old_ids)} "
+                      f"previous row(s) could not be deleted "
+                      f"({del_r.status_code} {del_r.text[:120]}). "
+                      f"Delete ids {old_ids[:10]}{'...' if len(old_ids) > 10 else ''} by hand.")
 
     # Verify
     ver_url = f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{d.strftime('%Y-%m-%d')}&select=symbol,grade,score"

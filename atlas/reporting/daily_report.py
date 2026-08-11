@@ -208,20 +208,27 @@ Stop:        broker funds — no automated loss cap, exits are manual
     return ok
 
 
+# NOTE: exactly ONE __main__ guard, at end of file.
+#
+# There used to be two. The first sat here and called generate_and_send();
+# run() was then defined BELOW it and a second guard at EOF called run(), which
+# called generate_and_send() again. Running the module therefore sent the report
+# twice, three seconds apart. Confirmed in production on 2026-08-11:
+#
+#   13:35:04 [ATLAS-REPORT] Daily report sent — P&L: ₹+0 | Trades: 0
+#   13:35:04 [ATLAS-REPORT] Starting daily report cycle...
+#   13:35:07 [ATLAS-REPORT] Daily report sent — P&L: ₹+0 | Trades: 0
+#
+# run()'s directive poll is removed with it. It called directives.poll(300),
+# which long-polls Telegram getUpdates -- while bot_listener.py (@reboot, kept
+# alive by scripts/bot_watchdog.sh) is already long-polling the SAME bot token
+# 24/7. Two consumers on one update stream: whichever polls first consumes the
+# update and the other never sees it. That is why the evening prompt reported
+# "No directive received" at 13:40 even though the listener was healthy.
+#
+# bot_listener handles directives around the clock, so the 5-minute window this
+# opened was redundant as well as harmful.
+
+
 if __name__ == "__main__":
     generate_and_send()
-
-
-def run():
-    """Full daily report + directive listening cycle."""
-    log.info("Starting daily report cycle...")
-    ok = generate_and_send()
-    if ok:
-        # Listen for directives for 5 minutes after report
-        from atlas.reporting.directives import poll
-        poll(duration_seconds=300)
-    else:
-        log.error("Report failed — skipping directive poll")
-
-if __name__ == "__main__":
-    run()
