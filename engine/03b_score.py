@@ -24,13 +24,12 @@ SMC_DIR     = Path("data/processed/smc")
 SIGNALS_DIR = Path("data/processed/signals_v2")
 PLAYBOOKS   = Path("data/processed/signals_v2/playbooks")
 
-MAX_LOSS_INR  = 3000.0
-MIN_SL_PCT    = 0.015
-MAX_SL_PCT    = 0.02
-MIN_RR        = 2.0
 TOP_N_LONG    = 5
 TOP_N_SHORT   = 2
-MIN_SCORE     = 65
+# MAX_LOSS_INR / MIN_SL_PCT / MAX_SL_PCT / MIN_RR / MIN_SCORE removed -- all
+# dead since the zone_entry refactor moved sizing and stop geometry out of this
+# module, and since the score gate was retired. engine/zone_entry.py owns the
+# risk constants now; grep found no remaining readers.
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -86,10 +85,15 @@ def _warn_missing_cols(df: pd.DataFrame):
                     f"{', '.join(missing)}. Scores are biased until this is fixed.")
 
 
-def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -> pd.DataFrame:
+def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
+                     screen=None) -> pd.DataFrame:
     """
     Scores all rows using vectorized pandas operations.
     No loops. No iterrows. Pure numpy/pandas.
+
+    `screen` is an optional callable applied BETWEEN the disqualifier block and
+    the score dimensions. This ordering is load-bearing, not cosmetic -- see the
+    call site below.
     """
     n = len(df)
     _warn_missing_cols(df)
@@ -174,6 +178,24 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     mask_no_struct = (~df["disqualified"]) & (recent_bos == 0)
     df.loc[mask_no_struct, "disqualified"]      = True
     df.loc[mask_no_struct, "disqualify_reason"] = "no_recent_bos_choch"
+
+    # ── SCREEN HOOK ───────────────────────────────────────────────
+    # accumulation.py's contract, verbatim: "Call AFTER 03b's disqualifier
+    # block, BEFORE scoring." It used to be called after the whole of
+    # score_vectorized, which does disqualifiers AND scoring in one pass. Every
+    # score dimension below is zeroed via np.where(df["disqualified"], 0.0, ...),
+    # so rows the screen recovered had already been zeroed and nothing
+    # recomputed them: on the 11 Aug batch, 113 of 154 qualifying signals
+    # carried total_score = 0.0 and grade "skip", all five components exactly
+    # zero. MIN_SCORE=70 in 06_push_supabase was silently discarding all of
+    # them, which is why 4 signals published instead of 154.
+    #
+    # Running the screen here is safe: it mutates only disqualified /
+    # disqualify_reason and appends is_accumulation / accumulation_score. It
+    # does not reindex or drop rows, so the Series extracted above stay aligned,
+    # and the zeroing below reads df["disqualified"] live.
+    if screen is not None:
+        df = screen(df)
 
     # ── SCORE DIMENSIONS (vectorized) ────────────────────────────
 
@@ -283,10 +305,21 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict) -
     df["volume_score"]    = np.round(vol_score, 1)
     df["rr_score"]        = np.round(rr_score, 1)
     df["total_score"]     = total
-    df["qualifies"]       = (~df["disqualified"]) & (total >= MIN_SCORE)
+    # No score gate. Score is non-predictive per validation; the disqualifiers
+    # alone decide qualification. This used to be re-derived in
+    # process_direction AFTER the screen, which meant the grade below was
+    # assigned off the pre-screen value and every recovered row kept "skip".
+    df["qualifies"]       = ~df["disqualified"]
 
-    # Assign grade based on score
-    df["grade"] = "skip"
+    # Assign grade based on score. "C" covers qualifying rows below the old
+    # MIN_SCORE floor -- mostly accumulation setups, which score low by
+    # construction (quiet tape scores 0 on rvol_pts, ranging scores 0 on
+    # adx_boost). They are real signals, not skips.
+    # NOTE: signals.html and tsl-dashboard.html style only A+/A/B and fall
+    # through to B styling for anything else, so "C" renders as a B-styled
+    # chip until a ring-c / g-c class is added. Cosmetic; flagged separately.
+    df["grade"] = "C"
+    df.loc[~df["qualifies"], "grade"] = "skip"
     df.loc[df["qualifies"] & (total >= 80), "grade"] = "A+"
     df.loc[df["qualifies"] & (total >= 75) & (total < 80), "grade"] = "A"
     df.loc[df["qualifies"] & (total >= 65) & (total < 75), "grade"] = "B"
@@ -390,20 +423,19 @@ def process_direction(combined: pd.DataFrame, direction: str,
     """Process one direction (long or short) for all rows."""
     df = combined.copy()
     df["direction"] = direction
-    df = score_vectorized(df, sector_bias, symbol_sector)
 
     # Accumulation screen -- undoes the momentum-era disqualifiers that reject
     # quiet, consolidating stocks. Longs only; shorts keep the original logic.
+    # Passed INTO score_vectorized so it runs between the disqualifier block and
+    # the score dimensions, per its own docstring. Calling it afterwards left
+    # every recovered row scored 0 / graded "skip".
     try:
         from engine.accumulation import apply_accumulation_screen
     except ModuleNotFoundError:
         from accumulation import apply_accumulation_screen
-    df = apply_accumulation_screen(df)
 
-    # Recompute after the screen: rows it recovered must become qualified, and
-    # MIN_SCORE (65) was the last surviving score gate. Score is non-predictive
-    # per validation -- disqualifiers alone decide qualification now.
-    df["qualifies"] = ~df["disqualified"].fillna(False)
+    df = score_vectorized(df, sector_bias, symbol_sector,
+                          screen=apply_accumulation_screen)
 
     df["setup_name"] = determine_setup_names(df)
 

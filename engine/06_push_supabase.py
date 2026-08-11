@@ -34,7 +34,12 @@ SUPABASE_URL     = os.environ.get("SUPABASE_URL",
                    "https://eibdlcanpudjgmkjxrga.supabase.co")
 SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SIGNALS_FILE     = Path("data/processed/signals_v2/all_scores_v2.parquet")
-MIN_SCORE        = 70
+# MIN_SCORE removed. 03b retired the score gate ("score is non-predictive per
+# validation -- disqualifiers alone decide qualification"), but this copy
+# survived and was the real filter: it dropped every accumulation setup, which
+# scores low by construction, and was additionally masking a scoring-order bug
+# that left 113/154 qualifying signals at total_score = 0.0. Qualification is
+# decided upstream by 03b's disqualifiers plus the zone-entry gate below.
 
 
 def push_signals(target_date: str = None):
@@ -75,8 +80,7 @@ def push_signals(target_date: str = None):
     # Filter: qualifying signals for this date
     day = df[
         (df["date"] == d) &
-        (df["qualifies"] == True) &
-        (df["total_score"] >= MIN_SCORE)
+        (df["qualifies"] == True)
     ].copy()
 
     # REGIME-AWARE FILTER
