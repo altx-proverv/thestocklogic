@@ -313,8 +313,10 @@ def enter_trade(signal: dict) -> dict:
         return {"status": "ORDER_FAILED", "reason": order.get("reason", "order failed")}
 
     intent["order_id"] = order.get("order_id")
-    _log_intent(intent, shadow=False)
-    return {"status": "ENTERED", **intent}
+    recorded = _log_intent(intent, shadow=False)
+    # The order IS placed -- that is the truth, so the status stays ENTERED.
+    # `recorded` tells the caller whether a database row backs it.
+    return {"status": "ENTERED", "recorded": recorded, **intent}
 
 
 def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
@@ -370,12 +372,15 @@ def _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx) -> dict:
 
     intent["gtt_trigger_id"] = gtt["trigger_id"]
     intent["trigger_price"]  = gtt["trigger_price"]
-    _log_intent(intent, shadow=False, gtt=True)
-    return {"status": "GTT_PLACED", **intent}
+    recorded = _log_intent(intent, shadow=False, gtt=True)
+    return {"status": "GTT_PLACED", "recorded": recorded, **intent}
 
 
-def _log_intent(intent: dict, shadow: bool, gtt: bool = False):
-    """status: SHADOW | GTT_PENDING (trigger resting) | OPEN (filled)."""
+def _log_intent(intent: dict, shadow: bool, gtt: bool = False) -> bool:
+    """Record the entry. Returns True if the row was actually written.
+
+    status: SHADOW | GTT_PENDING (trigger resting) | OPEN (filled).
+    """
     rec = {
         "symbol": intent["symbol"], "direction": intent["direction"],
         "entry_price": intent["entry_price"], "qty": intent["qty"],
@@ -407,8 +412,57 @@ def _log_intent(intent: dict, shadow: bool, gtt: bool = False):
              f"| notional Rs{intent.get('notional',0):,.0f}")
         ),
     }
+    # CHECK THE RESPONSE. requests.post does not raise on 4xx, and this used to
+    # catch exceptions only -- so a PostgREST rejection was discarded in
+    # silence. gtt_trigger_id and trigger_price did not exist as columns, so
+    # every GTT entry was rejected with 400 PGRST204 and produced no row, no
+    # warning and no traceback. GTT 331263278 (GRASIM, 2026-08-11) was really
+    # placed and left unrecorded that way.
+    #
+    # A failure here is NOT cosmetic. By this point the order may already exist
+    # at the broker, and an unrecorded order is invisible to the funds check,
+    # the dashboard and the report -- so ATLAS would size its next entry as if
+    # that cash were free. Shout, with enough detail to reconstruct the row by
+    # hand.
+    label = f"{rec['symbol']} {rec['status']}"
     try:
-        requests.post(f"{SUPABASE_URL}/rest/v1/atlas_trades",
-                      headers=_headers(), json=rec, timeout=10)
+        r = requests.post(f"{SUPABASE_URL}/rest/v1/atlas_trades",
+                          headers=_headers(), json=rec, timeout=10)
     except Exception as e:
-        log.warning(f"intent log failed: {e}")
+        log.error(f"INTENT LOG FAILED ({label}): {type(e).__name__}: {e}")
+        _alert_unrecorded(rec, f"{type(e).__name__}: {e}", intent.get("order_id"))
+        return False
+
+    if r.status_code not in (200, 201, 204):
+        log.error(f"INTENT LOG REJECTED ({label}): HTTP {r.status_code} "
+                  f"{r.text[:200]}")
+        log.error(f"  payload: {rec}")
+        _alert_unrecorded(rec, f"HTTP {r.status_code} {r.text[:150]}",
+                          intent.get("order_id"))
+        return False
+    return True
+
+
+def _alert_unrecorded(rec: dict, why: str, order_id=None):
+    """Tell the operator a real order may exist with no database row.
+
+    Only fires for LIVE records -- a SHADOW row failing to write costs nothing
+    but a gap in the log.
+    """
+    if rec.get("agent_mode") != "LIVE":
+        return
+    try:
+        from atlas.reporting.telegram import send
+        send(
+            "🚨 <b>ORDER NOT RECORDED</b>\n"
+            f"<b>{rec.get('symbol')}</b> {rec.get('status')}\n"
+            f"trigger id: {rec.get('gtt_trigger_id') or '—'}\n"
+            f"order id:   {order_id or '—'}\n"
+            f"qty {rec.get('qty')} @ Rs{rec.get('entry_price')} · "
+            f"stop Rs{rec.get('stop_price')}\n\n"
+            f"The order may be LIVE at the broker with no atlas_trades row.\n"
+            f"Check Kite and add the row by hand.\n\n"
+            f"<code>{why}</code>"
+        )
+    except Exception as e:                 # never let alerting mask the failure
+        log.error(f"could not send unrecorded-order alert: {e}")

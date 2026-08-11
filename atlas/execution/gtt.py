@@ -98,24 +98,57 @@ def place_zone_gtt(symbol: str, qty: int, trigger_price: float,
         return {"success": False, "reason": str(e)}
 
 
-def list_atlas_gtts() -> list:
-    """Active GTTs placed by ATLAS, identified by order tag."""
+def list_active_gtts() -> list:
+    """EVERY active GTT on the account, unfiltered.
+
+    This is what the funds check must use. A resting BUY commits cash whoever
+    placed it -- ATLAS, or the operator by hand in Kite -- so "is it ours?" is
+    the wrong question when asking what money is spoken for.
+    """
     from atlas.execution.broker import get_kite
     kite = get_kite()
     if not kite:
         return []
     try:
-        out = []
-        for g in (kite.get_gtts() or []):
-            if g.get("status") != "active":
-                continue
-            orders = g.get("orders", []) or []
-            if any((o.get("tag") or "") == GTT_TAG for o in orders):
-                out.append(g)
-        return out
+        return [g for g in (kite.get_gtts() or []) if g.get("status") == "active"]
     except Exception as e:
         log.warning(f"GTT list failed: {e}")
         return []
+
+
+def list_atlas_gtts() -> list:
+    """Active GTTs ATLAS placed, matched by trigger id recorded in atlas_trades.
+
+    It used to match on the order `tag`. That can never work: Kite's get_gtts()
+    response omits the tag field entirely -- not null, absent -- so
+    (o.get("tag") or "") was always "" and this returned []. GTT 331263278
+    (GRASIM, 2026-08-11) was invisible to ATLAS for exactly this reason while
+    resting live at the broker.
+
+    place_zone_gtt still SENDS a tag; Kite accepts and discards it. The
+    authoritative link is atlas_trades.gtt_trigger_id.
+    """
+    import requests
+    from atlas.config import SUPABASE_URL, SUPABASE_KEY
+
+    active = list_active_gtts()
+    if not active:
+        return []
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/atlas_trades"
+            f"?gtt_trigger_id=not.is.null&select=gtt_trigger_id",
+            headers={"apikey": SUPABASE_KEY,
+                     "Authorization": f"Bearer {SUPABASE_KEY}"}, timeout=10)
+        if r.status_code != 200:
+            log.warning(f"could not read recorded trigger ids: HTTP {r.status_code}")
+            return []
+        known = {str(x["gtt_trigger_id"]) for x in r.json() if x.get("gtt_trigger_id")}
+    except Exception as e:
+        log.warning(f"could not read recorded trigger ids: {e}")
+        return []
+
+    return [g for g in active if str(g.get("id")) in known]
 
 
 def cancel_gtt(trigger_id: int) -> dict:

@@ -95,14 +95,26 @@ def live_margin() -> float:
 
 
 def pending_gtt_commitment() -> float:
-    """Notional of every active ATLAS BUY trigger resting at the broker.
+    """Notional of EVERY active BUY trigger resting at the broker.
 
     Cash that is spoken for but invisible to kite.margins(). Raises rather than
     returning 0.0 on failure -- an unreadable GTT book would silently free up
     money that is already committed.
-    """
-    from atlas.execution.gtt import GTT_TAG
 
+    Counts every active BUY GTT, not only ATLAS's. Two reasons:
+
+      1. It is correct. A resting BUY consumes cash when it fires regardless of
+         who placed it, so an operator's manual GTT in Kite is just as much a
+         claim on the balance as one of ours.
+
+      2. Ownership cannot be determined here anyway. Kite's get_gtts() response
+         omits the order `tag` field entirely, so the previous
+         `(o.get("tag") or "") != GTT_TAG` filter discarded everything and this
+         returned 0.00 while GTT 331263278 (GRASIM, 30 @ 3125 = Rs93,750) rested
+         live. The double-commit protection was inert against real broker data;
+         it only passed its tests because the fixtures were written from what
+         place_zone_gtt SENDS rather than what Kite returns.
+    """
     kite = _kite()
     try:
         gtts = kite.get_gtts()
@@ -116,23 +128,19 @@ def pending_gtt_commitment() -> float:
     for g in gtts:
         if (g or {}).get("status") != "active":
             continue
+        sym = (g.get("condition") or {}).get("tradingsymbol", "?")
         for o in (g.get("orders") or []):
-            if (o.get("tag") or "") != GTT_TAG:
-                continue
             if str(o.get("transaction_type", "")).upper() != "BUY":
                 continue          # a resting SELL frees cash, it does not commit it
             try:
                 qty   = float(o.get("quantity") or 0)
                 price = float(o.get("price") or 0)
             except (TypeError, ValueError):
-                raise FundsUnavailable(
-                    f"unparseable GTT order on {(g.get('condition') or {}).get('tradingsymbol', '?')}")
+                raise FundsUnavailable(f"unparseable GTT order on {sym}")
             if price <= 0:
                 # A market-order GTT has no price to size against. Refuse rather
                 # than treat it as free.
-                raise FundsUnavailable(
-                    f"active ATLAS GTT with no limit price on "
-                    f"{(g.get('condition') or {}).get('tradingsymbol', '?')}")
+                raise FundsUnavailable(f"active BUY GTT with no limit price on {sym}")
             total += qty * price
     return round(total, 2)
 
