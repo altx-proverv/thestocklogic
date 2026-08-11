@@ -14,7 +14,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import SUPABASE_URL, SUPABASE_KEY
 from atlas.execution.broker import get_kite, get_ltp
-from atlas.risk.capital_manager import release_capital
 from atlas.reporting.telegram import send
 
 logging.basicConfig(level=logging.INFO,
@@ -105,8 +104,9 @@ def close_trade(trade: dict, exit_price: float, exit_reason: str) -> bool:
         log.error(f"Failed to close trade {trade_id}: {r.status_code}")
         return False
 
-    # Release capital
-    release_capital(trade_id, capital, pnl, symbol)
+    # No capital to release. ATLAS keeps no capital ledger -- available funds
+    # are read live from the broker at decision time, so a closed trade frees
+    # its cash at the broker without anything here needing to record it.
 
     log.info(f"Trade closed: {symbol} {direction} | Exit: ₹{exit_price:,.1f} | P&L: ₹{pnl:+,.0f} | Reason: {exit_reason}")
     return True

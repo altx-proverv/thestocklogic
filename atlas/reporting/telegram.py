@@ -160,84 +160,10 @@ Review and set tomorrow's directive.
 """.strip()
     return send(msg)
 
-
-def send_daily_report(report: dict) -> bool:
-    """Send end-of-day performance report."""
-    date_str     = report.get("date", datetime.now(IST).strftime("%d %b %Y"))
-    capital      = report.get("capital", 100000)
-    daily_pnl    = report.get("daily_pnl", 0)
-    daily_pnl_pct= daily_pnl / capital * 100
-    weekly_pnl   = report.get("weekly_pnl", 0)
-    trades       = report.get("trades", [])
-    wins         = [t for t in trades if t.get("pnl", 0) > 0]
-    losses       = [t for t in trades if t.get("pnl", 0) < 0]
-    open_trades  = [t for t in trades if t.get("status") == "OPEN"]
-    regime       = report.get("regime", "MIXED")
-    mode         = report.get("agent_mode", "NORMAL")
-    signals_gen  = report.get("signals_generated", 0)
-    signals_filtered = report.get("signals_filtered", 0)
-    signals_traded   = report.get("signals_traded", 0)
-
-    pnl_icon = "🟢" if daily_pnl >= 0 else "🔴"
-
-    trade_lines = ""
-    for t in trades:
-        if t.get("status") == "OPEN":
-            trade_lines += f"\n⏳ {t['symbol']} {t['direction']} ₹{t.get('entry_price',0):,.1f} → OPEN"
-        elif t.get("pnl", 0) > 0:
-            trade_lines += f"\n✅ {t['symbol']} {t['direction']} +₹{t['pnl']:,.0f}"
-        else:
-            trade_lines += f"\n❌ {t['symbol']} {t['direction']} ₹{t['pnl']:,.0f}"
-
-    win_rate = len(wins) / max(len(wins)+len(losses), 1) * 100
-
-    msg = f"""
-📊 <b>ATLAS DAILY REPORT — {date_str}</b>
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-{pnl_icon} <b>CAPITAL STATUS</b>
-Capital:      ₹{capital:,.0f}
-Today P&L:    ₹{daily_pnl:+,.0f} ({daily_pnl_pct:+.2f}%)
-Weekly P&L:   ₹{weekly_pnl:+,.0f}
-
-📈 <b>TRADES TODAY</b>{trade_lines if trade_lines else chr(10)+"  No trades today"}
-
-📡 <b>SIGNAL QUALITY</b>
-Generated:  {signals_gen}
-Filtered:   {signals_filtered} (below threshold)
-Traded:     {signals_traded}
-Win rate:   {win_rate:.0f}% ({len(wins)}W/{len(losses)}L)
-
-🌐 <b>TOMORROW'S CONTEXT</b>
-Regime:     {regime}
-Agent mode: {mode}
-Kill-switch: ₹{capital * 0.02:,.0f} daily cap
-
-Reply with your directive:
-/approve — proceed as planned
-/pause — no trading tomorrow
-/cautious — reduce aggression
-/aggressive — increase aggression
-""".strip()
-    return send(msg)
-
-
-def send_startup(mode: str, capital: float) -> bool:
-    """Send ATLAS startup notification."""
-    msg = f"""
-🤖 <b>ATLAS ONLINE</b>
-━━━━━━━━━━━━━━━━━━━━
-Mode:    {mode}
-Capital: ₹{capital:,.0f}
-Time:    {datetime.now(IST).strftime("%d %b %Y %H:%M IST")}
-
-System is active. Kill-switch armed.
-Daily loss cap: ₹{capital * 0.02:,.0f}
-""".strip()
-    return send(msg)
-
-
-if __name__ == "__main__":
-    print("Testing Telegram connection...")
-    ok = send("🤖 <b>ATLAS Telegram connected successfully.</b>\nSystem is online.")
-    print("✅ Message sent" if ok else "❌ Failed — check token and chat_id")
+# REMOVED: send_daily_report() and send_startup().
+#
+# Both were unreferenced, and both hardcoded "Kill-switch: capital * 0.02" --
+# a 2%-of-capital daily cap that no longer exists in any form. ATLAS keeps no
+# capital figure and no automated loss cap; drawdown and exits are the
+# operator's. daily_report.generate_and_send() is the live report path and
+# reads funds from the broker.

@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-    INITIAL_CAPITAL, AGENT_MODES, DEFAULT_AGENT_MODE
+    AGENT_MODES, DEFAULT_AGENT_MODE, HALT_MODES,
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, MAX_TRADES_PER_DAY,
 )
 from atlas.reporting.telegram import send
 
@@ -54,7 +55,7 @@ def get_agent_state():
     )
     if r.status_code == 200 and r.json():
         return r.json()[0]
-    return {"mode": DEFAULT_AGENT_MODE, "capital": INITIAL_CAPITAL, "id": 1}
+    return {"mode": DEFAULT_AGENT_MODE, "id": 1}
 
 
 def update_agent_mode(mode: str, notes: str = "") -> bool:
@@ -73,6 +74,13 @@ def update_agent_mode(mode: str, notes: str = "") -> bool:
     return r.status_code in (200, 204)
 
 
+def _rules_line() -> str:
+    """The complete rule set, rendered from config. Nothing hardcoded."""
+    return (f"Risk/trade ₹{MAX_RISK_PER_TRADE:,.0f} · "
+            f"max notional ₹{MAX_NOTIONAL_PER_TRADE:,.0f} · "
+            f"max {MAX_TRADES_PER_DAY} entries/day")
+
+
 def handle_directive(text: str) -> str:
     """
     Process a directive command.
@@ -81,78 +89,49 @@ def handle_directive(text: str) -> str:
     text = text.strip().lower()
     now  = datetime.now(IST).strftime("%d %b %Y %H:%M IST")
 
+    # Mode replies no longer quote per-mode sizing or conviction. Position size
+    # comes solely from the Rs3,000 risk budget and the stop distance, and the
+    # only trade limits are MAX_TRADES_PER_DAY and live broker funds -- so
+    # "Position size: 70% of normal" described a lever that does not exist.
     if text in ["/approve", "approve"]:
         state = get_agent_state()
         mode  = state.get("mode", DEFAULT_AGENT_MODE)
-        mode_config = AGENT_MODES.get(mode, AGENT_MODES[DEFAULT_AGENT_MODE])
         update_agent_mode(mode, f"Approved by directive at {now}")
         return (
             f"✅ <b>APPROVED</b>\n"
-            f"Agent proceeds tomorrow in <b>{mode}</b> mode\n"
-            f"Max trades: {mode_config['max_trades']} | "
-            f"Min conviction: {mode_config['min_conviction']}/100\n"
-            f"Capital risk cap: ₹{float(state.get('capital', INITIAL_CAPITAL)) * 0.02:,.0f}"
+            f"Agent proceeds in <b>{mode}</b> mode\n"
+            f"{_rules_line()}"
         )
 
     elif text in ["/pause", "pause"]:
         update_agent_mode("PAUSED", f"Paused by directive at {now}")
         return (
             "⏸ <b>AGENT PAUSED</b>\n"
-            "No trades will be executed tomorrow.\n"
+            "No new entries will be taken.\n"
             "Send /approve or /normal to resume."
         )
 
-    elif text in ["/cautious", "cautious"]:
-        update_agent_mode("CAUTIOUS", f"Set to CAUTIOUS by directive at {now}")
-        cfg = AGENT_MODES["CAUTIOUS"]
+    elif text.lstrip("/") in ("cautious", "aggressive", "normal", "defensive"):
+        target = text.lstrip("/").upper()
+        icon = {"CAUTIOUS": "🟡", "AGGRESSIVE": "🔴",
+                "NORMAL": "🔵", "DEFENSIVE": "🛡"}[target]
+        update_agent_mode(target, f"Set to {target} by directive at {now}")
         return (
-            f"🟡 <b>CAUTIOUS MODE SET</b>\n"
-            f"Max trades: {cfg['max_trades']}\n"
-            f"Min conviction: {cfg['min_conviction']}/100\n"
-            f"Position size: {int(cfg['size_pct']*100)}% of normal"
-        )
-
-    elif text in ["/aggressive", "aggressive"]:
-        update_agent_mode("AGGRESSIVE", f"Set to AGGRESSIVE by directive at {now}")
-        cfg = AGENT_MODES["AGGRESSIVE"]
-        return (
-            f"🔴 <b>AGGRESSIVE MODE SET</b>\n"
-            f"Max trades: {cfg['max_trades']}\n"
-            f"Min conviction: {cfg['min_conviction']}/100\n"
-            f"Position size: {int(cfg['size_pct']*100)}% of normal\n"
-            f"⚠️ Increased risk — monitor closely"
-        )
-
-    elif text in ["/normal", "normal"]:
-        update_agent_mode("NORMAL", f"Reset to NORMAL by directive at {now}")
-        cfg = AGENT_MODES["NORMAL"]
-        return (
-            f"🔵 <b>NORMAL MODE SET</b>\n"
-            f"Max trades: {cfg['max_trades']}\n"
-            f"Min conviction: {cfg['min_conviction']}/100\n"
-            f"Position size: {int(cfg['size_pct']*100)}% of normal"
-        )
-
-    elif text in ["/defensive", "defensive"]:
-        update_agent_mode("DEFENSIVE", f"Set to DEFENSIVE by directive at {now}")
-        cfg = AGENT_MODES["DEFENSIVE"]
-        return (
-            f"🛡 <b>DEFENSIVE MODE SET</b>\n"
-            f"Max trades: {cfg['max_trades']}\n"
-            f"Min conviction: {cfg['min_conviction']}/100\n"
-            f"Position size: {int(cfg['size_pct']*100)}% of normal"
+            f"{icon} <b>{target} MODE SET</b>\n"
+            f"Recorded as operator intent. Only PAUSED changes agent behaviour.\n"
+            f"{_rules_line()}"
         )
 
     elif text in ["/status", "status"]:
         state = get_agent_state()
         mode  = state.get("mode", DEFAULT_AGENT_MODE)
-        cap   = float(state.get("capital", INITIAL_CAPITAL))
+        halted = " (HALTED)" if mode in HALT_MODES else ""
         return (
             f"📊 <b>ATLAS STATUS</b>\n"
-            f"Mode:    {mode}\n"
-            f"Capital: ₹{cap:,.0f}\n"
-            f"Daily cap: ₹{cap * 0.02:,.0f}\n"
-            f"Time:    {now}"
+            f"Mode:    {mode}{halted}\n"
+            f"{_rules_line()}\n"
+            f"Time:    {now}\n"
+            f"Send /capital for live broker funds."
         )
 
     elif text in ["/login", "login"]:
@@ -170,16 +149,21 @@ def handle_directive(text: str) -> str:
             )
         return "❌ Could not generate login URL. Check API credentials."
 
-    elif text in ["/capital", "capital"]:
-        from atlas.risk.capital_manager import get_capital_status
-        s = get_capital_status()
+    elif text in ["/capital", "capital", "/funds", "funds"]:
+        # Live from the broker. There is no allocated pool or deployed ledger
+        # to report -- those were a stored copy of this number that drifted.
+        from atlas.risk.funds import available_funds, FundsUnavailable
+        try:
+            f = available_funds()
+        except FundsUnavailable as e:
+            return (f"⚠️ <b>FUNDS UNAVAILABLE</b>\n{e}\n\n"
+                    f"Every entry is BLOCKED while this persists (fail closed).")
         return (
-            f"💰 <b>CAPITAL STATUS</b>\n"
-            f"Allocated:  INR {s['allocated']:,.0f}\n"
-            f"Deployed:   INR {s['deployed']:,.0f} ({s['utilisation_pct']:.1f}%)\n"
-            f"Available:  INR {s['available']:,.0f}\n"
-            f"Brokerage:  INR {s['brokerage_paid']:,.0f}\n"
-            f"Net capital: INR {s['net_capital']:,.0f}"
+            f"💰 <b>LIVE BROKER FUNDS</b>\n"
+            f"Broker balance:  ₹{f['margin']:,.0f}\n"
+            f"Resting GTTs:   -₹{f['gtt_committed']:,.0f}\n"
+            f"Available:       ₹{f['available']:,.0f}\n\n"
+            f"{_rules_line()}"
         )
 
     elif text.startswith("/trade") or text.startswith("/skip") or text.startswith("/watch"):

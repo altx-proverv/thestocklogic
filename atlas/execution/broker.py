@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
     ZERODHA_API_KEY, ZERODHA_API_SECRET, ZERODHA_USER_ID,
-    INITIAL_CAPITAL
 )
 
 log = logging.getLogger(__name__)

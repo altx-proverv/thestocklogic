@@ -12,9 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
-    SUPABASE_URL, SUPABASE_KEY,
-    INITIAL_CAPITAL, DAILY_LOSS_CAP_INR, WEEKLY_DRAWDOWN_INR,
-    MAX_OPEN_POSITIONS, AGENT_MODES, DEFAULT_AGENT_MODE, OPEN_STATUSES
+    SUPABASE_URL, SUPABASE_KEY, HALT_MODES, DEFAULT_AGENT_MODE
 )
 
 log = logging.getLogger(__name__)
@@ -63,32 +61,11 @@ def get_agent_state():
         raise RiskDataUnavailable("agent state: no atlas_state row exists")
     return rows[0]
 
-def get_open_positions():
-    """Count positions holding live capital.
 
-    Counts GTT_PENDING as well as OPEN. A resting GTT has committed the capital
-    at the broker even though it has not filled, and atlas_entry has always
-    counted it -- this function counted only OPEN, so the position limit
-    undercounted by every pending trigger.
-    """
-    rows = _get(f"atlas_trades?status=in.({','.join(OPEN_STATUSES)})"
-                f"&agent_mode=eq.LIVE&select=id", "open positions")
-    return len(rows)
-
-def get_today_pnl():
-    """Today's realised P&L from closed trades."""
-    today = date.today().isoformat()
-    rows = _get(f"atlas_trades?exit_date=eq.{today}&status=eq.CLOSED&select=pnl",
-                "today P&L")
-    return sum(float(t.get("pnl") or 0) for t in rows)
-
-def get_week_pnl():
-    """This week's realised P&L."""
-    today = date.today()
-    week_start = (today - timedelta(days=today.weekday())).isoformat()
-    rows = _get(f"atlas_trades?exit_date=gte.{week_start}&status=eq.CLOSED&select=pnl",
-                "week P&L")
-    return sum(float(t.get("pnl") or 0) for t in rows)
+# Position counting and P&L aggregation used to live here to feed the open-position
+# limit and the daily/weekly loss caps. All three are gone: there is no position
+# limit, and the operator manages drawdown rather than an automated cap. What
+# remains is structural -- can we read our state, and has the operator halted us.
 
 # ── KILL SWITCH CHECKS ────────────────────────────────────────────
 class KillSwitchResult:
@@ -111,105 +88,49 @@ def check(signal: dict = None) -> KillSwitchResult:
     Call before EVERY trade execution.
     Returns KillSwitchResult — if False, trade is BLOCKED.
     """
-    # FAIL CLOSED. If any risk input cannot be read we do not know the P&L, the
-    # mode, or the exposure, so we refuse rather than assume zero.
+    # FAIL CLOSED. If we cannot read our own state we do not know whether the
+    # operator has halted us, so we refuse rather than assume NORMAL.
     try:
-        state          = get_agent_state()
-        daily_pnl      = get_today_pnl()
-        weekly_pnl     = get_week_pnl()
-        open_positions = get_open_positions()
+        state = get_agent_state()
     except RiskDataUnavailable as e:
-        log.error(f"KILL SWITCH: risk data unavailable — BLOCKING. {e}")
-        return KillSwitchResult(False, f"Risk data unavailable: {e}",
+        log.error(f"KILL SWITCH: agent state unavailable — BLOCKING. {e}")
+        return KillSwitchResult(False, f"Agent state unavailable: {e}",
                                 {"data_available": False})
 
-    mode          = state.get("mode", DEFAULT_AGENT_MODE)
-    mode_config   = AGENT_MODES.get(mode, AGENT_MODES[DEFAULT_AGENT_MODE])
-    capital       = float(state.get("capital") or INITIAL_CAPITAL)
+    mode    = state.get("mode", DEFAULT_AGENT_MODE)
+    details = {"data_available": True, "mode": mode}
 
-    # ABSOLUTE caps, per config.py: "3 trades x Rs3k = Rs9,000 worst case in one
-    # day. The old 2%-of-1.5L rule produced Rs3,000 -- one stop-out halted the
-    # system." This read capital * DAILY_LOSS_CAP_PCT, and atlas_state.capital is
-    # 150000, so it was enforcing 150000*0.03 = Rs4,500 -- the percentage still
-    # applied to the same Rs1.5L the comment warns about. DAILY_LOSS_CAP_INR had
-    # no readers at all.
-    daily_loss_cap  = DAILY_LOSS_CAP_INR
-    weekly_loss_cap = WEEKLY_DRAWDOWN_INR
+    # CHECK 1 — Operator halt
+    if mode in HALT_MODES:
+        log.warning(f"KILL SWITCH: Agent is {mode} — no trades allowed")
+        return KillSwitchResult(False, f"Agent {mode.lower()} by directive", details)
 
-    details = {
-        "mode":           mode,
-        "capital":        capital,
-        "daily_pnl":      daily_pnl,
-        "weekly_pnl":     weekly_pnl,
-        "open_positions": open_positions,
-        "daily_loss_cap": daily_loss_cap,
-        "weekly_loss_cap": weekly_loss_cap,
-    }
-
-    # CHECK 1 — Agent mode PAUSED
-    if mode == "PAUSED":
-        log.warning("KILL SWITCH: Agent is PAUSED — no trades allowed")
-        return KillSwitchResult(False, "Agent paused by directive", details)
-
-    # CHECK 2 — Daily loss cap breached
-    if daily_pnl <= -daily_loss_cap:
-        log.warning(f"KILL SWITCH: Daily loss cap breached — P&L: INR {daily_pnl:,.0f} / Cap: INR {-daily_loss_cap:,.0f}")
-        return KillSwitchResult(False, f"Daily loss cap breached (INR {daily_pnl:,.0f})", details)
-
-    # CHECK 3 — Weekly drawdown breached
-    if weekly_pnl <= -weekly_loss_cap:
-        log.warning(f"KILL SWITCH: Weekly drawdown breached — P&L: INR {weekly_pnl:,.0f} / Cap: INR {-weekly_loss_cap:,.0f}")
-        return KillSwitchResult(False, f"Weekly drawdown breached (INR {weekly_pnl:,.0f})", details)
-
-    # CHECK 4 — Max open positions
-    max_trades = mode_config["max_trades"]
-    if open_positions >= max_trades:
-        log.warning(f"KILL SWITCH: Max open positions reached — {open_positions}/{max_trades}")
-        return KillSwitchResult(False, f"Max positions reached ({open_positions}/{max_trades})", details)
-
-    # CHECK 5 — Capital fence check
+    # CHECK 2 — Live broker funds. The only capital question that remains.
+    #
+    # Replaces the old capital fence, which compared a requirement against
+    # atlas_state's stored deployed/available ledger. That ledger was a second
+    # copy of the broker's balance, it drifted, and nothing reconciled it. Funds
+    # are now read live from kite.margins() less the notional of any resting
+    # ATLAS GTT triggers -- cash that is spoken for but absent from margins().
+    #
+    # can_afford() returns False on BOTH insufficient funds and any failure to
+    # read them, so an unreadable broker blocks rather than defaults.
     if signal:
-        from atlas.risk.capital_manager import can_deploy
-        capital_required = float(signal.get("capital_required", 0))
-        direction        = str(signal.get("direction", "LONG")).upper()
-        product          = "MIS" if direction == "SHORT" else "CNC"
-        if capital_required > 0 or product == "CNC":
-            try:
-                can, avail, cap_reason = can_deploy(capital_required, product)
-            except Exception as e:
-                # capital_manager reads atlas_state over HTTP with no timeout
-                # and no status check of its own. Treat any failure as a block.
-                log.error(f"KILL SWITCH: capital fence unreadable — BLOCKING. {e}")
-                return KillSwitchResult(False, f"Capital fence unreadable: {e}", details)
-            if not can:
-                log.warning(f"KILL SWITCH: Capital fence — {cap_reason}")
-                return KillSwitchResult(False, cap_reason, details)
+        capital_required = float(signal.get("capital_required") or 0)
+        if capital_required > 0:
+            from atlas.risk.funds import can_afford
+            ok, reason, detail = can_afford(capital_required)
+            details.update(detail)
+            if not ok:
+                log.warning(f"KILL SWITCH: {reason}")
+                return KillSwitchResult(False, reason, details)
 
-    # CHECK 6 / 6b -- REMOVED (conviction gates)
-    #
-    # Both gated on signal["conviction"], i.e. the 0-100 score. Validation
-    # showed score does not predict outcomes; setups + direction + trend do.
-    # The gate was removed from atlas/config.py, 06_push_supabase.py and
-    # market_open.py -- this was the fourth place it survived.
-    #
-    # It was blocking unconditionally: market_open no longer sends a
-    # "conviction" key, so it arrived as 0.0 against a threshold of 78.
-    #
-    # CHECK 6b was additionally reading sector_heatmap for TODAY's date, which
-    # is not written until ~18:35 -- at 09:37 it always fell back to "mixed".
-    # It gated on a default value, not the real regime. Regime -> side blocking
-    # is handled correctly by Gate 2 in atlas_entry.enter_trade.
-    #
-    # Ranking by setup/direction/trend belongs in session_selector, not here.
-    # The kill switch gates capital, drawdown and exposure -- not signal quality.
+    # REMOVED: daily loss cap, weekly drawdown, max open positions, conviction
+    # gates. Drawdown is managed by the operator, who also manages every exit;
+    # there is no position limit; and score was shown to be non-predictive.
+    # What is left is structural: can we read our state, and are we halted.
 
-    # CHECK 7 — Daily P&L approaching cap (warn at 75%)
-    warning_threshold = daily_loss_cap * 0.75
-    if daily_pnl <= -warning_threshold:
-        remaining = daily_loss_cap - abs(daily_pnl)
-        log.warning(f"KILL SWITCH WARNING: Approaching daily cap — INR {remaining:,.0f} remaining")
-
-    log.info(f"Kill switch PASSED — Mode:{mode} | Daily P&L:INR {daily_pnl:,.0f} | Open:{open_positions}/{max_trades}")
+    log.info(f"Kill switch PASSED — mode {mode}")
     return KillSwitchResult(True, "All checks passed", details)
 
 
@@ -218,29 +139,24 @@ def status() -> dict:
     rather than raising, so /status in Telegram degrades instead of crashing
     the bot listener."""
     try:
-        state          = get_agent_state()
-        daily_pnl      = get_today_pnl()
-        weekly_pnl     = get_week_pnl()
-        open_positions = get_open_positions()
+        state = get_agent_state()
     except RiskDataUnavailable as e:
         return {"data_available": False, "error": str(e),
-                "kill_switch_active": True,
-                "note": "risk data unreadable — check() will BLOCK all trades"}
+                "halted": True,
+                "note": "agent state unreadable — check() will BLOCK all trades"}
 
-    capital = float(state.get("capital") or INITIAL_CAPITAL)
-    mode    = state.get("mode", DEFAULT_AGENT_MODE)
-    return {
-        "data_available":    True,
-        "mode":              mode,
-        "capital":           capital,
-        "daily_pnl":         daily_pnl,
-        "weekly_pnl":        weekly_pnl,
-        "daily_loss_cap":    DAILY_LOSS_CAP_INR,
-        "weekly_loss_cap":   WEEKLY_DRAWDOWN_INR,
-        "open_positions":    open_positions,
-        "max_positions":     AGENT_MODES.get(mode, {}).get("max_trades", 3),
-        "kill_switch_active": daily_pnl <= -DAILY_LOSS_CAP_INR,
-    }
+    mode = state.get("mode", DEFAULT_AGENT_MODE)
+    out  = {"data_available": True, "mode": mode, "halted": mode in HALT_MODES}
+
+    # Funds are advisory here, never fatal -- /status must not fail because the
+    # broker is unreachable.
+    try:
+        from atlas.risk.funds import available_funds
+        out["funds"] = available_funds()
+    except Exception as e:
+        out["funds"] = None
+        out["funds_error"] = str(e)
+    return out
 
 
 if __name__ == "__main__":

@@ -29,29 +29,27 @@ ZERODHA_TOTP       = os.environ.get("ZERODHA_TOTP_SECRET", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-# Capital configuration
-INITIAL_CAPITAL      = float(os.environ.get("ATLAS_CAPITAL", "300000"))  # INR 3L
+# ═══════════════════════════════════════════════════════════════════
+# CAPITAL
+# ═══════════════════════════════════════════════════════════════════
+# ATLAS does not track capital. There is no allocated pool, no deployed-capital
+# ledger, no capital fence, no loss caps and no stored balance.
+#
+# Those were a second copy of a number the broker already knows, and the copies
+# disagreed: atlas_state.capital said Rs1,50,000, this file said Rs3,00,000,
+# atlas.html said Rs3,00,000, and the kill switch derived its daily loss cap
+# from whichever it happened to read -- enforcing Rs4,500 against a documented
+# Rs9,000. Removing the ledger removes the class of bug.
+#
+# Available funds are read LIVE from kite.margins() at decision time, minus the
+# notional of any resting ATLAS GTT triggers. See atlas/risk/funds.py, which
+# fails closed: unreadable funds block the trade.
+#
+# The operator manages the money pool and all exits manually.
 
-# Risk architecture: Rs3,000 risked per trade, Rs1,00,000 max notional.
-# Quantity is DERIVED from stop distance -- see risk/position_sizing.py.
-MAX_RISK_PER_TRADE   = 3000.0    # INR at risk if the structural stop is hit
-MAX_CAPITAL_DEPLOYED = 300000.0  # THE binding constraint. 3 x Rs1L.
-MAX_OPEN_POSITIONS   = 6         # secondary bound; capital usually binds first
-
-# Statuses that represent a LIVE capital commitment. GTT_PENDING counts: the
-# capital is committed the moment the trigger rests at the broker, before it
-# fills. kill_switch and atlas_entry MUST agree on this -- they were diverging,
-# with atlas_entry counting both and kill_switch counting only OPEN, so the
-# position limit undercounted by every resting GTT.
+# Statuses that represent a LIVE commitment. GTT_PENDING counts: the cash is
+# spoken for the moment the trigger rests at the broker, before it fills.
 OPEN_STATUSES        = ("OPEN", "GTT_PENDING")
-
-# Absolute, not percentage. 3 trades x Rs3k = Rs9,000 worst case in one day.
-# The old 2%-of-1.5L rule produced Rs3,000 -- one stop-out halted the system.
-DAILY_LOSS_CAP_INR   = 9000.0
-WEEKLY_DRAWDOWN_INR  = 22500.0
-# Retained for any legacy caller; derived from the absolute values above.
-DAILY_LOSS_CAP_PCT   = DAILY_LOSS_CAP_INR / INITIAL_CAPITAL
-WEEKLY_DRAWDOWN_PCT  = WEEKLY_DRAWDOWN_INR / INITIAL_CAPITAL
 
 # ACCUMULATION SCREEN -- institutional footprint is QUIET tape, not loud.
 # MIN_RVOL = 1.5 previously demanded above-average volume, which is the
@@ -62,7 +60,6 @@ DISCOUNT_MIN_PCT      = 5.0      # at least 5% off the 52-week high
 DISCOUNT_MAX_PCT      = 20.0     # but not a broken chart
 
 # --- DEPRECATED. Retained as names so imports do not break. Not used to gate.
-CAPITAL_PER_TRADE    = 0.0       # superseded by the Rs3k/Rs1L dual cap
 MIN_CONVICTION_SCORE = 0         # score is non-predictive; gate removed
 ELITE_CONVICTION     = 0
 MAX_LIVE_SIGNALS     = 0         # GTT rests at the broker; no live queue
@@ -72,19 +69,33 @@ MIN_RR               = 0.0       # undefined with open targets
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TSL ATLAS TRADING RULES — single source of truth (added 6 Jul 2026)
+# TSL ATLAS TRADING RULES — the complete set. Nothing else gates a trade.
 # Phase: TRAINING — agent ENTERS trades only. No auto SL/target/exit.
 # ═══════════════════════════════════════════════════════════════════
+#
+#   1. Rs3,000 risk per trade -> quantity derived from (entry - stop)
+#   2. Quantity a multiple of 5
+#   3. Rs1,00,000 max notional per trade
+#   4. Max 3 new trades per day
+#   5. Trade if the broker has available funds; stop if not
+#
+# There is deliberately no position limit and no capital cap. Rule 5 is the
+# binding constraint and it is answered live by the broker, not by a stored
+# number -- see atlas/risk/funds.py.
+
+# Rule 1 — INR at risk if the structural stop is hit. Quantity is DERIVED from
+# this and the stop distance; see risk/position_sizing.py.
+MAX_RISK_PER_TRADE = 3000.0
+
+# Rule 2 — quantity must be a multiple of this
+QUANTITY_MULTIPLE = 5
 
 # Rule 3 — max notional exposure per trade
 MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 
-# Rule 4 — quantity must be a multiple of this
-QUANTITY_MULTIPLE = 5
-
-# Rule 6 — new entries per day. NOTE: for accumulation this is rarely the
-# binding limit. Longs are held indefinitely, so capital does not recycle --
-# MAX_CAPITAL_DEPLOYED is what actually stops further entries.
+# Rule 4 — new entries per day. This is now a real limit rather than a
+# secondary guard: with the capital cap gone, it and available broker funds are
+# the only things that stop further entries.
 MAX_TRADES_PER_DAY = 3
 
 # Rules 1, 2 — agent must NOT place SL or target orders
@@ -130,7 +141,9 @@ SHORT_MARGIN_PCT_ESTIMATE = 0.20         # estimate only; broker value wins
 # [entry_low, entry_high] band. Applies to LONG and SHORT. No chasing.
 ENFORCE_ENTRY_RANGE = True
 
-# Funds safety buffer (fees/taxes/slippage) — applied before funds check.
+# Rule 5 — funds safety buffer (brokerage/taxes/slippage on the way in),
+# applied to the trade's requirement before it is compared against live broker
+# funds. See atlas/risk/funds.can_afford().
 FUNDS_SAFETY_BUFFER_PCT = 0.02           # 2% buffer; configurable
 
 SESSION_PRE_MARKET  = (9,  0,  9, 15)
@@ -141,17 +154,15 @@ SESSION_AFTERNOON   = (13,30, 14, 30)
 SESSION_POWER_HOUR  = (14,30, 15, 15)
 SESSION_CLOSING     = (15,15, 15, 30)
 
-# max_trades here is read by kill_switch CHECK 4 as the OPEN POSITION limit,
-# so it must track MAX_OPEN_POSITIONS, not the daily entry count.
-# min_conviction is retained at 0 -- the conviction gates were removed from
-# kill_switch; leaving the key avoids KeyError in any legacy reader.
-AGENT_MODES = {
-    "AGGRESSIVE": {"size_pct": 1.0, "min_conviction": 0, "max_trades": MAX_OPEN_POSITIONS},
-    "NORMAL":     {"size_pct": 1.0, "min_conviction": 0, "max_trades": MAX_OPEN_POSITIONS},
-    "CAUTIOUS":   {"size_pct": 0.7, "min_conviction": 0, "max_trades": 3},
-    "DEFENSIVE":  {"size_pct": 0.5, "min_conviction": 0, "max_trades": 2},
-    "PAUSED":     {"size_pct": 0.0, "min_conviction": 0, "max_trades": 0},
-}
+# Operator-facing mode vocabulary. Only PAUSED changes behaviour -- it halts
+# entries via the kill switch. The others are labels the operator sets to record
+# intent; they no longer carry size_pct / min_conviction / max_trades, because
+# position size now comes solely from the Rs3,000 risk budget and the stop
+# distance, and the only trade limits are MAX_TRADES_PER_DAY and live funds.
+# Keeping fake per-mode multipliers would imply a sizing lever that no longer
+# exists.
+AGENT_MODES = ("NORMAL", "CAUTIOUS", "AGGRESSIVE", "DEFENSIVE", "PAUSED")
+HALT_MODES  = ("PAUSED",)          # modes in which no new entry may be taken
 DEFAULT_AGENT_MODE = "NORMAL"
 VERSION = "1.0.0"
 SYSTEM  = "ATLAS"
@@ -167,9 +178,12 @@ def validate():
 
 if __name__ == "__main__":
     print(f"ATLAS v{VERSION}")
-    print(f"Capital:          INR {INITIAL_CAPITAL:,.0f}")
-    print(f"Capital per trade:INR {CAPITAL_PER_TRADE:,.0f}")
-    print(f"Daily loss cap:   INR {INITIAL_CAPITAL * DAILY_LOSS_CAP_PCT:,.0f}")
-    print(f"Max risk/trade:   INR {MAX_RISK_PER_TRADE:,.0f}")
-    print(f"Min conviction:   {MIN_CONVICTION_SCORE}/100")
-    print(f"Config valid:     {validate()}")
+    print("Trading rules:")
+    print(f"  Risk per trade    INR {MAX_RISK_PER_TRADE:,.0f}")
+    print(f"  Max notional      INR {MAX_NOTIONAL_PER_TRADE:,.0f}")
+    print(f"  Qty multiple      {QUANTITY_MULTIPLE}")
+    print(f"  Max trades/day    {MAX_TRADES_PER_DAY}")
+    print(f"  Funds buffer      {FUNDS_SAFETY_BUFFER_PCT*100:.0f}%")
+    print(f"  Live trading      {LIVE_TRADING_ENABLED}")
+    print("Capital:            not tracked — read live from the broker")
+    print(f"Config valid:       {validate()}")

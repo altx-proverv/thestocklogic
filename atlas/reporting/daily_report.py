@@ -14,8 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
-    INITIAL_CAPITAL, DAILY_LOSS_CAP_PCT, WEEKLY_DRAWDOWN_PCT,
-    DEFAULT_AGENT_MODE, AGENT_MODES
+    DEFAULT_AGENT_MODE, MAX_RISK_PER_TRADE, MAX_TRADES_PER_DAY,
 )
 from atlas.reporting.telegram import send
 
@@ -39,7 +38,7 @@ def get_agent_state():
     )
     if r.status_code == 200 and r.json():
         return r.json()[0]
-    return {"mode": DEFAULT_AGENT_MODE, "capital": INITIAL_CAPITAL}
+    return {"mode": DEFAULT_AGENT_MODE}
 
 
 def get_today_trades():
@@ -85,14 +84,19 @@ def get_sector_regime():
     return "MIXED"
 
 
-def determine_next_mode(state, daily_pnl, capital, consecutive_losses):
-    """Auto-suggest agent mode for tomorrow based on today's performance."""
-    current_mode = state.get("mode", DEFAULT_AGENT_MODE)
-    daily_loss_cap = capital * DAILY_LOSS_CAP_PCT
+def determine_next_mode(state, daily_pnl, consecutive_losses):
+    """Auto-suggest agent mode for tomorrow based on today's performance.
 
-    # Kill switch triggered today
-    if daily_pnl <= -daily_loss_cap:
-        return "DEFENSIVE", "Kill switch triggered today"
+    Advisory only -- the operator decides, and only PAUSED changes behaviour.
+    The old "kill switch triggered today" branch compared against a
+    capital-derived loss cap that no longer exists; the equivalent signal is now
+    simply a day worse than the per-trade risk budget.
+    """
+    current_mode = state.get("mode", DEFAULT_AGENT_MODE)
+
+    # A day worse than a full stop-out on every allowed trade
+    if daily_pnl <= -(MAX_RISK_PER_TRADE * MAX_TRADES_PER_DAY):
+        return "DEFENSIVE", "worst-case day realised"
 
     # Two or more consecutive losses
     if consecutive_losses >= 2:
@@ -114,7 +118,6 @@ def generate_and_send():
     state   = get_agent_state()
     trades  = get_today_trades()
     signals = get_today_signals()
-    capital = float(state.get("capital", INITIAL_CAPITAL))
     mode    = state.get("mode", DEFAULT_AGENT_MODE)
 
     # P&L calculations
@@ -124,13 +127,12 @@ def generate_and_send():
     losses        = [t for t in closed_trades if float(t.get("pnl", 0)) < 0]
     daily_pnl     = sum(float(t.get("pnl", 0)) for t in closed_trades)
     weekly_pnl    = get_week_pnl()
-    daily_pnl_pct = daily_pnl / capital * 100
     win_rate      = len(wins) / max(len(wins) + len(losses), 1) * 100
     regime        = get_sector_regime()
     consecutive_losses = len(losses)  # simplified
 
     # Suggest tomorrow's mode
-    next_mode, mode_reason = determine_next_mode(state, daily_pnl, capital, consecutive_losses)
+    next_mode, mode_reason = determine_next_mode(state, daily_pnl, consecutive_losses)
 
     # Build trade lines
     trade_lines = ""
@@ -153,20 +155,27 @@ def generate_and_send():
     # P&L icon
     pnl_icon = "🟢" if daily_pnl >= 0 else "🔴"
 
-    # Daily loss cap status
-    cap_used_pct = abs(daily_pnl) / (capital * DAILY_LOSS_CAP_PCT) * 100 if daily_pnl < 0 else 0
-    cap_status   = f"₹{capital * DAILY_LOSS_CAP_PCT:,.0f} cap — {cap_used_pct:.0f}% used"
+    # Live broker funds. No stored capital figure to report against.
+    try:
+        from atlas.risk.funds import available_funds
+        f = available_funds()
+        funds_line = (f"Broker:       ₹{f['margin']:,.0f}\n"
+                      f"Resting GTTs: ₹{f['gtt_committed']:,.0f}\n"
+                      f"Available:    ₹{f['available']:,.0f}")
+    except Exception as e:
+        funds_line = f"Broker funds: UNAVAILABLE ({str(e)[:60]}) — entries blocked"
 
     msg = f"""
 📊 <b>ATLAS DAILY REPORT</b>
 {now.strftime('%d %b %Y · %H:%M IST')}
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-{pnl_icon} <b>CAPITAL STATUS</b>
-Capital:      ₹{capital:,.0f}
-Today P&amp;L:    ₹{daily_pnl:+,.0f} ({daily_pnl_pct:+.2f}%)
+{pnl_icon} <b>P&amp;L</b>
+Today P&amp;L:    ₹{daily_pnl:+,.0f}
 Weekly P&amp;L:   ₹{weekly_pnl:+,.0f}
-Risk cap:     {cap_status}
+
+💰 <b>FUNDS (live from broker)</b>
+{funds_line}
 
 📈 <b>TRADES TODAY</b>{trade_lines}
 
@@ -180,7 +189,8 @@ Win rate:   {win_rate:.0f}% ({len(wins)}W / {len(losses)}L)
 Regime:      {regime}
 Today mode:  {mode}
 Suggested:   {next_mode} ({mode_reason})
-Kill-switch: ₹{capital * DAILY_LOSS_CAP_PCT:,.0f} daily hard stop
+Rules:       ₹{MAX_RISK_PER_TRADE:,.0f} risk/trade · max {MAX_TRADES_PER_DAY} entries/day
+Stop:        broker funds — no automated loss cap, exits are manual
 
 <b>Reply with directive:</b>
 /approve — proceed ({next_mode} mode)

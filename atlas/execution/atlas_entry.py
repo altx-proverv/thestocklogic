@@ -8,13 +8,12 @@ GATE STACK
   1. Regime -> side               -- accumulation in bull+sideways;
                                      shorts only when extreme_bearish
   2. Opening range                -- SHORTS ONLY (intraday directional check)
-  3. Open positions               -- MAX_OPEN_POSITIONS
-  4. New entries today            -- MAX_TRADES_PER_DAY (secondary)
-  5. Entry range                  -- inside zone -> enter; above zone on a
+  3. New entries today            -- MAX_TRADES_PER_DAY
+  4. Entry range                  -- inside zone -> enter; above zone on a
                                      LONG -> rest a GTT at the zone edge
-  6. Sizing                       -- Rs3k risk / Rs1L notional dual cap
-  7. Capital deployed             -- MAX_CAPITAL_DEPLOYED, the real limit
-  8. Kill switch
+  5. Sizing                       -- Rs3k risk / Rs1L notional dual cap
+  6. Live broker funds            -- kite.margins() less resting GTT notional
+  7. Kill switch                  -- operator halt + funds backstop
 
 WHAT CHANGED FROM THE INTRADAY VERSION
 --------------------------------------
@@ -23,9 +22,11 @@ first 15 minutes -- meaningful for an intraday hedge, noise for a multi-year
 hold. Applied to longs it returned WAIT on flat days, which is exactly when
 institutions accumulate and retail stops watching.
 
-DAILY TRADE COUNT is no longer the binding constraint. Accumulation longs are
-held indefinitely, so capital does not recycle. MAX_CAPITAL_DEPLOYED is what
-actually stops further entries; the daily count is a secondary guard.
+CAPITAL IS NO LONGER TRACKED. The open-position limit and the deployed-capital
+cap are both gone, along with the atlas_trades-derived exposure ledger that fed
+them -- it was a second copy of the broker's balance and nothing reconciled the
+two. The binding constraints are now MAX_TRADES_PER_DAY and whether the broker
+actually has the cash, read live at decision time. See atlas/risk/funds.py.
 
 REGIME now comes from data/processed/market.parquet (bull / sideways / bear,
 200 DMA with a 3% neutral band) rather than sector_heatmap's
@@ -40,14 +41,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    MAX_TRADES_PER_DAY, MAX_OPEN_POSITIONS, MAX_CAPITAL_DEPLOYED,
+    MAX_TRADES_PER_DAY,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
     ALLOW_LONG_IN_BULLISH, ALLOW_LONG_IN_SIDEWAYS,
     ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
-    DEFAULT_ON_UNKNOWN_REGIME, OPEN_STATUSES,
+    DEFAULT_ON_UNKNOWN_REGIME,
 )
 from atlas.risk.position_sizing import size_by_risk
 from atlas.risk.kill_switch import check as kill_switch_check
+from atlas.risk.funds import can_afford
 from atlas.execution.broker import place_order, get_ltp
 
 log = logging.getLogger("ATLAS-ENTRY")
@@ -186,25 +188,11 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
 # ─────────────────────────────────────────────────────────────────────
 # EXPOSURE
 # ─────────────────────────────────────────────────────────────────────
-
-def get_exposure() -> dict:
-    """Live positions and capital deployed. GTT_PENDING counts -- the capital
-    is committed the moment the trigger rests, even before it fills."""
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/atlas_trades"
-            f"?agent_mode=eq.LIVE&status=in.({','.join(OPEN_STATUSES)})"
-            f"&select=entry_price,qty,status", headers=_headers(), timeout=10)
-        if r.status_code != 200:
-            log.error(f"exposure query failed: HTTP {r.status_code}")
-            return {"positions": 0, "deployed": 0.0, "ok": False}
-        rows = r.json() or []
-        deployed = sum(float(x.get("entry_price") or 0) * float(x.get("qty") or 0)
-                       for x in rows)
-        return {"positions": len(rows), "deployed": deployed, "ok": True}
-    except Exception as e:
-        log.error(f"exposure fetch failed: {e}")
-        return {"positions": 0, "deployed": 0.0, "ok": False}
+# get_exposure() is gone. It summed entry_price*qty over our own atlas_trades
+# rows to enforce MAX_CAPITAL_DEPLOYED -- a ledger that duplicated the broker's
+# balance and could drift from it without anything reconciling the two. Both the
+# ledger and the cap are removed; available funds come from kite.margins() at
+# decision time via atlas/risk/funds.py, which also nets off resting GTTs.
 
 
 def get_today_entry_count() -> int:
@@ -271,25 +259,14 @@ def enter_trade(signal: dict) -> dict:
             return {"status": "SKIPPED_MARKET_WAIT",
                     "reason": f"opening range is {mkt_dir} -- hedge short needs SHORT"}
 
-    # GATE 3 -- open positions
-    # FAIL CLOSED. If exposure cannot be read, we do not know how much capital
-    # is already committed. Trading blind here could breach every capital limit
-    # at once, so refuse rather than assume zero.
-    exp = get_exposure()
-    if not exp.get("ok"):
-        return {"status": "BLOCKED_NO_EXPOSURE_DATA",
-                "reason": "cannot read current exposure -- refusing to trade blind"}
-    if exp["positions"] >= MAX_OPEN_POSITIONS:
-        return {"status": "SKIPPED_LIMIT",
-                "reason": f"open positions {exp['positions']}/{MAX_OPEN_POSITIONS}"}
-
-    # GATE 4 -- new entries today (secondary; capital usually binds first)
+    # GATE 3 -- new entries today. With the capital cap gone this and available
+    # broker funds are the only things that stop further entries.
     todays = get_today_entry_count()
     if todays >= MAX_TRADES_PER_DAY:
         return {"status": "SKIPPED_LIMIT",
                 "reason": f"entries today {todays}/{MAX_TRADES_PER_DAY}"}
 
-    # GATE 5 -- entry range, or rest a GTT at the zone
+    # GATE 4 -- entry range, or rest a GTT at the zone
     ltp = get_ltp(symbol) or entry_ref
     in_range, range_reason = check_entry_range(direction, ltp, entry_low, entry_high)
 
@@ -300,21 +277,23 @@ def enter_trade(signal: dict) -> dict:
         if entry_ref <= 0 or entry_ref >= ltp:
             return {"status": "SKIPPED_RANGE",
                     "reason": f"{range_reason} (zone not below LTP -- no GTT)"}
-        return _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx, exp)
+        return _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx)
 
-    # GATE 6 -- sizing
+    # GATE 5 -- sizing. Rs3,000 risk / Rs1,00,000 notional, qty a multiple of 5.
     sizing = size_by_risk(entry_price=ltp, stop_price=stop_price, direction=direction)
     if sizing.get("qty", 0) <= 0:
         return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
 
-    # GATE 7 -- capital deployed
+    # GATE 6 -- live broker funds, net of resting GTTs. FAIL CLOSED: can_afford
+    # returns False both when funds are short and when they cannot be read.
     need = sizing["capital_required"]
-    if exp["deployed"] + need > MAX_CAPITAL_DEPLOYED:
-        return {"status": "SKIPPED_CAPITAL",
-                "reason": (f"deployed Rs{exp['deployed']:,.0f} + Rs{need:,.0f} "
-                           f"exceeds cap Rs{MAX_CAPITAL_DEPLOYED:,.0f}")}
+    funds_ok, funds_reason, funds_detail = can_afford(need)
+    if not funds_ok:
+        status = ("BLOCKED_NO_FUNDS_DATA"
+                  if funds_detail.get("data_available") is False else "SKIPPED_FUNDS")
+        return {"status": status, "reason": funds_reason}
 
-    # GATE 8 -- kill switch
+    # GATE 7 -- kill switch
     signal["capital_required"] = need
     if not kill_switch_check(signal):
         return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}
@@ -352,7 +331,7 @@ def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
     }
 
 
-def _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx, exp) -> dict:
+def _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx) -> dict:
     """Price sits above the zone on a LONG. Size at the ZONE price -- that is
     where the fill happens -- and rest a GTT trigger there."""
     from atlas.execution.gtt import place_zone_gtt
@@ -361,11 +340,16 @@ def _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx, exp) -> di
     if sizing.get("qty", 0) <= 0:
         return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
 
+    # Same live-funds gate as a direct entry. A resting GTT commits cash the
+    # moment it is placed, so it must clear the funds check before it rests --
+    # and funds.available_funds() already nets off every GTT resting from
+    # earlier, which is what stops the same rupee being committed twice.
     need = sizing["capital_required"]
-    if exp["deployed"] + need > MAX_CAPITAL_DEPLOYED:
-        return {"status": "SKIPPED_CAPITAL",
-                "reason": (f"deployed Rs{exp['deployed']:,.0f} + Rs{need:,.0f} "
-                           f"exceeds cap Rs{MAX_CAPITAL_DEPLOYED:,.0f}")}
+    funds_ok, funds_reason, funds_detail = can_afford(need)
+    if not funds_ok:
+        status = ("BLOCKED_NO_FUNDS_DATA"
+                  if funds_detail.get("data_available") is False else "SKIPPED_FUNDS")
+        return {"status": status, "reason": funds_reason}
 
     if not kill_switch_check({**signal, "capital_required": need}):
         return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}

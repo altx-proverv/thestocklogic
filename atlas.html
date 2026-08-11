@@ -43,6 +43,7 @@ a{color:var(--accent);text-decoration:none}
 .b-stale{background:rgba(255,180,84,.08);border:1px solid rgba(255,180,84,.3);color:#ffd9a8}
 
 .capital{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px 0}
+.cap-note{margin-top:12px;font-size:12px;line-height:1.5;opacity:.65}
 .cap-top{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px}
 .cap-lbl{font-size:9px;letter-spacing:2px;color:var(--faint);text-transform:uppercase}
 .cap-fig{display:flex;gap:26px;flex-wrap:wrap}
@@ -128,15 +129,15 @@ td.sym{font-weight:700;color:var(--ink)}
 
   <div class="capital">
     <div class="cap-top">
-      <div><div class="cap-lbl">Capital Allocation</div></div>
+      <div><div class="cap-lbl">Committed Exposure</div></div>
       <div class="cap-fig">
-        <div><div class="cap-lbl">Allocated</div><div class="v" id="capAlloc">—</div></div>
         <div><div class="cap-lbl">Committed</div><div class="v amb" id="capDep">—</div></div>
-        <div><div class="cap-lbl">Available</div><div class="v pos" id="capAvail">—</div></div>
         <div><div class="cap-lbl">Risk at Stop</div><div class="v neg" id="capRisk">—</div></div>
+        <div><div class="cap-lbl">Positions + Triggers</div><div class="v" id="capTrades">—</div></div>
       </div>
     </div>
-    <div class="track"><i id="capTrack" style="width:0%"></i></div>
+    <div class="cap-note">Available funds are read live from the broker at
+      decision time and are not tracked here. Exits are managed manually.</div>
   </div>
 
   <div class="summary" id="summary"></div>
@@ -189,7 +190,13 @@ var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV
 
 /* These MUST track atlas/config.py. The browser cannot read it, so they are
    duplicated here. If config.py changes, change these. */
-var CFG={allocated:300000, riskPerTrade:3000, maxPositions:6, dailyCap:9000};
+/* ATLAS tracks no capital. There is no allocated pool, no position limit and
+   no daily loss cap -- `allocated:300000`, `maxPositions:6` and `dailyCap:9000`
+   used to live here and disagreed with both atlas/config.py and
+   atlas_state.capital (which said 150000). Available funds are read live from
+   the broker at decision time; this page shows what is committed, which it
+   derives from the trades themselves. */
+var CFG={riskPerTrade:3000, maxNotionalPerTrade:100000, maxTradesPerDay:3};
 
 /* Unrealised P&L is only shown if the price feed is fresher than this. */
 var PRICE_STALE_HOURS=24;
@@ -281,15 +288,15 @@ function render(){
   var closed = _trades.filter(function(t){return st(t)==='CLOSED';});
   var shadow = _trades.filter(function(t){return st(t)==='SHADOW';});
 
-  /* Capital: computed from trades, not from a separate state table.
-     GTT triggers commit capital the moment they rest. */
+  /* Committed and at-risk are derived from the trades themselves. There is no
+     allocated pool to show a percentage against, and no "available" figure --
+     that lives at the broker and is read live at decision time by
+     atlas/risk/funds.py, not stored anywhere this page can see. */
   var committed = gtt.concat(open).reduce(function(s,t){return s+notionalOf(t);},0);
   var atRisk    = gtt.concat(open).reduce(function(s,t){return s+riskOf(t);},0);
-  document.getElementById('capAlloc').textContent=rup(CFG.allocated);
   document.getElementById('capDep').textContent=rup(committed);
-  document.getElementById('capAvail').textContent=rup(Math.max(CFG.allocated-committed,0));
   document.getElementById('capRisk').textContent=rup(atRisk);
-  document.getElementById('capTrack').style.width=Math.min(committed/CFG.allocated*100,100)+'%';
+  document.getElementById('capTrades').textContent=gtt.length+open.length;
 
   var realTotal=closed.reduce(function(s,t){var v=realised(t); return s+(v||0);},0);
   var unrealTotal=0, haveUnreal=false;
@@ -304,7 +311,7 @@ function render(){
 
   var stats=[
     {v:gtt.length,l:'Resting Triggers',c:'amb'},
-    {v:open.length,l:'Open Positions',c:'acc',s:'max '+CFG.maxPositions},
+    {v:open.length,l:'Open Positions',c:'acc',s:'no limit'},
     {v:haveUnreal?money(unrealTotal):'—',l:'Unrealised P&L',c:unrealTotal>=0?'pos':'neg',s:haveUnreal?'':'no fresh prices'},
     {v:money(realTotal),l:'Realised P&L',c:realTotal>=0?'pos':'neg',s:settled+' settled'},
     {v:settled?Math.round(wins/settled*100)+'%':'—',l:'Win Rate',s:settled?wins+'W / '+(settled-wins)+'L':'no closed trades'},
