@@ -44,7 +44,7 @@ from atlas.config import (
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
     ALLOW_LONG_IN_BULLISH, ALLOW_LONG_IN_SIDEWAYS,
     ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
-    DEFAULT_ON_UNKNOWN_REGIME,
+    DEFAULT_ON_UNKNOWN_REGIME, OPEN_STATUSES,
 )
 from atlas.risk.position_sizing import size_by_risk
 from atlas.risk.kill_switch import check as kill_switch_check
@@ -54,7 +54,9 @@ log = logging.getLogger("ATLAS-ENTRY")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 MARKET_FILE = Path(__file__).parent.parent.parent / "data" / "processed" / "market.parquet"
-OPEN_STATUSES = ("OPEN", "GTT_PENDING")
+# OPEN_STATUSES now lives in atlas/config.py -- kill_switch reads the same
+# tuple. It was defined only here, and kill_switch counted status=eq.OPEN
+# alone, so the two disagreed about whether a resting GTT holds capital.
 
 # Refuse a regime older than this. market.parquet is rebuilt nightly by
 # build_market.py (EOD chain, ahead of 02b); a gap this wide means that job

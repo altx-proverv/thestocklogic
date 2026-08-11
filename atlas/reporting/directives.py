@@ -183,42 +183,20 @@ def handle_directive(text: str) -> str:
         )
 
     elif text.startswith("/trade") or text.startswith("/skip") or text.startswith("/watch"):
-        parts  = text.split()
-        cmd    = parts[0].lower()
-        symbol = parts[1].upper() if len(parts) > 1 else ""
-        if not symbol:
-            return "Usage: /trade SYMBOL or /skip SYMBOL or /watch SYMBOL"
-        from atlas.execution.trade_executor import approve_trade, skip_trade, PENDING_TRADES
-        if cmd == "/trade":
-            if symbol not in PENDING_TRADES:
-                return f"No pending trade for {symbol}. Check /status."
-            result = approve_trade(symbol)
-            status = result.get("status","")
-            if status == "EXECUTED":
-                return f"ORDER PLACED — {symbol}. Order ID: {result.get('order_id','')}"
-            elif status == "EXPIRED":
-                return f"EXPIRED — {symbol}. Approval window closed."
-            else:
-                return f"FAILED — {symbol}. {result.get('reason','Unknown error')}"
-        elif cmd == "/skip":
-            skip_trade(symbol)
-            return f"SKIPPED — {symbol}. Signal rejected."
-        elif cmd == "/watch":
-            if symbol not in PENDING_TRADES:
-                return f"No pending signal for {symbol}."
-            pending = PENDING_TRADES[symbol]
-            import datetime as _dt
-            _IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
-            _now = _dt.datetime.now(_IST)
-            _close = _now.replace(hour=15, minute=15, second=0, microsecond=0)
-            if _now < _close:
-                pending["expires_at"] = _close
-            expires = pending["expires_at"].strftime("%H:%M IST")
-            sizing  = pending["sizing"]
-            entry   = sizing.get("entry_price", 0)
-            sl      = sizing.get("sl_price", 0)
-            t1      = sizing.get("target_1", 0)
-            return f"WATCHING {symbol} until market close ({expires}). Entry:Rs{entry:.1f} SL:Rs{sl:.1f} T1:Rs{t1:.1f}. Send /trade {symbol} when ready."
+        # These drove atlas.execution.trade_executor, which is retired and has
+        # been removed. They could not have worked in any case: PENDING_TRADES
+        # was only ever assigned {} and .clear()ed, so /trade always answered
+        # "No pending trade", and /watch read pending["expires_at"] and
+        # pending["sizing"] -- keys nothing ever set.
+        #
+        # Worse, the import raised ImportError (trade_executor imported
+        # `calculate, validate` from position_sizing; neither exists). That
+        # propagated out of handle_directive into bot_listener.run()'s except,
+        # which logged "Polling error" and slept 5s -- after the offset had
+        # already advanced, so every other update in the same batch was lost.
+        return ("Manual trade commands are not available in this phase.\n"
+                "ATLAS enters autonomously at 09:37 via market_open.\n"
+                "Use /positions to see open trades, /pause to stop trading.")
 
     elif text in ["/positions", "positions"]:
         import requests as _req, os

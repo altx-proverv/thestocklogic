@@ -351,40 +351,25 @@ def run_orb_scan(max_stocks: int = 500):
 
     if signals:
         push_orb_signals(signals)
-        # Notify ATLAS — top 3 by RVOL only
-        try:
-            import sys as _sys
-            _sys.path.insert(0, str(Path(__file__).parent.parent))
-            from atlas.execution.trade_executor import queue_signal
-            # Sort by RVOL descending, take top 3
-            top_signals = sorted(signals, key=lambda s: float(s.get("rvol", 0)), reverse=True)[:3]
-            for sig in top_signals:
-                direction  = sig.get("direction", "LONG")
-                rvol       = float(sig.get("rvol", 1.5))
-                entry      = float(sig.get("entry", 0))
-                sl         = float(sig.get("sl", 0))
-                t1         = float(sig.get("t1", 0))
-                conviction = min(max(rvol / 5.0 * 100, 78), 95)
-                from atlas.config import CAPITAL_PER_TRADE, MAX_RISK_PER_TRADE
-                capital_required = CAPITAL_PER_TRADE if direction == "LONG" else MAX_RISK_PER_TRADE
-                atlas_signal = {
-                    "symbol":           sig.get("symbol"),
-                    "direction":        direction,
-                    "conviction":       conviction,
-                    "score":            conviction,
-                    "entry_ref":        entry,
-                    "entry":            entry,
-                    "sl":               sl,
-                    "target_1":         t1,
-                    "target_2":         round(t1 * 1.02, 2),
-                    "setup_name":       f"ORB Breakout — {rvol:.1f}x RVOL",
-                    "session":          "opening",
-                    "capital_required": capital_required,
-                }
-                result = queue_signal(atlas_signal)
-                log.info(f"ATLAS ORB queued: {sig['symbol']} {direction} RVOL:{rvol:.1f} Conv:{conviction:.0f} — {result.get('status')}")
-        except Exception as e:
-            log.warning(f"ATLAS ORB notification failed: {e}")
+        # ATLAS is NOT notified from here. This used to route the top 3 by RVOL
+        # into atlas.execution.trade_executor.queue_signal, which places a real
+        # MARKET order and then SL/GTT exit orders via trade_management --
+        # bypassing LIVE_TRADING_ENABLED, the regime gate, the entry-range gate,
+        # the exposure fail-closed check and the capital cap, all of which live
+        # in atlas_entry.enter_trade. 06_push_supabase removed the identical
+        # path and documented why; this copy survived.
+        #
+        # It was inert only by accident: trade_executor raises ImportError on
+        # `from atlas.risk.position_sizing import calculate, validate` (neither
+        # symbol exists), and the surrounding `except Exception` downgraded that
+        # to a warning. A one-line import fix would have re-armed ungated live
+        # ordering.
+        #
+        # ATLAS entry happens at 09:37 via atlas/signal/market_open.py, which
+        # reads zone-validated signals from Supabase and routes them through the
+        # full gate stack. ORB signals reach it through live_signals, not here.
+        log.info(f"{len(signals)} ORB signals pushed to live_signals. "
+                 f"ATLAS entry is handled at 09:37 by market_open.py.")
     else:
         log.info("No ORB breakouts after regime filter.")
 

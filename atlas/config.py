@@ -38,6 +38,13 @@ MAX_RISK_PER_TRADE   = 3000.0    # INR at risk if the structural stop is hit
 MAX_CAPITAL_DEPLOYED = 300000.0  # THE binding constraint. 3 x Rs1L.
 MAX_OPEN_POSITIONS   = 6         # secondary bound; capital usually binds first
 
+# Statuses that represent a LIVE capital commitment. GTT_PENDING counts: the
+# capital is committed the moment the trigger rests at the broker, before it
+# fills. kill_switch and atlas_entry MUST agree on this -- they were diverging,
+# with atlas_entry counting both and kill_switch counting only OPEN, so the
+# position limit undercounted by every resting GTT.
+OPEN_STATUSES        = ("OPEN", "GTT_PENDING")
+
 # Absolute, not percentage. 3 trades x Rs3k = Rs9,000 worst case in one day.
 # The old 2%-of-1.5L rule produced Rs3,000 -- one stop-out halted the system.
 DAILY_LOSS_CAP_INR   = 9000.0
