@@ -35,7 +35,14 @@ Zerodha does not block margin for a resting GTT, so this is deliberately more
 conservative than the broker. That is the correct direction to err.
 """
 
-import logging
+import sys, logging
+from pathlib import Path
+
+# Repo root on sys.path so `python3 atlas/risk/funds.py` works the same as an
+# import does. Every sibling module in atlas/ does this; omitting it meant the
+# __main__ diagnostic below died with ModuleNotFoundError: No module named
+# 'atlas'. Same defect class as 089d62c.
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from atlas.config import FUNDS_SAFETY_BUFFER_PCT
 
