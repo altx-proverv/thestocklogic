@@ -143,7 +143,14 @@ def get_live_prices(symbols: list) -> tuple:
     """
     if not symbols:
         return {}, False, ""
-    rows = _get(f"live_prices?symbol=in.({','.join(symbols)})"
+    # Quote and percent-encode the symbol list. Bare `in.(M&M,GRASIM)` ends the
+    # query parameter at the ampersand, and PostgREST answers
+    # 400 PGRST100 "failed to parse filter (in.(M)". M&M is a real NSE symbol
+    # and holding it silently suppressed P&L for EVERY position, because the
+    # whole request failed and the feed was reported stale.
+    from urllib.parse import quote
+    vals = ",".join('"' + s.replace('"', '""') + '"' for s in symbols)
+    rows = _get(f"live_prices?symbol={quote(f'in.({vals})', safe='')}"
                 f"&select=symbol,ltp,updated_at", "live prices")
     if not rows:
         return {}, True, "no price rows"

@@ -73,8 +73,12 @@ def get_live_signals():
 
 def get_live_prices(symbols):
     if not symbols: return {}
+    # Quote + percent-encode: a bare `in.(M&M,...)` truncates at the ampersand
+    # and PostgREST rejects the whole filter with 400 PGRST100.
+    from urllib.parse import quote
+    vals = ",".join('"' + s.replace('"', '""') + '"' for s in symbols)
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/live_prices?symbol=in.({','.join(symbols)})&select=symbol,ltp",
+        f"{SUPABASE_URL}/rest/v1/live_prices?symbol={quote(f'in.({vals})', safe='')}&select=symbol,ltp",
         headers=_headers(), timeout=HTTP_TIMEOUT
     )
     return {row["symbol"]: row for row in r.json()} if r.status_code == 200 else {}

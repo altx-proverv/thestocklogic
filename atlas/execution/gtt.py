@@ -67,7 +67,7 @@ def place_zone_gtt(symbol: str, qty: int, trigger_price: float,
 
     try:
         from kiteconnect import KiteConnect
-        trigger_id = kite.place_gtt(
+        resp = kite.place_gtt(
             trigger_type=kite.GTT_TYPE_SINGLE,
             tradingsymbol=symbol,
             exchange=KiteConnect.EXCHANGE_NSE,
@@ -82,6 +82,16 @@ def place_zone_gtt(symbol: str, qty: int, trigger_price: float,
                 "tag":              tag,
             }],
         )
+        # kite.place_gtt() returns {"trigger_id": N}, not a bare id. Passing the
+        # dict straight through stored '{"trigger_id": 331456858}' in
+        # atlas_trades.gtt_trigger_id, which never matches str(gtt["id"]) from
+        # get_gtts() -- so the trigger-id lookup that replaced tag matching was
+        # itself broken for the three GTTs placed on 2026-08-12.
+        trigger_id = resp.get("trigger_id") if isinstance(resp, dict) else resp
+        if trigger_id is None:
+            return {"success": False,
+                    "reason": f"place_gtt returned no trigger_id: {resp!r}"}
+        trigger_id = str(trigger_id)
         log.info(f"GTT placed: BUY {qty} {symbol} trigger Rs{trigger_price:.1f} "
                  f"limit Rs{limit_price:.1f} | id {trigger_id}")
         return {
