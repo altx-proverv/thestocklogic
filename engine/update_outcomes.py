@@ -43,21 +43,33 @@ def fetch_all_signals():
     return r.json()
 
 
+DECIDED = ("WIN_T1", "WIN_T2", "LOSS", "MISSED", "INVALIDATED")
+
+
+def nat_key(row) -> tuple:
+    """(signal_date, symbol, direction) -- what actually identifies a signal.
+
+    signals.id does NOT: 06_push_supabase deletes and re-inserts a whole date on
+    every run, so every id for that date changes. Outcomes used to be keyed on
+    that id under a foreign key, so re-running a date destroyed its measured
+    history via the cascade.
+    """
+    return (str(row.get("signal_date")), str(row.get("symbol")),
+            str(row.get("direction") or "").upper())
+
+
 def fetch_existing_outcomes():
+    """Natural keys already decided. Anything else is re-scored and upserted."""
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/signal_outcomes?select=signal_id,outcome",
-        headers=sb_headers()
+        f"{SUPABASE_URL}/rest/v1/signal_outcomes"
+        f"?select=signal_date,symbol,direction,outcome",
+        headers=sb_headers(), timeout=30
     )
-    data = r.json()
-    # Return set of signal_ids that are already decided (not OPEN)
-    decided = set()
-    open_ids = set()
-    for row in data:
-        if row["outcome"] in ("WIN_T1", "WIN_T2", "LOSS", "MISSED", "INVALIDATED"):
-            decided.add(row["signal_id"])
-        else:
-            open_ids.add(row["signal_id"])
-    return decided, open_ids
+    if r.status_code != 200:
+        log.error(f"could not read existing outcomes: HTTP {r.status_code} {r.text[:200]}")
+        sys.exit(1)
+    decided = {nat_key(row) for row in r.json() if (row.get("outcome") or "") in DECIDED}
+    return decided
 
 
 def load_stock(symbol):
@@ -169,10 +181,16 @@ def evaluate(sig, stock_df):
 def push_outcomes(records):
     if not records:
         return
+    # UPSERT on the natural key. sb_headers already sends
+    # Prefer: resolution=merge-duplicates, but with no unique constraint to
+    # conflict on it silently inserted every time -- so every OPEN outcome was
+    # re-inserted nightly and the table reached 10.3 copies per key, worst case
+    # 29. on_conflict names the constraint's columns so the merge actually fires.
     r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/signal_outcomes",
+        f"{SUPABASE_URL}/rest/v1/signal_outcomes"
+        f"?on_conflict=signal_date,symbol,direction",
         headers=sb_headers(),
-        json=records
+        json=records, timeout=60
     )
     if r.status_code not in (200, 201):
         log.error(f"Push failed: {r.status_code} {r.text[:200]}")
@@ -195,15 +213,25 @@ def main():
         sys.exit(1)
     log.info(f"Total signals: {len(signals)}")
 
-    decided_ids, open_ids = fetch_existing_outcomes()
-    log.info(f"Already decided: {len(decided_ids)} | Open (need recheck): {len(open_ids)}")
+    decided = fetch_existing_outcomes()
+    log.info(f"Already decided: {len(decided)} natural key(s)")
 
+    # Dedup the SIGNALS too. 06_push can leave more than one row per
+    # (date, symbol, direction) -- and since outcomes are now uniquely keyed on
+    # exactly that, two signal rows sharing a key would upsert over each other.
     today = date.today()
-    to_process = [
-        s for s in signals
-        if date.fromisoformat(s["signal_date"]) < today
-        and s["id"] not in decided_ids
-    ]
+    seen, to_process = set(), []
+    for sig in signals:
+        try:
+            if date.fromisoformat(sig["signal_date"]) >= today:
+                continue
+        except (TypeError, ValueError):
+            continue
+        k = nat_key(sig)
+        if k in decided or k in seen:
+            continue
+        seen.add(k)
+        to_process.append(sig)
     log.info(f"To process: {len(to_process)}")
 
     records  = []
@@ -223,10 +251,16 @@ def main():
             continue
 
         records.append({
+            # Soft pointer only -- the natural key below is authoritative.
             "signal_id":    sig["id"],
             "symbol":       sig["symbol"],
             "signal_date":  sig["signal_date"],
             "direction":    sig["direction"],
+            # Levels copied ONTO the outcome so the accuracy record is
+            # self-contained and survives a re-push of the signal it came from.
+            "entry_ref":    sig.get("entry_ref"),
+            "sl":           sig.get("sl"),
+            "target_1":     sig.get("target_1"),
             "grade":        sig.get("grade", "B"),
             "score":        sig.get("score", 0),
             "sector":       sig.get("sector", "OTHER"),

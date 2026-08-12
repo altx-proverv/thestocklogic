@@ -49,7 +49,7 @@ def _headers():
 
 def _get(query: str, what: str):
     try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/{query}",
+        r = requests.get(f"{SUPABASE_URL}{query}",
                          headers=_headers(), timeout=HTTP_TIMEOUT)
         if r.status_code == 200:
             return r.json()
@@ -150,7 +150,7 @@ def get_live_prices(symbols: list) -> tuple:
     # whole request failed and the feed was reported stale.
     from urllib.parse import quote
     vals = ",".join('"' + s.replace('"', '""') + '"' for s in symbols)
-    rows = _get(f"live_prices?symbol={quote(f'in.({vals})', safe='')}"
+    rows = _get(f"/rest/v1/live_prices?symbol={quote(f'in.({vals})', safe='')}"
                 f"&select=symbol,ltp,updated_at", "live prices")
     if not rows:
         return {}, True, "no price rows"
@@ -177,17 +177,17 @@ def get_live_prices(symbols: list) -> tuple:
 
 def get_today_decisions() -> list:
     today = datetime.now(IST).date().isoformat()
-    return _get(f"atlas_entry_log?run_date=eq.{today}"
+    return _get(f"/rest/v1/atlas_entry_log?run_date=eq.{today}"
                 f"&order=run_at.asc&select=*", "entry log") or []
 
 
 def get_positions() -> list:
-    return _get(f"atlas_trades?status=in.({','.join(OPEN_STATUSES)})"
+    return _get(f"/rest/v1/atlas_trades?status=in.({','.join(OPEN_STATUSES)})"
                 f"&order=entry_date.asc&select=*", "positions") or []
 
 
 def get_agent_state() -> dict:
-    rows = _get("atlas_state?limit=1&order=updated_at.desc", "agent state")
+    rows = _get("/rest/v1/atlas_state?limit=1&order=updated_at.desc", "agent state")
     return rows[0] if rows else {"mode": DEFAULT_AGENT_MODE}
 
 

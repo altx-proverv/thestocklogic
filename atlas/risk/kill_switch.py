@@ -43,7 +43,7 @@ def _get(query: str, what: str) -> list:
     """GET or raise. No timeout meant a hung Supabase blocked the order path
     indefinitely; no status check meant an error body became an empty result."""
     try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/{query}",
+        r = requests.get(f"{SUPABASE_URL}{query}",
                          headers=_headers(), timeout=HTTP_TIMEOUT)
     except requests.RequestException as e:
         raise RiskDataUnavailable(f"{what}: {type(e).__name__}: {e}") from e
@@ -56,7 +56,7 @@ def _get(query: str, what: str) -> list:
 
 def get_agent_state():
     """Current agent state. Raises RiskDataUnavailable if it cannot be read."""
-    rows = _get("atlas_state?limit=1&order=updated_at.desc", "agent state")
+    rows = _get("/rest/v1/atlas_state?limit=1&order=updated_at.desc", "agent state")
     if not rows:
         raise RiskDataUnavailable("agent state: no atlas_state row exists")
     return rows[0]

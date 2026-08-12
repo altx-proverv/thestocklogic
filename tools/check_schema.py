@@ -57,6 +57,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://eibdlcanpudjgmkjxrga.supa
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 # Not columns: PostgREST control parameters.
+UNCHECKABLE = []
 CONTROL = {"select", "order", "limit", "offset", "on_conflict", "columns", "and", "or"}
 SKIP_DIRS = {"venv", ".git", "node_modules", "engine/legacy"}
 
@@ -78,6 +79,8 @@ def _files():
         rel = str(p.relative_to(ROOT))
         if any(rel.startswith(d) or f"/{d}/" in f"/{rel}" for d in SKIP_DIRS):
             continue
+        if p.resolve() == Path(__file__).resolve():
+            continue          # this file documents the patterns it looks for
         yield p, rel
 
 
@@ -107,6 +110,14 @@ def _cols_from_query(qs: str):
 def scan_urls(text: str):
     """[(table, {columns})] for every /rest/v1/<table>?<query> in the text."""
     found = []
+    # Coverage guard, reported by main(). A /rest/v1/ whose table name is built
+    # at runtime -- fetch(SB+'/rest/v1/'+path) -- cannot be checked, and silently
+    # skipping it is the same failure this tool exists to prevent. A jget()
+    # refactor did exactly that to tsl-dashboard.html and the tool still said
+    # "no drift".
+    for m in re.finditer(r"/rest/v1/(.)", text):
+        if not re.match(r"[a-z0-9_]", m.group(1)):
+            UNCHECKABLE.append(text[max(0, m.start()-40):m.start()+40].strip())
     # Stop only at whitespace or a quote. The character class must NOT exclude
     # commas: PostgREST uses them inside select=, order= and in.(), so excluding
     # them truncated every query at its first column and this checker silently
@@ -205,6 +216,14 @@ def main() -> int:
                     problems.append(f"{rel}:{line}: writes {table}.{c} — column does not exist")
 
     print(f"checked {checked_urls} query URLs and {checked_payloads} write payloads")
+    if UNCHECKABLE:
+        print(f"\n{len(UNCHECKABLE)} reference(s) could NOT be checked — the table name "
+              f"is built at runtime:")
+        for u in UNCHECKABLE[:10]:
+            print(f"    ...{u}...")
+        print("  Put the literal /rest/v1/<table> at the call site so it can be verified.")
+        problems.append(f"{len(UNCHECKABLE)} dynamically-built /rest/v1/ reference(s) "
+                        f"cannot be schema-checked")
     if not problems:
         print("\nNo schema drift found.")
         return 0

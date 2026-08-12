@@ -127,7 +127,7 @@ const RANK={WIN_T1:5,WIN_T2:5,LOSS:4,MISSED:3,INVALIDATED:3,OPEN:1,NOT_SCORED:0}
 let ALL=[], DATA=[], curFilter='all', view='table', sortKey='signal_date', sortDir=-1;
 
 async function jget(path){
-  const r = await fetch(SB+'/rest/v1/'+path,{headers:HDR});
+  const r = await fetch(SB+path,{headers:HDR});
   if(!r.ok){
     // A PostgREST 4xx returns a JSON error object, not an array. Without this
     // check the object flowed into .map()/.filter() and produced an empty table
@@ -140,58 +140,41 @@ async function jget(path){
 
 async function loadData(){
   try{
-    // DRIVEN BY OUTCOMES, not signals.
+    // ONE query. signal_outcomes is now self-contained: it carries the natural
+    // key (signal_date + symbol + direction), the planned levels, and the
+    // result. Nothing to join.
     //
-    // This used to fetch the 300 newest signals and join outcomes onto them.
-    // That held while the engine published ~4-10 signals a day. Removing the
-    // MIN_SCORE gate took it to ~154/day, so 300 rows stopped being ~40 trading
-    // days and became TWO -- and the two most recent days are always unscored,
-    // because update_outcomes needs the following day's prices. Every fetched
-    // signal had outcome NOT_SCORED, `scored` came out empty, and the page
-    // rendered nothing while both queries returned 200.
-    //
-    // Outcomes already carry symbol / date / direction / grade / score / pnl, so
-    // they can drive the table directly. Only the planned levels come from
-    // signals, fetched by the ids we actually need. Immune to signals-per-day.
-    const outs = await jget('signal_outcomes?select=signal_id,symbol,signal_date,direction,grade,score,outcome,entry_status,actual_entry,exit_price,days_held,pnl&order=signal_date.desc,signal_id.desc&limit=1000');
+    // It used to fetch 300 signals and join outcomes onto them by signals.id.
+    // Two problems, both fixed upstream: the 300-row window covered only two
+    // days once the engine started publishing ~154/day (so every row was
+    // unscored and the page rendered blank), and signals.id is not stable --
+    // 06_push deletes and re-inserts a date, so the join key churns and the
+    // old foreign key cascade-deleted that date's measured history.
+    const rows = await jget('/rest/v1/signal_outcomes?select=signal_date,symbol,direction,grade,score,entry_ref,sl,target_1,outcome,entry_status,actual_entry,exit_price,days_held,pnl&order=signal_date.desc,symbol.asc&limit=1000');
 
-    // dedup on signal_id, keep the most-resolved outcome
-    const omap={};
-    for(const o of outs){const i=o.signal_id; if(!(i in omap)||(RANK[o.outcome]||0)>(RANK[omap[i].outcome]||0))omap[i]=o;}
-    const ids=Object.keys(omap);
+    ALL = rows.map(o => ({
+      id: o.signal_date+'|'+o.symbol+'|'+o.direction,   // natural key
+      symbol:o.symbol, signal_date:o.signal_date, direction:o.direction,
+      grade:o.grade, score:o.score,
+      entry_ref:o.entry_ref, sl:o.sl, target_1:o.target_1, target_2:null,
+      outcome:o.outcome||'NOT_SCORED', entry_status:o.entry_status,
+      actual_entry:o.actual_entry, exit_price:o.exit_price,
+      days_held:o.days_held, pnl:o.pnl
+    }));
 
-    // Levels, in chunks -- an id=in.() of 1000 ids overruns the URL limit.
-    const levels={};
-    for(let i=0;i<ids.length;i+=150){
-      const chunk=ids.slice(i,i+150);
-      const rows=await jget('signals?select=id,entry_ref,sl,target_1,target_2&id=in.('+chunk.join(',')+')');
-      for(const s of rows) levels[s.id]=s;
-    }
-
-    ALL=Object.values(omap).map(o=>{
-      const L=levels[o.signal_id]||{};
-      return {id:o.signal_id, symbol:o.symbol, signal_date:o.signal_date,
-              direction:o.direction, grade:o.grade, score:o.score,
-              entry_ref:L.entry_ref, sl:L.sl, target_1:L.target_1, target_2:L.target_2,
-              outcome:o.outcome||'NOT_SCORED', entry_status:o.entry_status,
-              actual_entry:o.actual_entry, exit_price:o.exit_price,
-              days_held:o.days_held, pnl:o.pnl};
-    }).sort((a,b)=>a.signal_date<b.signal_date?1:-1);
-
-    const scored=ALL.filter(r=>r.outcome!=='NOT_SCORED');
-    DATA=scored.slice(0,100);
+    const scored = ALL.filter(r=>r.outcome!=='NOT_SCORED');
+    DATA = scored.slice(0,100);
     if(!DATA.length){
       // Say WHICH stage came up empty. A blank table used to be
       // indistinguishable from a broken query.
       document.getElementById('tbody').innerHTML='<tr><td colspan="11" class="loading">'+
-        'No scored signals. '+outs.length+' outcome row(s) fetched, '+ALL.length+
-        ' joined, 0 resolved. If outcomes exist, update_outcomes.py may not have run yet.'+
-        '</td></tr>';
+        'No scored signals. '+rows.length+' outcome row(s) fetched, 0 resolved. '+
+        'If outcomes exist, update_outcomes.py may not have run yet.</td></tr>';
     }
     renderSummary(); render();
   }catch(e){
     document.getElementById('sub').textContent='Failed to load data: '+e.message;
-    document.getElementById('tbody').innerHTML='<tr><td colspan="11" class="loading">Could not fetch signals. '+e.message+'</td></tr>';
+    document.getElementById('tbody').innerHTML='<tr><td colspan="11" class="loading">Could not fetch outcomes. '+e.message+'</td></tr>';
   }
 }
 function isWin(r){return r.outcome==='WIN_T1'||r.outcome==='WIN_T2';}
