@@ -174,14 +174,17 @@ def mark_one_date(signals: pd.DataFrame, closes: dict, all_dates: list,
     return rows
 
 
-def upsert(table: str, rows: list, conflict: str) -> bool:
+def upsert(path: str, rows: list, conflict: str) -> bool:
+    """`path` carries the literal /rest/v1/<table> so tools/check_schema.py can
+    verify it statically. Building it from a variable made the table invisible
+    to that check -- the same blind spot the checker itself just flagged."""
     ok = True
     for i in range(0, len(rows), BATCH):
         chunk = rows[i:i + BATCH]
-        r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict}",
+        r = requests.post(f"{SUPABASE_URL}{path}?on_conflict={conflict}",
                           headers=_headers(), json=chunk, timeout=120)
         if r.status_code not in (200, 201, 204):
-            log.error(f"{table} upsert failed: HTTP {r.status_code} {r.text[:250]}")
+            log.error(f"{path} upsert failed: HTTP {r.status_code} {r.text[:250]}")
             ok = False
     return ok
 
@@ -223,7 +226,7 @@ def main() -> int:
         if not rows:
             log.info(f"{md.date()}: nothing live")
             continue
-        if upsert("signal_marks", rows,
+        if upsert("/rest/v1/signal_marks", rows,
                   "signal_date,symbol,direction,mark_date"):
             scored = [r for r in rows if r["correct_today"] is not None]
             hit = sum(1 for r in scored if r["correct_today"])
@@ -248,7 +251,7 @@ def main() -> int:
                           "nifty_close": round(cur, 2),
                           "nifty_move_pct": round((cur - prev) / prev * 100.0, 4)})
         if mrows:
-            upsert("market_marks", mrows, "mark_date")
+            upsert("/rest/v1/market_marks", mrows, "mark_date")
             log.info(f"benchmark: {len(mrows)} Nifty mark(s)")
         else:
             log.warning("no Nifty marks written — market.parquet may lag the stock closes")

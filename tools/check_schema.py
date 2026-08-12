@@ -115,9 +115,13 @@ def scan_urls(text: str):
     # skipping it is the same failure this tool exists to prevent. A jget()
     # refactor did exactly that to tsl-dashboard.html and the tool still said
     # "no drift".
-    for m in re.finditer(r"/rest/v1/(.)", text):
-        if not re.match(r"[a-z0-9_]", m.group(1)):
-            UNCHECKABLE.append(text[max(0, m.start()-40):m.start()+40].strip())
+    # Flag only genuine runtime construction -- an interpolation or a string
+    # break immediately after the prefix. Matching "anything that is not a table
+    # name" also fired on prose like "/rest/v1/<table>" in docstrings, which is
+    # noise: a checker that cries wolf gets ignored, and then it may as well not
+    # exist.
+    for m in re.finditer(r"""/rest/v1/([{'"`+$])""", text):
+        UNCHECKABLE.append(text[max(0, m.start()-40):m.start()+40].strip())
     # Stop only at whitespace or a quote. The character class must NOT exclude
     # commas: PostgREST uses them inside select=, order= and in.(), so excluding
     # them truncated every query at its first column and this checker silently
