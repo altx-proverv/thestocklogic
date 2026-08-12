@@ -9,8 +9,8 @@ GATE STACK
                                      shorts only when extreme_bearish
   2. Opening range                -- SHORTS ONLY (intraday directional check)
   3. New entries today            -- MAX_TRADES_PER_DAY
-  4. Entry range                  -- inside zone -> enter; above zone on a
-                                     LONG -> rest a GTT at the zone edge
+  4. Entry range                  -- inside zone -> MARKET order now.
+                                     Outside -> skip. No resting orders.
   5. Sizing                       -- Rs3k risk / Rs1L notional dual cap
   6. Live broker funds            -- kite.margins() less resting GTT notional
   7. Kill switch                  -- operator halt + funds backstop
@@ -266,18 +266,17 @@ def enter_trade(signal: dict) -> dict:
         return {"status": "SKIPPED_LIMIT",
                 "reason": f"entries today {todays}/{MAX_TRADES_PER_DAY}"}
 
-    # GATE 4 -- entry range, or rest a GTT at the zone
+    # GATE 4 -- entry range. Enter at MARKET or skip. No resting orders.
+    #
+    # A LONG whose zone sat below price used to rest a GTT and wait for a
+    # retrace. That path is gone. Signals now only publish when price is within
+    # MAX_ENTRY_DIST_PCT (0.30%) of the zone, i.e. already there, so waiting for
+    # a retest is not the trade -- taking it now is. Resting triggers also
+    # committed cash for days against a fill that mostly never came.
     ltp = get_ltp(symbol) or entry_ref
     in_range, range_reason = check_entry_range(direction, ltp, entry_low, entry_high)
-
     if not in_range:
-        if direction != "LONG":
-            return {"status": "SKIPPED_RANGE",
-                    "reason": f"{range_reason} (no GTT for shorts -- CNC-only)"}
-        if entry_ref <= 0 or entry_ref >= ltp:
-            return {"status": "SKIPPED_RANGE",
-                    "reason": f"{range_reason} (zone not below LTP -- no GTT)"}
-        return _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx)
+        return {"status": "SKIPPED_RANGE", "reason": range_reason}
 
     # GATE 5 -- sizing. Rs3,000 risk / Rs1,00,000 notional, qty a multiple of 5.
     sizing = size_by_risk(entry_price=ltp, stop_price=stop_price, direction=direction)
@@ -333,47 +332,15 @@ def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
     }
 
 
-def _place_gtt_entry(signal, symbol, entry_ref, stop_price, ltp, ctx) -> dict:
-    """Price sits above the zone on a LONG. Size at the ZONE price -- that is
-    where the fill happens -- and rest a GTT trigger there."""
-    from atlas.execution.gtt import place_zone_gtt
-
-    sizing = size_by_risk(entry_price=entry_ref, stop_price=stop_price, direction="LONG")
-    if sizing.get("qty", 0) <= 0:
-        return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
-
-    # Same live-funds gate as a direct entry. A resting GTT commits cash the
-    # moment it is placed, so it must clear the funds check before it rests --
-    # and funds.available_funds() already nets off every GTT resting from
-    # earlier, which is what stops the same rupee being committed twice.
-    need = sizing["capital_required"]
-    funds_ok, funds_reason, funds_detail = can_afford(need)
-    if not funds_ok:
-        status = ("BLOCKED_NO_FUNDS_DATA"
-                  if funds_detail.get("data_available") is False else "SKIPPED_FUNDS")
-        return {"status": status, "reason": funds_reason}
-
-    if not kill_switch_check({**signal, "capital_required": need}):
-        return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}
-
-    intent = _build_intent(signal, symbol, "LONG", entry_ref, sizing, ctx)
-    intent["product"] = "CNC"
-
-    if not LIVE_TRADING_ENABLED:
-        log.info(f"[SHADOW] WOULD PLACE GTT {sizing['qty']} {symbol} "
-                 f"trigger Rs{entry_ref:.1f} (LTP Rs{ltp:.1f})")
-        _log_intent(intent, shadow=True)
-        return {"status": "SHADOW_GTT", **intent}
-
-    gtt = place_zone_gtt(symbol=symbol, qty=sizing["qty"],
-                         trigger_price=entry_ref, last_price=ltp)
-    if not gtt.get("success"):
-        return {"status": "GTT_FAILED", "reason": gtt.get("reason", "gtt failed")}
-
-    intent["gtt_trigger_id"] = gtt["trigger_id"]
-    intent["trigger_price"]  = gtt["trigger_price"]
-    recorded = _log_intent(intent, shadow=False, gtt=True)
-    return {"status": "GTT_PLACED", "recorded": recorded, **intent}
+# _place_gtt_entry() removed. ATLAS no longer rests GTT triggers: signals only
+# publish when price is within 0.30% of the zone (engine/zone_entry.py
+# MAX_ENTRY_DIST_PCT), so the entry is a MARKET order taken immediately rather
+# than a trigger waiting for a retrace that mostly never arrived.
+#
+# gtt.place_zone_gtt() is removed with it. gtt.py keeps the read and cancel
+# helpers -- funds.pending_gtt_commitment() must still see any GTT resting at
+# the broker, including ones the operator placed by hand, because they commit
+# cash regardless of origin.
 
 
 def _log_intent(intent: dict, shadow: bool, gtt: bool = False) -> bool:

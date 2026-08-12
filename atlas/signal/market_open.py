@@ -76,10 +76,17 @@ def get_latest_batch_date() -> str:
 def get_signals(batch_date: str) -> list:
     """All signals for the batch date. No score filter."""
     try:
+        # Ranked by DISTANCE TO ENTRY, nearest first -- not by score.
+        #
+        # Score is non-predictive per validation, and with the 0.30% publish
+        # gate every surviving signal is already at its zone; what separates
+        # them is how immediately tradeable they are. Ordering by score.desc
+        # meant the daily cap of 3 could be spent on the three furthest
+        # candidates while a signal sitting exactly on its zone went untaken.
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/signals"
             f"?signal_date=eq.{batch_date}"
-            f"&order=score.desc",          # TODO-STEP4: momentum + RS ranking
+            f"&order=entry_dist_pct.asc.nullslast",
             headers=_headers(), timeout=15)
         if r.status_code == 200:
             return r.json()
@@ -89,7 +96,7 @@ def get_signals(batch_date: str) -> list:
 
 
 def dedupe(signals: list) -> list:
-    """One row per symbol. Input is score-ordered, so first occurrence wins.
+    """One row per symbol. Input is distance-ordered, so the nearest wins.
 
     NOTE: 03b scores long and short passes over the same rows, so a symbol can
     appear in BOTH directions in one batch (BAJFINANCE was LONG 72.0 and

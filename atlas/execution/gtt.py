@@ -1,35 +1,29 @@
 """
-ATLAS GTT Entry -- Good Till Triggered zone orders
-===================================================
-When a LONG signal's zone sits below current price, ATLAS does not skip it and
-does not poll. It places a GTT buy trigger AT the zone edge and lets Zerodha
-watch the price.
+ATLAS GTT -- read and cancel only
+=================================
+ATLAS NO LONGER PLACES GTT TRIGGERS. Signals publish only when price is already
+within 0.30% of the zone (engine/zone_entry.MAX_ENTRY_DIST_PCT), so the entry is
+a MARKET order taken immediately. Nothing rests and nothing waits for a retest.
 
-BROKER CONSTRAINTS (verified against Zerodha docs, Aug 2026)
------------------------------------------------------------
-  - GTT is CNC (delivery) ONLY. Not available for MIS/intraday. So GTT covers
-    LONGS only. A SHORT out of range at 09:37 is skipped -- there is no
-    equivalent mechanism for intraday shorts.
-  - A GTT stays live for ONE YEAR or until triggered. It does NOT expire daily.
-    Operator manages cancellation manually (explicit decision).
-  - Cash must be maintained while GTTs are pending, or Zerodha RMS may cancel
-    them at its discretion.
-  - A triggered GTT places a LIMIT order. If price gaps hard through the zone,
-    the limit does not fill -- which is protective, not a fault.
-  - Once triggered the GTT leaves the queue. If the order does not execute it
-    must be placed again.
-  - Max 500 active GTTs per account. Not a constraint at 3/day.
+Why the resting path went: with the old 8% publish gate, triggers sat 4-8% from
+price and committed cash for days against a fill that mostly never came. On
+2026-08-12 the four resting GTTs were 4.7%, 6.8%, 4.7% and 7.7% away.
 
-KNOWN AND ACCEPTED
-------------------
-A GTT fires whenever price reaches the zone, with no awareness of market
-direction at that moment. A long trigger can fill into a market that has since
-turned bearish. Operator monitors active trades manually (explicit decision).
+What remains is read and cancel:
+  - list_active_gtts()  every active GTT, whoever placed it. The funds check
+                        needs this: a resting BUY commits cash regardless of
+                        origin, including ones the operator placed by hand.
+  - list_atlas_gtts()   those matched to an atlas_trades row by trigger id.
+  - cancel_gtt()        operator cleanup.
 
-LIMIT PRICE
------------
-Trigger sits at the zone edge; the limit is placed GTT_LIMIT_BUFFER above it so
-a normal touch fills. A hard gap below still will not fill.
+BROKER FACTS worth keeping (verified against Zerodha, Aug 2026)
+---------------------------------------------------------------
+  - A GTT stays live for ONE YEAR or until triggered. It does NOT expire daily,
+    so an abandoned trigger keeps committing cash indefinitely.
+  - Kite's get_gtts() response does NOT echo the order `tag` back -- the field
+    is absent, not null. Ownership can only be established via a recorded
+    trigger id. This cost a day of confusion; do not reintroduce tag matching.
+  - Max 500 active GTTs per account.
 """
 
 import logging
@@ -38,74 +32,17 @@ from datetime import datetime, timezone, timedelta
 log = logging.getLogger("ATLAS-GTT")
 IST = timezone(timedelta(hours=5, minutes=30))
 
-GTT_LIMIT_BUFFER = 0.003   # limit 0.3% above trigger, so a touch fills
-GTT_TAG = "ATLAS"
+GTT_TAG = "ATLAS"   # still sent on any manual placement; Kite discards it
 
 
-def place_zone_gtt(symbol: str, qty: int, trigger_price: float,
-                   last_price: float, tag: str = GTT_TAG) -> dict:
-    """Single-trigger BUY GTT at the zone edge, CNC product.
-
-    trigger_price -- the zone edge price must fall to (entry_ref for a long)
-    last_price    -- current LTP, required by the Kite GTT API
-    """
-    from atlas.execution.broker import get_kite
-
-    kite = get_kite()
-    if not kite:
-        return {"success": False, "reason": "Kite not initialized"}
-
-    if trigger_price <= 0 or qty <= 0:
-        return {"success": False, "reason": "invalid trigger price or qty"}
-
-    if trigger_price >= last_price:
-        # Buy-the-dip only. A trigger at or above LTP would fire instantly.
-        return {"success": False,
-                "reason": f"trigger Rs{trigger_price:.1f} not below LTP Rs{last_price:.1f}"}
-
-    limit_price = round(trigger_price * (1 + GTT_LIMIT_BUFFER), 1)
-
-    try:
-        from kiteconnect import KiteConnect
-        resp = kite.place_gtt(
-            trigger_type=kite.GTT_TYPE_SINGLE,
-            tradingsymbol=symbol,
-            exchange=KiteConnect.EXCHANGE_NSE,
-            trigger_values=[round(trigger_price, 1)],
-            last_price=round(last_price, 1),
-            orders=[{
-                "transaction_type": KiteConnect.TRANSACTION_TYPE_BUY,
-                "quantity":         int(qty),
-                "order_type":       KiteConnect.ORDER_TYPE_LIMIT,
-                "product":          KiteConnect.PRODUCT_CNC,
-                "price":            limit_price,
-                "tag":              tag,
-            }],
-        )
-        # kite.place_gtt() returns {"trigger_id": N}, not a bare id. Passing the
-        # dict straight through stored '{"trigger_id": 331456858}' in
-        # atlas_trades.gtt_trigger_id, which never matches str(gtt["id"]) from
-        # get_gtts() -- so the trigger-id lookup that replaced tag matching was
-        # itself broken for the three GTTs placed on 2026-08-12.
-        trigger_id = resp.get("trigger_id") if isinstance(resp, dict) else resp
-        if trigger_id is None:
-            return {"success": False,
-                    "reason": f"place_gtt returned no trigger_id: {resp!r}"}
-        trigger_id = str(trigger_id)
-        log.info(f"GTT placed: BUY {qty} {symbol} trigger Rs{trigger_price:.1f} "
-                 f"limit Rs{limit_price:.1f} | id {trigger_id}")
-        return {
-            "success":       True,
-            "trigger_id":    trigger_id,
-            "symbol":        symbol,
-            "qty":           qty,
-            "trigger_price": round(trigger_price, 1),
-            "limit_price":   limit_price,
-            "product":       "CNC",
-        }
-    except Exception as e:
-        log.error(f"GTT placement failed for {symbol}: {e}")
-        return {"success": False, "reason": str(e)}
+# place_zone_gtt() removed. ATLAS does not place GTT triggers any more --
+# signals publish only when price is already within 0.30% of the zone, so the
+# entry is a MARKET order via broker.place_order(). Leaving an unused
+# order-placing function in the tree is the same hazard as the retired
+# trade_executor: no caller today, one import away from being live again.
+#
+# The read and cancel helpers below stay. Any GTT resting at the broker still
+# commits cash and must be visible to the funds check, whoever placed it.
 
 
 def list_active_gtts() -> list:
@@ -135,8 +72,7 @@ def list_atlas_gtts() -> list:
     (GRASIM, 2026-08-11) was invisible to ATLAS for exactly this reason while
     resting live at the broker.
 
-    place_zone_gtt still SENDS a tag; Kite accepts and discards it. The
-    authoritative link is atlas_trades.gtt_trigger_id.
+    The authoritative link is atlas_trades.gtt_trigger_id.
     """
     import requests
     from atlas.config import SUPABASE_URL, SUPABASE_KEY

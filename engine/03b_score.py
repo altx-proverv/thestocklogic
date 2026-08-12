@@ -460,8 +460,11 @@ def build_playbooks(scored: pd.DataFrame) -> pd.DataFrame:
 
     all_plays = []
     for d, group in qualifying.groupby("date"):
-        longs  = group[group["direction"]=="long"].nlargest(TOP_N_LONG,  "total_score")
-        shorts = group[group["direction"]=="short"].nlargest(TOP_N_SHORT, "total_score")
+        # Nearest to entry first, matching market_open and the website. Score
+        # is non-predictive and, past the 0.30% publish gate, every survivor is
+        # already at its zone -- immediacy is what separates them.
+        longs  = group[group["direction"]=="long"].nsmallest(TOP_N_LONG,  "entry_dist_pct")
+        shorts = group[group["direction"]=="short"].nsmallest(TOP_N_SHORT, "entry_dist_pct")
         plays  = pd.concat([longs, shorts])
         plays["playbook_date"] = d
         plays["rank"] = range(1, len(plays)+1)

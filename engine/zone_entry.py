@@ -57,9 +57,24 @@ MIN_STOP_PCT   = 1.5     # percent
 MAX_STOP_PCT   = 7.0     # percent
 STOP_BUFFER    = 0.002   # push stop just outside the zone edge
 
-# Reject a zone price has already run too far from -- it will not be revisited
-# intraday, so the signal is untradeable even though the zone is technically live.
-MAX_ENTRY_DIST_PCT = 8.0
+# THE publishing gate. A signal is only worth publishing if price is effectively
+# AT the zone right now.
+#
+# This was 8.0%, and the consequence was that almost everything published was
+# untradeable: the four GTTs resting on 2026-08-12 sat 4.7%, 6.8%, 4.7% and 7.7%
+# from LTP, and 136 of 154 published signals were unusable. An operator cannot
+# enter at a price the stock is nowhere near, so a "signal" 6% away is not a
+# signal, it is a watchlist entry wearing a signal's clothes.
+#
+# At 0.30% price is at the zone, so the trade is a MARKET order taken
+# immediately. There is no resting-order path any more -- see
+# atlas_entry.enter_trade().
+#
+# This is expected to publish very few signals per day. Measured on 2026-08-11:
+# of 475 stocks carrying an active zone, ONE was inside it and 59 were within 1%.
+# Few and tradeable is the point. If the count comes out near zero that is
+# information about the market, not a reason to widen this number.
+MAX_ENTRY_DIST_PCT = 0.30
 
 
 def _floor_to_multiple(n: float, m: int = QTY_MULTIPLE) -> int:

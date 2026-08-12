@@ -351,7 +351,7 @@ function todayIST(){
 }
 function fmtDate(ds){return new Date(ds).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});}
 function sj(s){return JSON.stringify(s).replace(/"/g,'&quot;');}
-async function fetchEOD(){var s=new Date();s.setDate(s.getDate()-30);var r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,score.desc&select=*',{headers:HDR});return r.json();}
+async function fetchEOD(){var s=new Date();s.setDate(s.getDate()-30);var r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*',{headers:HDR});return r.json();}
 async function fetchSectors(){
   var r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:HDR});
   var data=await r.json();
