@@ -142,8 +142,8 @@ td.sym{font-weight:700;color:var(--ink)}
 
   <div class="summary" id="summary"></div>
 
-  <div class="shead"><h2>Resting GTT Triggers</h2><div class="rule"></div><span class="cnt" id="cntGtt">0</span></div>
-  <div class="tblwrap" id="tblGtt"></div>
+  <div class="shead"><h2>Cancelled &amp; Not Filled</h2><div class="rule"></div><span class="cnt" id="cntOther">0</span></div>
+  <div class="tblwrap" id="tblOther"></div>
 
   <div class="shead"><h2>Open Positions</h2><div class="rule"></div><span class="cnt" id="cntOpen">0</span></div>
   <div class="tblwrap" id="tblOpen"></div>
@@ -283,20 +283,29 @@ function dirBadge(d){
 }
 
 function render(){
-  var gtt    = _trades.filter(function(t){return st(t)==='GTT_PENDING';});
   var open   = _trades.filter(function(t){return st(t)==='OPEN';});
   var closed = _trades.filter(function(t){return st(t)==='CLOSED';});
   var shadow = _trades.filter(function(t){return st(t)==='SHADOW';});
+  /* Everything else: CANCELLED, any stray GTT_PENDING, and any status this page
+     does not know about. The page used to render exactly four statuses and drop
+     the rest, so when the first four real orders were cancelled they vanished
+     from the record entirely. A catch-all means a new status shows up as a row
+     with its name in it rather than disappearing. */
+  var KNOWN  = ['OPEN','CLOSED','SHADOW'];
+  var other  = _trades.filter(function(t){return KNOWN.indexOf(st(t))<0;});
+  /* A resting trigger still commits cash even though ATLAS no longer places
+     them; a cancelled one does not. */
+  var resting = _trades.filter(function(t){return st(t)==='GTT_PENDING';});
 
   /* Committed and at-risk are derived from the trades themselves. There is no
      allocated pool to show a percentage against, and no "available" figure --
      that lives at the broker and is read live at decision time by
      atlas/risk/funds.py, not stored anywhere this page can see. */
-  var committed = gtt.concat(open).reduce(function(s,t){return s+notionalOf(t);},0);
-  var atRisk    = gtt.concat(open).reduce(function(s,t){return s+riskOf(t);},0);
+  var committed = open.concat(resting).reduce(function(s,t){return s+notionalOf(t);},0);
+  var atRisk    = open.concat(resting).reduce(function(s,t){return s+riskOf(t);},0);
   document.getElementById('capDep').textContent=rup(committed);
   document.getElementById('capRisk').textContent=rup(atRisk);
-  document.getElementById('capTrades').textContent=gtt.length+open.length;
+  document.getElementById('capTrades').textContent=open.length+resting.length;
 
   var realTotal=closed.reduce(function(s,t){var v=realised(t); return s+(v||0);},0);
   var unrealTotal=0, haveUnreal=false;
@@ -310,7 +319,7 @@ function render(){
   txt.textContent=live?'LIVE':'SHADOW';
 
   var stats=[
-    {v:gtt.length,l:'Resting Triggers',c:'amb'},
+    {v:other.length,l:'Cancelled / Unfilled',c:'amb'},
     {v:open.length,l:'Open Positions',c:'acc',s:'no limit'},
     {v:haveUnreal?money(unrealTotal):'—',l:'Unrealised P&L',c:unrealTotal>=0?'pos':'neg',s:haveUnreal?'':'no fresh prices'},
     {v:money(realTotal),l:'Realised P&L',c:realTotal>=0?'pos':'neg',s:settled+' settled'},
@@ -332,23 +341,32 @@ function render(){
     document.getElementById('staleWhen').textContent=_priceAt?_priceAt.toLocaleString('en-IN'):'never';
   } else sb.classList.remove('show');
 
-  document.getElementById('cntGtt').textContent=gtt.length;
+  document.getElementById('cntOther').textContent=other.length;
   document.getElementById('cntOpen').textContent=open.length;
   document.getElementById('cntClosed').textContent=closed.length;
   document.getElementById('cntShadow').textContent=shadow.length;
 
-  document.getElementById('tblGtt').innerHTML=gtt.length?
-    tbl(['Symbol','Dir','Trigger','Stop','Qty','Notional','Risk','Zone','Setup','Placed'],
-      gtt.map(function(t){return [
-        '<td class="sym">'+esc(t.symbol)+'</td>', '<td>'+dirBadge(t.direction)+'</td>',
+  document.getElementById('tblOther').innerHTML=other.length?
+    tbl(['Symbol','Dir','Status','Trigger/Entry','Stop','Qty','Notional','Reason','Placed','Ended'],
+      other.map(function(t){
+        var status=st(t);
+        var cls=status==='CANCELLED'?'bg-closed':'bg-pend';
+        /* exit_reason is terse (MANUAL); the detail lives in notes. Show the
+           reason, and hang the full note off the title attribute so the record
+           is recoverable without opening the database. */
+        var note=(t.notes||'').replace(/\s+/g,' ').trim();
+        return [
+        '<td class="sym">'+esc(t.symbol)+'</td>',
+        '<td>'+dirBadge(t.direction)+'</td>',
+        '<td><span class="badge '+cls+'">'+esc(status||'—')+'</span></td>',
         '<td class="amb">'+rup(t.trigger_price||t.entry_price)+'</td>',
         '<td class="neg">'+rup(t.stop_price)+'</td>',
-        '<td>'+esc(t.qty)+'</td>', '<td>'+rup(notionalOf(t))+'</td>',
-        '<td>'+rup(riskOf(t))+'</td>',
-        '<td style="font-size:11px">'+esc(t.zone_source||'—')+'</td>',
-        '<td style="font-size:11px">'+esc(t.setup_name||'—')+'</td>',
-        '<td>'+fmtDate(t.entry_date)+'</td>'].join('');})) :
-    '<div class="empty">No resting triggers. ATLAS places a GTT when a zone sits below the current price.</div>';
+        '<td>'+esc(t.qty)+'</td>',
+        '<td>'+rup(notionalOf(t))+'</td>',
+        '<td style="font-size:11px" title="'+esc(note)+'">'+esc(t.exit_reason||'—')+'</td>',
+        '<td>'+fmtDate(t.entry_date)+'</td>',
+        '<td>'+fmtDate(t.exit_date)+'</td>'].join('');})) :
+    '<div class="empty">Nothing cancelled or unfilled.</div>';
 
   document.getElementById('tblOpen').innerHTML=open.length?
     tbl(['Symbol','Dir','Entry','Stop','Qty','Notional','Risk','Unrealised','Setup','Date',''],
