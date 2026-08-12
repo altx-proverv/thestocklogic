@@ -44,13 +44,21 @@ def _headers():
 
 
 def get_live_prices() -> dict:
-    """Fetch live prices from Supabase live_prices table."""
+    """Fetch live prices from Supabase live_prices table.
+
+    Selected a `volume` column that live_prices does not have (its columns are
+    symbol, ltp, change_pct, updated_at), so PostgREST answered 400 and the
+    status check returned {} -- every time, since this was written. BTST has
+    therefore never had a live price: score_btst fell back to the last close on
+    every candidate. Found by tools/check_schema.py on its first correct run.
+    """
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/live_prices?select=symbol,ltp,volume,updated_at",
-        headers=_headers()
+        f"{SUPABASE_URL}/rest/v1/live_prices?select=symbol,ltp,change_pct,updated_at",
+        headers=_headers(), timeout=15
     )
     if r.status_code == 200:
         return {row["symbol"]: row for row in r.json()}
+    log.error(f"live_prices fetch failed: HTTP {r.status_code} {r.text[:150]}")
     return {}
 
 

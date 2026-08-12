@@ -1,0 +1,221 @@
+"""
+Schema drift check — do the queries in this repo match the live database?
+========================================================================
+Run before committing anything that touches a table, a column, a status value,
+or a dashboard query:
+
+    SUPABASE_SERVICE_KEY=... python3 tools/check_schema.py
+
+WHY THIS EXISTS
+---------------
+The frontend and the writers have drifted from the schema four times in two days,
+each time silently:
+
+  atlas_trades.gtt_trigger_id   column never created. _log_intent POSTed it,
+                                PostgREST returned 400, requests.post does not
+                                raise on 4xx, the rejection was discarded. A real
+                                GTT rested at the broker with no database row.
+
+  live_signals.delivery_pct     and seven more. Every btst_engine push failed
+                                with 400 PGRST204. BTST had never written a row.
+
+  atlas.html statuses           the page rendered four hardcoded statuses and
+                                dropped the rest, so CANCELLED trades vanished
+                                from the record.
+
+  tsl-dashboard.html            not a schema break, but the same shape: the
+                                query succeeded, returned rows that could not
+                                join, and the page rendered nothing.
+
+Every one was a query naming something that did not exist (or could not match),
+returning a response nobody checked. This makes that visible before it ships.
+
+WHAT IT CHECKS
+--------------
+  1. Every /rest/v1/<table> referenced in .html and .py exists.
+  2. Every column named in select= / order= / a filter exists on that table.
+  3. Every literal dict POSTed or PATCHed to a table has only real columns --
+     this is the check that would have caught gtt_trigger_id.
+
+WHAT IT CANNOT CHECK
+--------------------
+Dynamically built column lists, and whether a query can actually JOIN. The
+tsl-dashboard failure was a live query returning unjoinable rows; no static
+check catches that. Response-status checks in the callers cover the rest.
+"""
+
+import ast
+import os
+import re
+import sys
+from pathlib import Path
+
+import requests
+
+ROOT = Path(__file__).parent.parent
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://eibdlcanpudjgmkjxrga.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+# Not columns: PostgREST control parameters.
+CONTROL = {"select", "order", "limit", "offset", "on_conflict", "columns", "and", "or"}
+SKIP_DIRS = {"venv", ".git", "node_modules", "engine/legacy"}
+
+
+def live_schema() -> dict:
+    """{table: {columns}} from PostgREST's OpenAPI document."""
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/",
+                     headers={"apikey": SUPABASE_KEY,
+                              "Authorization": f"Bearer {SUPABASE_KEY}"}, timeout=30)
+    r.raise_for_status()
+    defs = r.json().get("definitions", {})
+    return {t: set(d.get("properties", {})) for t, d in defs.items()}
+
+
+def _files():
+    for p in sorted(ROOT.rglob("*")):
+        if p.suffix not in (".py", ".html"):
+            continue
+        rel = str(p.relative_to(ROOT))
+        if any(rel.startswith(d) or f"/{d}/" in f"/{rel}" for d in SKIP_DIRS):
+            continue
+        yield p, rel
+
+
+def _cols_from_query(qs: str):
+    """Column names referenced in a PostgREST query string."""
+    out = set()
+    for part in qs.split("&"):
+        if "=" not in part:
+            continue
+        key, val = part.split("=", 1)
+        key = key.strip()
+        if key == "select":
+            for c in val.split(","):
+                c = c.split("(")[0].split(":")[-1].strip()
+                if c and c != "*" and "{" not in c and re.fullmatch(r"[a-z0-9_]+", c):
+                    out.add(c)
+        elif key == "order":
+            for c in val.split(","):
+                c = c.split(".")[0].strip()
+                if c and "{" not in c and re.fullmatch(r"[a-z0-9_]+", c):
+                    out.add(c)
+        elif key not in CONTROL and "{" not in key and re.fullmatch(r"[a-z0-9_]+", key):
+            out.add(key)
+    return out
+
+
+def scan_urls(text: str):
+    """[(table, {columns})] for every /rest/v1/<table>?<query> in the text."""
+    found = []
+    # Stop only at whitespace or a quote. The character class must NOT exclude
+    # commas: PostgREST uses them inside select=, order= and in.(), so excluding
+    # them truncated every query at its first column and this checker silently
+    # validated only that one -- false confidence, which is worse than no check.
+    for m in re.finditer(r"""/rest/v1/([a-z0-9_]+)(\?[^\s'"`]*)?""", text):
+        table = m.group(1)
+        qs = (m.group(2) or "").lstrip("?")
+        found.append((table, _cols_from_query(qs)))
+    return found
+
+
+def scan_payloads(path: Path):
+    """[(table, {keys}, lineno)] for literal dicts sent to a /rest/v1/<table>.
+
+    Handles both `json={...}` inline and `json=rec` where rec is a dict literal
+    assigned in the same function -- which is the shape _log_intent used.
+    """
+    try:
+        tree = ast.parse(path.read_text())
+    except SyntaxError:
+        return []
+
+    def url_table(node):
+        """Table name from a literal or f-string URL argument."""
+        parts = []
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            parts = [node.value]
+        elif isinstance(node, ast.JoinedStr):
+            parts = [v.value for v in node.values
+                     if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+        m = re.search(r"/rest/v1/([a-z0-9_]+)", "".join(parts))
+        return m.group(1) if m else None
+
+    out = []
+    for fn in [n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        # dict literals assigned in this function, by variable name
+        local = {}
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Dict):
+                for t in n.targets:
+                    if isinstance(t, ast.Name):
+                        local[t.id] = n.value
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+                continue
+            if n.func.attr not in ("post", "patch", "put"):
+                continue
+            table = next((url_table(a) for a in n.args if url_table(a)), None)
+            if not table:
+                continue
+            for kw in n.keywords:
+                if kw.arg != "json":
+                    continue
+                d = kw.value
+                if isinstance(d, ast.Name):
+                    d = local.get(d.id)
+                if not isinstance(d, ast.Dict):
+                    continue
+                keys = {k.value for k in d.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+                if keys:
+                    out.append((table, keys, n.lineno))
+    return out
+
+
+def main() -> int:
+    if not SUPABASE_KEY:
+        print("SUPABASE_SERVICE_KEY not set — cannot read the live schema.")
+        return 2
+
+    schema = live_schema()
+    print(f"live schema: {len(schema)} tables\n")
+
+    problems = []
+    checked_urls = checked_payloads = 0
+
+    for path, rel in _files():
+        text = path.read_text()
+
+        for table, cols in scan_urls(text):
+            checked_urls += 1
+            if table not in schema:
+                problems.append(f"{rel}: table '{table}' does not exist")
+                continue
+            for c in sorted(cols - schema[table]):
+                problems.append(f"{rel}: {table}.{c} does not exist")
+
+        if path.suffix == ".py":
+            for table, keys, line in scan_payloads(path):
+                checked_payloads += 1
+                if table not in schema:
+                    problems.append(f"{rel}:{line}: writes to missing table '{table}'")
+                    continue
+                for c in sorted(keys - schema[table]):
+                    problems.append(f"{rel}:{line}: writes {table}.{c} — column does not exist")
+
+    print(f"checked {checked_urls} query URLs and {checked_payloads} write payloads")
+    if not problems:
+        print("\nNo schema drift found.")
+        return 0
+
+    print(f"\n{len(problems)} PROBLEM(S):\n")
+    for p in problems:
+        print(f"  {p}")
+    print("\nEach of these returns 400 at runtime. If the caller does not check the"
+          "\nresponse status, it fails silently.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
