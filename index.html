@@ -36,7 +36,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-filter:blur(16px)}
 /* Wordmark only, no reflection -- the mirrored mark is unreadable at nav size. */
 .logo{display:flex;align-items:center;text-decoration:none}
-.logo img{height:22px;width:auto;display:block}
+.logo img{height:26px;width:auto;display:block}
 .nav-r{display:flex;align-items:center;gap:10px}
 .btn-signin{font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(59,169,238,0.45);padding:5px 14px;cursor:pointer;font-family:var(--font);transition:all .15s}
 .btn-signin:hover{background:rgba(59,169,238,0.12)}
@@ -133,7 +133,7 @@ footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-c
 <body>
 
 <nav>
-  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo-mark.svg" alt="The Stock Logic"></a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"></a>
   <div class="nav-r">
     <button class="btn-signin" onclick="document.getElementById('signinModal').classList.add('open')">SIGN IN</button>
     <a href="/waitlist" class="btn-waitlist">JOIN WAITLIST</a>
@@ -141,7 +141,7 @@ footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-c
 </nav>
 
 <section class="hero">
-  <img class="hero-mark" src="/logo-full.png" alt="The Stock Logic">
+  <img class="hero-mark" src="/logo.svg" alt="The Stock Logic">
   <div class="hero-label">PRIVATE BETA</div>
   <h1>TRADE <em>Intelligence</em> DAILY</h1>
   <p class="hero-sub">Institutional-grade NSE signals built on Smart Money Concepts. Entry, stop-loss and targets defined. You decide — you trade.</p>

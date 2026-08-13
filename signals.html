@@ -36,7 +36,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px}
 /* Wordmark only, no reflection -- unreadable at nav size. */
 .logo{display:flex;align-items:center;text-decoration:none}
-.logo img{height:22px;width:auto;display:block}
+.logo img{height:26px;width:auto;display:block}
 .nav-right{display:flex;align-items:center;gap:20px;font-size:10px;letter-spacing:2px;color:var(--muted)}
 .live-dot{display:flex;align-items:center;gap:6px;color:var(--sky);font-size:10px}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--sky);box-shadow:0 0 8px var(--sky);animation:blink 2s infinite}
@@ -194,7 +194,7 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .disc-bar{border-top:1px solid rgba(245,132,69,.18);background:rgba(245,132,69,.05);padding:8px 28px;font-size:9px;color:rgba(245,132,69,.75);letter-spacing:.5px;line-height:1.7;text-align:center}
 footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-content:space-between;align-items:center}
 .footer-logo{display:flex;align-items:center}
-.footer-logo img{height:18px;width:auto;display:block;opacity:.85}
+.footer-logo img{height:22px;width:auto;display:block;opacity:.85}
 .footer-meta{font-size:10px;color:var(--muted2);text-align:right;line-height:1.8}
 @media(max-width:700px){
   nav{padding:0 14px;height:48px}
@@ -246,7 +246,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </head>
 <body>
 <nav>
-  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo-mark.svg" alt="The Stock Logic"></a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"></a>
   <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
     <a href="/dashboard" style="font-size:10px;letter-spacing:1px;color:var(--white);text-decoration:none;padding:4px 8px;border:1px solid var(--line);background:var(--s2)">EQUITY</a>
     <span id="atlasNav" style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">ATLAS 🔒</span>
@@ -325,7 +325,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </div>
 <div class="disc-bar">&#9888; EDUCATIONAL CONTENT ONLY &middot; ALGO-GENERATED &middot; NOT SEBI-REGISTERED &middot; NOT A BUY/SELL RECOMMENDATION &middot; CONSULT YOUR SEBI RA</div>
 <footer>
-  <div class="footer-logo"><img src="/logo-mark.svg" alt="The Stock Logic"></div>
+  <div class="footer-logo"><img src="/logo.svg" alt="The Stock Logic"></div>
   <div class="footer-meta">thestocklogic.com &middot; v3.0<br>Signals update daily after 6:35 PM IST</div>
 </footer>
 <div class="modal-bg" id="modal"><div class="modal" id="modalInner"></div></div>
