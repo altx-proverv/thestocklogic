@@ -27,6 +27,8 @@
   /* Wordmark only, no reflection -- unreadable at nav size. */
   nav .logo{display:flex;align-items:center;text-decoration:none}
   nav .logo img{height:26px;width:auto;display:block}
+nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255,255,255,.18);font-family:var(--mono);font-size:10px;letter-spacing:3px;color:var(--text-2);white-space:nowrap;line-height:1}
+@media(max-width:560px){nav .logo-name{display:none}}
   .nav-tabs{display:flex;align-items:center;gap:4px;margin-left:20px}
   .nav-tabs a,.nav-tabs span{font-size:10px;letter-spacing:1px;text-decoration:none;padding:4px 8px;border:1px solid var(--line)}
   .nav-tabs a{color:var(--white);background:var(--s2)}
@@ -112,7 +114,7 @@
 <body>
 
 <nav>
-  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"></a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"><span class="logo-name">THE STOCK LOGIC</span></a>
   <div class="nav-tabs">
     <a href="/dashboard">EQUITY</a>
     <a href="/tsl-dashboard" class="active">TSL DASHBOARD</a>

@@ -33,10 +33,12 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;line-height:1.6;min-height:100vh}
 body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(59,169,238,0.007) 3px,rgba(59,169,238,0.007) 4px);pointer-events:none;z-index:9999}
-nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px}
+nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px}
 /* Wordmark only, no reflection -- unreadable at nav size. */
 .logo{display:flex;align-items:center;text-decoration:none}
 .logo img{height:26px;width:auto;display:block}
+.logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255,255,255,.18);font-family:var(--font);font-size:10px;letter-spacing:3px;color:var(--text-2);white-space:nowrap;line-height:1}
+@media(max-width:560px){.logo-name{display:none}}
 .nav-right{display:flex;align-items:center;gap:20px;font-size:10px;letter-spacing:2px;color:var(--muted)}
 .live-dot{display:flex;align-items:center;gap:6px;color:var(--sky);font-size:10px}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--sky);box-shadow:0 0 8px var(--sky);animation:blink 2s infinite}
@@ -246,7 +248,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </head>
 <body>
 <nav>
-  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"></a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"><span class="logo-name">THE STOCK LOGIC</span></a>
   <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
     <a href="/dashboard" style="font-size:10px;letter-spacing:1px;color:var(--white);text-decoration:none;padding:4px 8px;border:1px solid var(--line);background:var(--s2)">EQUITY</a>
     <span id="atlasNav" style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">ATLAS 🔒</span>

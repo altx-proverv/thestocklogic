@@ -35,6 +35,8 @@ a{color:var(--accent);text-decoration:none}
 .statusbar{position:sticky;top:0;z-index:50;background:var(--navy);border-bottom:1px solid var(--line);padding:13px 0}
 .statusbar .wrap{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:11px}
+.brand .logo-name{padding-left:11px;border-left:1px solid rgba(255,255,255,.18);font-family:var(--mono);font-size:10px;letter-spacing:3px;color:var(--text-2);white-space:nowrap;line-height:1}
+@media(max-width:760px){.brand .logo-name{display:none}}
 .brand img{height:28px;width:auto;display:block}
 .brand .logo{font-family:var(--disp);font-size:29px;letter-spacing:2px;line-height:1}
 .brand .logo .a{color:var(--yellow)}
@@ -118,6 +120,7 @@ td.sym{font-weight:700;color:var(--ink)}
   <div class="wrap">
     <div class="brand">
       <a href="/" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"></a>
+      <span class="logo-name">THE STOCK LOGIC</span>
       <div class="logo"><span class="a">A</span>TLAS</div>
       <div class="tag">Trade Record</div>
     </div>
