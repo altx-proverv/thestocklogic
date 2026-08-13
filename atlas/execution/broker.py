@@ -24,6 +24,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 HTTP_TIMEOUT = 10
 
+# Slippage cap on MARKET orders, as a percentage. Kite requires this on every
+# MARKET order placed through the API and rejects the order outright without it.
+#
+# 3% is Kite's own web default and is DELIBERATELY not tied to
+# MAX_ENTRY_DIST_PCT (0.30%). Those measure different things: the entry gate is
+# a publication distance off the previous close, while this is tolerance for how
+# far the fill may slip from LTP at the moment of execution. A 0.30% cap here
+# would reject the fill on any gap open -- exactly the mornings worth trading.
+MARKET_PROTECTION_PCT = 3
+
 # Token + client cache.
 #
 # get_kite() used to do a fresh Supabase round-trip AND build a new KiteConnect
@@ -236,6 +246,15 @@ def place_order(
         }
         if order_type == "LIMIT" and price:
             order_params["price"] = price
+        elif order_type == "MARKET":
+            # Kite REJECTS every API-placed MARKET order that omits this:
+            #   "Market orders without market protection are not allowed via
+            #    API. Please set market protection or use a Limit order."
+            # NMDC and RAMCOCEM both failed this way at 09:37 on 2026-08-13 --
+            # the first orders to reach the broker after the GTT path was
+            # removed. Not symbol-specific and not a token problem: the session
+            # authenticated, and Kite refused the order on content.
+            order_params["market_protection"] = MARKET_PROTECTION_PCT
 
         order_id = kite.place_order(
             variety=KiteConnect.VARIETY_REGULAR,

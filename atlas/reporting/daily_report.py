@@ -41,6 +41,19 @@ MAX_PRICE_AGE_HOURS = 8
 
 HTTP_TIMEOUT = 15
 
+# Individually-detailed skips. The rest are carried by the per-status counts.
+SKIP_DETAIL = 10
+
+# Telegram rejects any message over 4096 characters outright -- the send fails,
+# nothing is delivered, and the only trace is a 400 in the log. That is exactly
+# how the 2026-08-12 report was lost: 143 skip lines, 7,959 characters, "Bad
+# Request: message is too long". Bounding the skip list fixes the cause; this
+# is the backstop, so a report can be degraded but never silently dropped.
+TELEGRAM_LIMIT = 4096
+
+FOOTER = ("REMINDER: ATLAS places no stop-losses. Set them manually.\n"
+          "Trailing levels above are recommendations only — nothing is placed.")
+
 
 def _headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -193,14 +206,75 @@ def get_agent_state() -> dict:
 
 # ── SECTIONS ──────────────────────────────────────────────────────
 
+def _pub_line(d: dict) -> str:
+    """The PUBLICATION distance behind a decision, if it was recorded.
+
+    Deliberately shown next to the morning check, because the two answer
+    different questions and the difference looks like a bug when only one is
+    visible. entry_dist_pct is how far price sat from the zone at the close
+    03b scored -- that is what MAX_ENTRY_DIST_PCT gates. The reason string
+    beside it is the morning check: is LTP inside the zone RIGHT NOW. A signal
+    that published at 0.28% off Tuesday's close can open 2% away on Wednesday,
+    and skipping it is correct behaviour, not a gate that failed to apply.
+    """
+    dist = d.get("entry_dist_pct")
+    if dist is None:
+        return ""
+    try:
+        dist = float(dist)
+    except (TypeError, ValueError):
+        return ""
+    when = ""
+    if d.get("signal_date"):
+        try:
+            when = date.fromisoformat(str(d["signal_date"])).strftime(" %d %b")
+        except ValueError:
+            pass
+    return f"published {dist:.2f}% from the{when or ''} close"
+
+
+def _sample_skips(skipped: list, n: int = None) -> list:
+    """Up to n skips, spread ACROSS statuses rather than taken off the top.
+
+    Taking the first n gave ten consecutive SKIPPED_REGIME rows carrying one
+    identical reason string -- ten lines that say what the status count already
+    said. Round-robin means a 123/20 split shows both kinds, and the rarest
+    status (usually the interesting one) is never buried under the commonest.
+    Order within each status is preserved, so it is still a sample of what ran
+    first, not a reshuffle.
+    """
+    n = SKIP_DETAIL if n is None else n
+    groups = {}
+    for d in skipped:
+        groups.setdefault(d["status"], []).append(d)
+    out, buckets = [], list(groups.values())
+    i = 0
+    while len(out) < n and any(buckets):
+        b = buckets[i % len(buckets)]
+        if b:
+            out.append(b.pop(0))
+        if not b:
+            buckets.remove(b)
+            i -= 1
+        i += 1
+    return out
+
+
 def _fmt_today(decisions: list) -> str:
     entered = [d for d in decisions if d["status"] in ("ENTERED", "SHADOW_INTENT")]
     gtts    = [d for d in decisions if d["status"] in ("GTT_PLACED", "SHADOW_GTT")]
-    skipped = [d for d in decisions if d not in entered and d not in gtts]
+    failed  = [d for d in decisions if d["status"] == "ORDER_FAILED"]
+    skipped = [d for d in decisions
+               if d not in entered and d not in gtts and d not in failed]
 
-    out = ["TODAY",
-           f"Entered: {len(entered)} · GTT placed: {len(gtts)} · Skipped: {len(skipped)}",
-           ""]
+    counts = [f"Entered: {len(entered)}"]
+    if gtts:
+        counts.append(f"GTT placed: {len(gtts)}")
+    if failed:
+        counts.append(f"ORDER FAILED: {len(failed)}")
+    counts.append(f"Skipped: {len(skipped)}")
+
+    out = ["TODAY", " · ".join(counts), ""]
     if not decisions:
         out.append("  no signals evaluated — market_open did not run, or the")
         out.append("  batch was empty")
@@ -215,12 +289,43 @@ def _fmt_today(decisions: list) -> str:
             pct = abs(float(d["entry_price"]) - float(stop)) / float(d["entry_price"]) * 100
             out.append(f"  {' ' * 11} stop Rs{_inr(stop, 1)} ({pct:.2f}%) · "
                        f"{qty or '—'} qty · Rs{_inr(risk)} risk")
+        pub = _pub_line(d)
+        if pub:
+            out.append(f"  {' ' * 11} {pub}")
         out.append("")
 
-    for d in skipped:
-        reason = (d.get("reason") or d["status"]).strip()
-        out.append(f"  {_pad(d['symbol'], 11)} skipped — {_clip(reason)}")
-    return "\n".join(out)
+    # An order that reached the broker and was refused is never summarised away.
+    # It means every gate passed and execution still did not happen, which is
+    # the one outcome that needs the operator's eyes tonight.
+    if failed:
+        out.append("  ORDERS REFUSED BY THE BROKER")
+        for d in failed:
+            out.append(f"  {_pad(d['symbol'], 11)} {_clip(d.get('reason') or '', 72)}")
+            pub = _pub_line(d)
+            if pub:
+                out.append(f"  {' ' * 11} {pub}")
+        out.append("")
+
+    if skipped:
+        # Summarise by status, then detail a SAMPLE. One line per skip is what
+        # blew the Telegram limit on 2026-08-12: 143 skips built a 7,959-char
+        # message against a 4,096 ceiling and the whole report was lost. The
+        # counts carry the information; the detail lines are illustration.
+        from collections import Counter
+        by_status = Counter(d["status"] for d in skipped)
+        for status, n in by_status.most_common():
+            out.append(f"  {_pad(status, 18)} {n}")
+        out.append("")
+        for d in _sample_skips(skipped):
+            reason = (d.get("reason") or d["status"]).strip()
+            out.append(f"  {_pad(d['symbol'], 11)} skipped — {_clip(reason)}")
+            pub = _pub_line(d)
+            if pub:
+                out.append(f"  {' ' * 11} {pub}")
+        if len(skipped) > SKIP_DETAIL:
+            out.append(f"  … and {len(skipped) - SKIP_DETAIL} more "
+                       f"(full detail in atlas_entry_log)")
+    return "\n".join(out).rstrip()
 
 
 def _fmt_positions(positions: list, prices: dict, stale: bool, as_of: str) -> str:
@@ -326,19 +431,46 @@ def build_report() -> str:
         _fmt_positions(positions, prices, stale, as_of),
         "",
         _fmt_gtts(positions),
-        "",
-        "REMINDER: ATLAS places no stop-losses. Set them manually.",
-        "Trailing levels above are recommendations only — nothing is placed.",
     ]
     return "\n".join(parts)
 
 
+def _wrap(body: str) -> str:
+    return f"<pre>{_esc(body)}</pre>"
+
+
+def _fit(body: str, footer: str, limit: int = TELEGRAM_LIMIT) -> str:
+    """Trim `body` until body+footer fits Telegram's limit. Footer is kept.
+
+    Measured on the ESCAPED, WRAPPED payload -- what actually gets sent. A raw
+    length check would pass and the send would still 400, because _esc expands
+    every & into &amp;. M&M is a real NSE symbol, so that is not hypothetical.
+
+    Truncation is announced in the message. A report that quietly drops its tail
+    is the same failure as one that never arrives: the operator cannot tell.
+    """
+    full = f"{body}\n\n{footer}"
+    if len(_wrap(full)) <= limit:
+        return full
+
+    note = "  … report truncated to fit Telegram's 4096-character limit"
+    lines = body.split("\n")
+    while lines:
+        candidate = "\n".join(lines) + f"\n{note}\n\n{footer}"
+        if len(_wrap(candidate)) <= limit:
+            log.warning(f"report truncated: {len(lines)} of "
+                        f"{len(body.splitlines())} body lines kept")
+            return candidate
+        lines.pop()
+    return f"{note}\n\n{footer}"
+
+
 def generate_and_send() -> bool:
-    body = build_report()
+    body = _fit(build_report(), FOOTER)
     log.info("\n" + body)
-    ok = send(f"<pre>{_esc(body)}</pre>")
+    ok = send(_wrap(body))
     if ok:
-        log.info("Daily report sent")
+        log.info(f"Daily report sent ({len(_wrap(body))} chars)")
     else:
         log.error("Failed to send daily report")
     return ok

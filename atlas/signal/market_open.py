@@ -137,6 +137,15 @@ def log_decision(sig: dict, result: dict):
         "run_date":    datetime.now(IST).date().isoformat(),
         "symbol":      sig.get("symbol"),
         "direction":   (sig.get("direction") or "").upper(),
+        # BOTH distance measurements, so a skip can be judged after the fact.
+        # entry_dist_pct is the PUBLICATION distance -- how far price sat from
+        # the zone at the close 03b scored, which is what MAX_ENTRY_DIST_PCT
+        # gates. The morning check below is a different question entirely: is
+        # LTP inside the zone right now. A signal can publish at 0.28% off
+        # Tuesday's close and open 2% away on Wednesday, and skipping it is
+        # correct. Without both numbers logged, that reads as a broken gate.
+        "signal_date":    sig.get("signal_date"),
+        "entry_dist_pct": sig.get("entry_dist_pct"),
         "status":      result.get("status", "?"),
         "reason":      (result.get("reason") or "")[:500],
         "qty":         result.get("qty"),
