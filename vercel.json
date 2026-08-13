@@ -23,10 +23,6 @@
     {
       "source": "/atlas-live",
       "destination": "/atlas.html"
-    },
-    {
-      "source": "/",
-      "destination": "/landing.html"
     }
   ]
 }
