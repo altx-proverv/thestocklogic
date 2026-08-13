@@ -4,15 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Stock Logic — Join Waitlist</title>
+<meta name="theme-color" content="#1B3A6B">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--line:rgba(255,255,255,0.06);--sky:#4db8ff;--sky2:rgba(77,184,255,0.1);--green:#00d68f;--green2:rgba(0,214,143,0.08);--red:#ff4d6d;--amber:#ffb347;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.15);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
+:root{
+  --navy-deep:#0F1F38;--navy:#1B3A6B;--navy-panel:#16294A;
+  --sky:#3BA9EE;--yellow:#F5D33D;--orange:#F58445;
+  --white:#FFFFFF;--text-2:rgba(255,255,255,.6);--text-3:rgba(255,255,255,.45);
+  /* MARKET DIRECTION ONLY -- never chrome, buttons, status or nav */
+  --up:#00d68f;--down:#ff4d6d;
+  --bg:var(--navy-deep);--s1:var(--navy-panel);--s2:#12233F;
+  --line:rgba(255,255,255,0.10);--sky2:rgba(59,169,238,0.12);
+  --muted:var(--text-2);--muted2:var(--text-3);--amber:var(--orange);
+  --green:var(--up);--green2:rgba(0,214,143,0.08);--red:var(--down);
+  --font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;min-height:100vh;display:flex;flex-direction:column}
-body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.007) 3px,rgba(77,184,255,0.007) 4px);pointer-events:none;z-index:9999}
-nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:rgba(6,8,10,0.92);backdrop-filter:blur(16px);position:sticky;top:0;z-index:100}
-.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;text-decoration:none}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(59,169,238,0.007) 3px,rgba(59,169,238,0.007) 4px);pointer-events:none;z-index:9999}
+nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);background:rgba(27,58,107,0.92);backdrop-filter:blur(16px);position:sticky;top:0;z-index:100}
+/* Wordmark only, no reflection -- unreadable at nav size. */
+.logo{display:flex;align-items:center;text-decoration:none}
+.logo img{height:19px;width:auto;display:block}
 .nav-link{font-size:10px;letter-spacing:2px;color:var(--muted);text-decoration:none}
 .nav-link:hover{color:var(--white)}
 .main{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 20px}
@@ -25,17 +41,17 @@ nav{height:52px;display:flex;align-items:center;justify-content:space-between;pa
 .form-group{margin-bottom:14px}
 .form-label{font-size:10px;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px;display:block}
 .form-input{width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none;transition:border-color .15s}
-.form-input:focus{border-color:rgba(77,184,255,0.4)}
+.form-input:focus{border-color:rgba(59,169,238,0.4)}
 .form-input::placeholder{color:var(--muted2)}
 select.form-input option{background:var(--s2)}
-.form-btn{width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.15),rgba(0,214,143,0.15));border:1px solid rgba(77,184,255,0.3);color:var(--white);padding:12px;font-family:var(--font);font-size:11px;letter-spacing:3px;cursor:pointer;transition:all .15s;margin-top:8px}
-.form-btn:hover{background:linear-gradient(120deg,rgba(77,184,255,0.25),rgba(0,214,143,0.25));border-color:rgba(77,184,255,0.5)}
+.form-btn{width:100%;background:var(--yellow);border:1px solid var(--yellow);color:var(--navy-deep);font-weight:600;padding:12px;font-family:var(--font);font-size:11px;letter-spacing:3px;cursor:pointer;transition:all .15s;margin-top:8px}
+.form-btn:hover{opacity:.85}
 .form-btn:disabled{opacity:.5;cursor:not-allowed}
 .msg{padding:12px;font-size:12px;margin-top:12px;text-align:center;display:none}
-.msg.success{background:var(--green2);border:1px solid rgba(0,214,143,0.3);color:var(--green)}
-.msg.error{background:rgba(255,77,109,0.08);border:1px solid rgba(255,77,109,0.3);color:var(--red)}
+.msg.success{background:rgba(59,169,238,0.10);border:1px solid rgba(59,169,238,0.4);color:var(--sky)}
+.msg.error{background:rgba(245,132,69,0.10);border:1px solid rgba(245,132,69,0.45);color:var(--orange)}
 .features{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:24px}
-.feature{background:var(--s2);padding:10px 12px;border:1px solid var(--line)}
+.feature{background:var(--navy-panel);padding:10px 12px;border:1px solid var(--line)}
 .feature-icon{font-size:16px;margin-bottom:4px}
 .feature-name{font-size:11px;font-weight:600;margin-bottom:2px}
 .feature-desc{font-size:10px;color:var(--muted);line-height:1.4}
@@ -46,7 +62,7 @@ footer{padding:16px 28px;border-top:1px solid var(--line);text-align:center;font
 </head>
 <body>
 <nav>
-  <a href="/" class="logo">THE STOCK LOGIC</a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo-mark.png" alt="The Stock Logic"></a>
   <a href="/" class="nav-link">VIEW SIGNALS &#8250;</a>
 </nav>
 <div class="main">

@@ -6,7 +6,9 @@
 <title>The Stock Logic — Daily Trade Intelligence</title>
 <meta name="description" content="Algo-generated NSE trade signals. Educational only.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<meta name="theme-color" content="#06080a">
+<meta name="theme-color" content="#1B3A6B">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon-192.png" sizes="192x192">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -16,18 +18,31 @@
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--s3:#161e28;--line:rgba(255,255,255,0.06);--line2:rgba(255,255,255,0.03);--sky:#4db8ff;--sky2:rgba(77,184,255,0.1);--green:#00d68f;--green2:rgba(0,214,143,0.08);--red:#ff4d6d;--red2:rgba(255,77,109,0.08);--amber:#ffb347;--amber2:rgba(255,179,71,0.08);--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.15);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
+:root{
+  --navy-deep:#0F1F38;--navy:#1B3A6B;--navy-panel:#16294A;
+  --sky:#3BA9EE;--yellow:#F5D33D;--orange:#F58445;
+  --white:#FFFFFF;--text-2:rgba(255,255,255,.6);--text-3:rgba(255,255,255,.45);
+  /* MARKET DIRECTION ONLY -- never chrome, buttons, status or nav */
+  --up:#00d68f;--down:#ff4d6d;
+  --bg:var(--navy-deep);--s1:var(--navy-panel);--s2:#12233F;--s3:#1D3357;
+  --line:rgba(255,255,255,0.10);--line2:rgba(255,255,255,0.05);
+  --sky2:rgba(59,169,238,0.12);--muted:var(--text-2);--muted2:var(--text-3);
+  --amber:var(--orange);--amber2:rgba(245,132,69,0.10);
+  --green:var(--up);--green2:rgba(0,214,143,0.08);--red:var(--down);--red2:rgba(255,77,109,0.08);
+  --font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--white);font-family:var(--font);font-size:13px;line-height:1.6;min-height:100vh}
-body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.007) 3px,rgba(77,184,255,0.007) 4px);pointer-events:none;z-index:9999}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(59,169,238,0.007) 3px,rgba(59,169,238,0.007) 4px);pointer-events:none;z-index:9999}
 nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px}
-.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+/* Wordmark only, no reflection -- unreadable at nav size. */
+.logo{display:flex;align-items:center;text-decoration:none}
+.logo img{height:19px;width:auto;display:block}
 .nav-right{display:flex;align-items:center;gap:20px;font-size:10px;letter-spacing:2px;color:var(--muted)}
-.live-dot{display:flex;align-items:center;gap:6px;color:var(--green);font-size:10px}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s infinite}
+.live-dot{display:flex;align-items:center;gap:6px;color:var(--sky);font-size:10px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--sky);box-shadow:0 0 8px var(--sky);animation:blink 2s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
 .hero{padding:40px 28px 28px;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
-.hero::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:600px;height:300px;background:radial-gradient(ellipse,rgba(77,184,255,0.04) 0%,transparent 70%);pointer-events:none}
+.hero::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:600px;height:300px;background:radial-gradient(ellipse,rgba(59,169,238,0.04) 0%,transparent 70%);pointer-events:none}
 .hero-label{font-size:9px;letter-spacing:4px;color:var(--sky);margin-bottom:10px;display:flex;align-items:center;gap:10px}
 .hero-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--sky),transparent);opacity:.3}
 .hero h1{font-family:var(--display);font-size:clamp(36px,6vw,64px);letter-spacing:2px;line-height:.95;margin-bottom:12px}
@@ -56,25 +71,25 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .orb-short{color:#ff4d6d;font-weight:600}
 .orb-label{color:var(--muted2);font-size:9px;letter-spacing:2px;margin-right:8px}
 .sec-badge{font-family:var(--display);font-size:11px;letter-spacing:3px;padding:3px 10px;border:1px solid}
-.sec-badge.intraday{color:var(--amber);border-color:rgba(255,179,71,0.4);background:var(--amber2)}
-.sec-badge.today{color:var(--sky);border-color:rgba(77,184,255,0.4);background:var(--sky2)}
+.sec-badge.intraday{color:var(--amber);border-color:rgba(245,132,69,0.4);background:var(--amber2)}
+.sec-badge.today{color:var(--sky);border-color:rgba(59,169,238,0.4);background:var(--sky2)}
 .sec-date{font-size:11px;color:var(--muted);letter-spacing:1px}
 .sec-count{font-size:10px;color:var(--muted2);margin-left:auto}
 .cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:8px}
 .sc{background:var(--s1);border:1px solid var(--line);overflow:hidden;cursor:pointer;transition:border-color .15s,background .15s}
-.sc:hover{background:var(--s2);border-color:rgba(77,184,255,0.25)}
+.sc:hover{background:var(--s2);border-color:rgba(59,169,238,0.25)}
 .sc-top{padding:14px 16px 12px;border-bottom:1px solid var(--line2);display:flex;align-items:flex-start;justify-content:space-between}
 .sc-sym{font-size:16px;font-weight:700;letter-spacing:.5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sc-setup{font-size:10px;color:var(--muted);margin-top:3px}
 .sc-ring{width:36px;height:36px;border-radius:50%;border:2px solid;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
-.ring-ap{border-color:var(--sky);color:var(--sky);background:var(--sky2)}
-.ring-a{border-color:var(--green);color:var(--green);background:var(--green2)}
-.ring-b{border-color:var(--muted);color:var(--muted)}
+.ring-ap{border-color:rgba(255,255,255,.55);color:#fff;background:rgba(255,255,255,.07)}
+.ring-a{border-color:rgba(255,255,255,.40);color:rgba(255,255,255,.92);background:rgba(255,255,255,.05)}
+.ring-b{border-color:rgba(255,255,255,.26);color:rgba(255,255,255,.70)}
 /* Grade C: qualifying but below the old 65 score floor. Mostly accumulation
    setups, which score low by construction (quiet tape scores 0 on rvol, a
    ranging market scores 0 on adx). Real signals, so they get their own chip
    rather than falling through to the B style. */
-.ring-c{border-color:var(--amber);color:var(--amber)}
+.ring-c{border-color:rgba(255,255,255,.18);color:rgba(255,255,255,.50)}
 .ring-orb{border-color:var(--amber);color:var(--amber);background:var(--amber2)}
 .sc-levels{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line2)}
 .sc-lv{background:var(--s1);padding:8px 10px;text-align:center}
@@ -86,17 +101,17 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .chip{font-size:9px;padding:2px 7px;border:1px solid;letter-spacing:.5px}
 .chip-long{background:var(--green2);color:var(--green);border-color:rgba(0,214,143,0.3)}
 .chip-short{background:var(--red2);color:var(--red);border-color:rgba(255,77,109,0.3)}
-.chip-neu{background:var(--sky2);color:var(--sky);border-color:rgba(77,184,255,0.2)}
-.chip-amb{background:var(--amber2);color:var(--amber);border-color:rgba(255,179,71,0.3)}
+.chip-neu{background:var(--sky2);color:var(--sky);border-color:rgba(59,169,238,0.2)}
+.chip-amb{background:var(--amber2);color:var(--amber);border-color:rgba(245,132,69,0.3)}
 .sc-bar{height:2px;background:var(--s3);margin:8px 0 0}
-.sc-bar-fill{height:100%;background:linear-gradient(90deg,var(--sky),var(--green))}
+.sc-bar-fill{height:100%;background:var(--sky)}
 .sc-bar-fill.orb-fill{background:var(--amber)}
 .sc-meta{font-size:10px;color:var(--muted);display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--line2);margin-top:2px}
 .sc-meta span{color:var(--white)}
-.sc-disc{font-size:8px;color:var(--muted2);padding:5px 14px;border-top:1px solid var(--line2);background:rgba(255,77,109,.02)}
+.sc-disc{font-size:8px;color:var(--muted2);padding:5px 14px;border-top:1px solid var(--line2);background:rgba(245,132,69,.04)}
 .badge{font-size:8px;padding:1px 5px;border:1px solid;letter-spacing:.5px}
-.badge-eodlive{background:rgba(0,214,143,0.1);color:var(--green);border-color:rgba(0,214,143,0.3)}
-.badge-intraday{background:var(--amber2);color:var(--amber);border-color:rgba(255,179,71,0.3)}
+.badge-eodlive{background:rgba(59,169,238,0.12);color:var(--sky);border-color:rgba(59,169,238,0.35)}
+.badge-intraday{background:var(--amber2);color:var(--amber);border-color:rgba(245,132,69,0.3)}
 .see-more-wrap{text-align:center;padding:10px 0}
 .see-more-btn{cursor:pointer;font-size:10px;letter-spacing:2px;color:var(--muted);border:1px solid var(--line);padding:6px 18px;background:none;font-family:var(--font)}
 .see-more-btn:hover{color:var(--white)}
@@ -121,7 +136,7 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .arch-count{font-size:9px;color:var(--muted2);flex-shrink:0}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);z-index:500;display:none;align-items:center;justify-content:center;padding:20px}
 .modal-bg.open{display:flex}
-.modal{background:var(--s1);border:1px solid rgba(77,184,255,.25);width:100%;max-width:420px;max-height:90vh;overflow-y:auto;animation:popIn .18s ease}
+.modal{background:var(--s1);border:1px solid rgba(59,169,238,.25);width:100%;max-width:420px;max-height:90vh;overflow-y:auto;animation:popIn .18s ease}
 @keyframes popIn{from{transform:scale(.95);opacity:0}to{transform:scale(1);opacity:1}}
 @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @media(max-width:700px){.modal{animation:slideUp .25s ease}}
@@ -143,22 +158,22 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .score-wrap{padding:12px 18px;border-top:1px solid var(--line2)}
 .score-label{font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px}
 .score-bg{height:3px;background:var(--s3);border-radius:2px;overflow:hidden}
-.score-fill{height:100%;background:linear-gradient(90deg,var(--sky),var(--green));transition:width .5s}
+.score-fill{height:100%;background:var(--sky);transition:width .5s}
 .score-fill.orb-sfill{background:var(--amber)}
 .modal-disc{padding:8px 18px 14px;font-size:9px;color:var(--muted2);line-height:1.6;border-top:1px solid var(--line2)}
 .loading{display:flex;align-items:center;gap:10px;padding:40px 0;color:var(--muted);font-size:11px;letter-spacing:1px}
-.gate-banner{background:linear-gradient(135deg,rgba(77,184,255,0.08),rgba(0,214,143,0.08));border:1px solid rgba(77,184,255,0.25);padding:24px;text-align:center;margin:20px 0}
+.gate-banner{background:linear-gradient(135deg,rgba(59,169,238,0.10),rgba(245,211,61,0.08));border:1px solid rgba(59,169,238,0.3);padding:24px;text-align:center;margin:20px 0}
 .gate-title{font-family:var(--display);font-size:22px;letter-spacing:2px;margin-bottom:8px}
 .gate-sub{font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.6}
-.gate-btn{display:inline-block;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:10px 24px;font-family:var(--font);font-size:10px;letter-spacing:3px;text-decoration:none;cursor:pointer;transition:all .15s;margin:0 6px}
-.gate-btn:hover{background:linear-gradient(120deg,rgba(77,184,255,0.35),rgba(0,214,143,0.35))}
+.gate-btn{display:inline-block;background:var(--yellow);border:1px solid var(--yellow);color:var(--navy-deep);font-weight:600;padding:10px 24px;font-family:var(--font);font-size:10px;letter-spacing:3px;text-decoration:none;cursor:pointer;transition:all .15s;margin:0 6px}
+.gate-btn:hover{opacity:.85}
 .gate-btn.secondary{background:transparent;border-color:var(--line);color:var(--muted)}
 .gate-btn.secondary:hover{color:var(--white);border-color:rgba(255,255,255,.2)}
 .blurred{filter:blur(6px);pointer-events:none;user-select:none;opacity:.4}
 .user-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 0;font-size:10px;color:var(--muted);border-bottom:1px solid var(--line2);margin-bottom:4px}
 .user-email{color:var(--sky)}
 .logout-btn{cursor:pointer;color:var(--muted);background:none;border:none;font-family:var(--font);font-size:10px;letter-spacing:1px}
-.logout-btn:hover{color:var(--red)}
+.logout-btn:hover{color:var(--orange)}
 .user-dropdown{position:relative;display:inline-block}
 .user-dropdown-btn{font-size:10px;color:var(--muted);background:none;border:1px solid var(--line);padding:4px 10px;cursor:pointer;font-family:var(--font);letter-spacing:1px;display:flex;align-items:center;gap:6px}
 .user-dropdown-btn:hover{border-color:rgba(255,255,255,.2);color:var(--white)}
@@ -166,8 +181,8 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .user-dropdown-menu.open{display:block}
 .user-dropdown-menu a,.user-dropdown-menu button{display:block;width:100%;text-align:left;padding:10px 14px;font-size:11px;letter-spacing:1px;color:var(--muted);background:none;border:none;cursor:pointer;font-family:var(--font);text-decoration:none;border-bottom:1px solid var(--line2)}
 .user-dropdown-menu a:hover,.user-dropdown-menu button:hover{color:var(--white);background:var(--s2)}
-.user-dropdown-menu button.danger{color:var(--red)}
-.user-dropdown-menu button.danger:hover{background:rgba(255,77,109,0.08)}
+.user-dropdown-menu button.danger{color:var(--orange)}
+.user-dropdown-menu button.danger:hover{background:rgba(245,132,69,0.10)}
 .spinner{width:14px;height:14px;border:1.5px solid var(--line);border-top-color:var(--sky);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .how-section{border-top:1px solid var(--line);padding:28px 0 40px;margin-top:28px}
@@ -176,9 +191,10 @@ nav{position:sticky;top:0;z-index:100;background:rgba(6,8,10,0.92);backdrop-filt
 .how-card{background:var(--s1);border:1px solid var(--line2);padding:14px 16px}
 .how-name{font-size:12px;font-weight:700;margin-bottom:4px}
 .how-desc{font-size:11px;color:var(--muted);line-height:1.5}
-.disc-bar{border-top:1px solid rgba(255,77,109,.1);background:rgba(255,77,109,.03);padding:8px 28px;font-size:9px;color:rgba(255,77,109,.4);letter-spacing:.5px;line-height:1.7;text-align:center}
+.disc-bar{border-top:1px solid rgba(245,132,69,.18);background:rgba(245,132,69,.05);padding:8px 28px;font-size:9px;color:rgba(245,132,69,.75);letter-spacing:.5px;line-height:1.7;text-align:center}
 footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-content:space-between;align-items:center}
-.footer-logo{font-family:var(--display);font-size:16px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.footer-logo{display:flex;align-items:center}
+.footer-logo img{height:16px;width:auto;display:block;opacity:.85}
 .footer-meta{font-size:10px;color:var(--muted2);text-align:right;line-height:1.8}
 @media(max-width:700px){
   nav{padding:0 14px;height:48px}
@@ -230,7 +246,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </head>
 <body>
 <nav>
-  <a href="/" class="logo" style="text-decoration:none">THE STOCK LOGIC</a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo-mark.png" alt="The Stock Logic"></a>
   <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
     <a href="/dashboard" style="font-size:10px;letter-spacing:1px;color:var(--white);text-decoration:none;padding:4px 8px;border:1px solid var(--line);background:var(--s2)">EQUITY</a>
     <span id="atlasNav" style="font-size:10px;letter-spacing:1px;color:var(--muted2);padding:4px 8px;border:1px solid rgba(255,255,255,0.04);cursor:not-allowed">ATLAS 🔒</span>
@@ -239,7 +255,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   </div>
   <div class="nav-right">
     <div class="live-dot"><span class="dot"></span><span id="liveLabel">LOADING</span></div>
-    <div id="navAuth"><button onclick="openAuthModal()" style="font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(77,184,255,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN IN</button></div>
+    <div id="navAuth"><button onclick="openAuthModal()" style="font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(59,169,238,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN IN</button></div>
   </div>
 </nav>
 <div class="hero">
@@ -257,28 +273,28 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 
 <div id="sentimentPanel" style="max-width:1240px;margin:20px auto 0;padding:0 20px;display:none">
   <div class="sentGrid" style="display:grid;grid-template-columns:300px 1fr;gap:16px">
-    <div style="border:1px solid var(--line);border-radius:12px;background:#0f141c;padding:18px 16px">
-      <div style="font-family:monospace;font-size:10px;letter-spacing:.14em;color:#6b7888;text-transform:uppercase;margin-bottom:2px">Market Sentiment</div>
-      <div style="font-family:monospace;font-size:9px;color:#6b7888;margin-bottom:12px">EOD breadth</div>
+    <div style="border:1px solid var(--line);border-radius:12px;background:var(--navy-panel);padding:18px 16px">
+      <div style="font-family:monospace;font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.45);text-transform:uppercase;margin-bottom:2px">Market Sentiment</div>
+      <div style="font-family:monospace;font-size:9px;color:rgba(255,255,255,.45);margin-bottom:12px">EOD breadth</div>
       <div style="position:relative;width:100%;max-width:240px;margin:0 auto">
         <svg viewBox="0 0 200 118" style="width:100%">
-          <path d="M 20 108 A 80 80 0 0 1 180 108" fill="none" stroke="#1a222e" stroke-width="13" stroke-linecap="round"/>
+          <path d="M 20 108 A 80 80 0 0 1 180 108" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="13" stroke-linecap="round"/>
           <path d="M 20 108 A 80 80 0 0 1 62 44" fill="none" stroke="#ff4d6d" stroke-width="13" stroke-linecap="round"/>
           <path d="M 138 44 A 80 80 0 0 1 180 108" fill="none" stroke="#00d68f" stroke-width="13" stroke-linecap="round"/>
-          <line id="sentNeedle" x1="100" y1="108" x2="100" y2="42" stroke="#e6edf3" stroke-width="3" stroke-linecap="round" transform="rotate(0 100 108)"/>
-          <circle cx="100" cy="108" r="5" fill="#e6edf3"/>
+          <line id="sentNeedle" x1="100" y1="108" x2="100" y2="42" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" transform="rotate(0 100 108)"/>
+          <circle cx="100" cy="108" r="5" fill="#FFFFFF"/>
         </svg>
-        <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:8px;color:#6b7888;margin-top:-6px">
+        <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:8px;color:rgba(255,255,255,.45);margin-top:-6px">
           <span>BEARISH</span><span>NEUTRAL</span><span>BULLISH</span>
         </div>
       </div>
       <div style="text-align:center;margin-top:10px">
         <div id="sentLabel" style="font-size:18px;font-weight:800;letter-spacing:.02em">&mdash;</div>
-        <div id="sentDetail" style="font-family:monospace;font-size:10px;color:#6b7888;margin-top:3px">&mdash;</div>
+        <div id="sentDetail" style="font-family:monospace;font-size:10px;color:rgba(255,255,255,.45);margin-top:3px">&mdash;</div>
       </div>
     </div>
-    <div style="border:1px solid var(--line);border-radius:12px;background:#0f141c;padding:18px 16px">
-      <div style="font-family:monospace;font-size:10px;letter-spacing:.14em;color:#6b7888;text-transform:uppercase;margin-bottom:14px">Sector Heatmap &middot; momentum</div>
+    <div style="border:1px solid var(--line);border-radius:12px;background:var(--navy-panel);padding:18px 16px">
+      <div style="font-family:monospace;font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.45);text-transform:uppercase;margin-bottom:14px">Sector Heatmap &middot; momentum</div>
       <div id="sectorTiles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:6px"></div>
     </div>
   </div>
@@ -309,7 +325,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </div>
 <div class="disc-bar">&#9888; EDUCATIONAL CONTENT ONLY &middot; ALGO-GENERATED &middot; NOT SEBI-REGISTERED &middot; NOT A BUY/SELL RECOMMENDATION &middot; CONSULT YOUR SEBI RA</div>
 <footer>
-  <div class="footer-logo">THE STOCK LOGIC</div>
+  <div class="footer-logo"><img src="/logo-mark.png" alt="The Stock Logic"></div>
   <div class="footer-meta">thestocklogic.com &middot; v3.0<br>Signals update daily after 6:35 PM IST</div>
 </footer>
 <div class="modal-bg" id="modal"><div class="modal" id="modalInner"></div></div>
@@ -330,7 +346,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
         <div style="font-size:10px;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px">PASSWORD</div>
         <input id="authPassword" type="password" placeholder="••••••••" style="width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none">
       </div>
-      <button onclick="signIn()" style="width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:10px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer;margin-bottom:8px">SIGN IN &#8250;</button>
+      <button onclick="signIn()" style="width:100%;background:var(--yellow);border:1px solid var(--yellow);color:var(--navy-deep);font-weight:600;padding:10px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer;margin-bottom:8px">SIGN IN &#8250;</button>
       <div id="authMsg" style="font-size:11px;text-align:center;color:var(--red);display:none;margin-top:8px"></div>
       <div style="text-align:center;margin-top:12px;font-size:10px;color:var(--muted)">
         <a href="#" onclick="resetPassword()" style="color:var(--muted);text-decoration:none">Forgot password?</a> &nbsp;·&nbsp; <a href="/waitlist" style="color:var(--sky);text-decoration:none">Join the waitlist &#8250;</a>
@@ -371,7 +387,7 @@ function intradayCard(s,isMatch){
   var typeColor=isL?'var(--green)':'var(--red)';
   var badge=isMatch
     ?'<span class="badge badge-eodlive">EOD+ORB</span>'
-    :'<span class="badge" style="background:rgba(255,179,71,0.1);color:var(--amber);border:1px solid rgba(255,179,71,0.3)">ORB</span>';
+    :'<span class="badge" style="background:rgba(245,132,69,0.1);color:var(--amber);border:1px solid rgba(245,132,69,0.3)">ORB</span>';
   return '<div class="sc" data-direction="'+s.direction+'" onclick="openModal('+sj(s)+')"><div class="sc-top"><div><div class="sc-sym">'+s.symbol+badge+'</div><div class="sc-setup">'+(s.setup_name||'&mdash;')+'</div></div><div class="sc-ring ring-orb" style="font-size:10px">'+rvol+'x</div></div><div class="sc-levels"><div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val lv-entry">&#8377;'+fmt(s.entry)+'</div></div><div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val lv-target">&#8377;'+fmt(s.target_1)+'</div></div><div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val lv-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="sc-body"><div class="sc-chips"><span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+s.direction+'</span><span class="chip chip-amb">INTRADAY</span><span class="chip chip-neu">'+(s.signal_time||'&mdash;')+'</span></div><div class="sc-bar"><div class="sc-bar-fill orb-fill" style="width:'+barW+'%"></div></div><div class="sc-meta" style="margin-top:8px"><span>RVOL <span>'+rvol+'x</span></span><span>Range <span>'+(s.orb_range_pct?parseFloat(s.orb_range_pct).toFixed(1)+'%':'&mdash;')+'</span></span></div></div><div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div></div>';
 }
 function outcomeBadge(s){
@@ -406,7 +422,7 @@ function outcomeBadge(s){
         '</span>'+
       '</span>';
     }
-    return'<span style="font-size:8px;padding:1px 6px;background:var(--sky2);color:var(--sky);border:1px solid rgba(77,184,255,0.3);margin-left:6px">&#8987; OPEN</span>';
+    return'<span style="font-size:8px;padding:1px 6px;background:var(--sky2);color:var(--sky);border:1px solid rgba(59,169,238,0.3);margin-left:6px">&#8987; OPEN</span>';
   }
   return'';
 }
@@ -416,9 +432,9 @@ function eodCard(s){
   var isBTST=s.trade_type==='BTST';
   var sp=Math.min(100,((s.score||0)/100)*100);
   var typeChip=isBTST
-    ?'<span class="chip" style="background:rgba(0,214,143,0.15);color:#00d68f;border:1px solid rgba(0,214,143,0.5)">&#127919; POTENTIAL BAGGER</span>'
+    ?'<span class="chip" style="background:rgba(245,211,61,0.15);color:#F5D33D;border:1px solid rgba(245,211,61,0.5)">&#127919; POTENTIAL BAGGER</span>'
     :(isL?'<span class="chip chip-neu">SWING / BTST</span>':'<span class="chip chip-neu" style="color:var(--red)">INTRADAY SHORT</span>');
-  var cardBorder=isBTST?'style="border:2px solid rgba(0,214,143,0.5)"':'';
+  var cardBorder=isBTST?'style="border:2px solid rgba(59,169,238,0.5)"':'';
   return '<div class="sc" data-direction="'+s.direction+'" onclick="openModal('+sj(s)+')" '+cardBorder+'><div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-setup">'+(s.setup_name||'&mdash;')+'</div></div><div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div><div class="sc-levels"><div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val lv-entry">&#8377;'+fmt(s.entry_ref)+'</div></div><div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val lv-target">&#8377;'+fmt(s.target_1)+'</div></div><div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val lv-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="sc-body"><div class="sc-chips"><span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+s.direction+'</span>'+typeChip+'<span class="chip chip-neu">RR '+(s.rr_1||2)+':1</span></div><div class="sc-bar"><div class="sc-bar-fill" style="width:'+sp+'%"></div></div><div class="sc-meta" style="margin-top:8px"><span>Score <span>'+(s.score||'&mdash;')+'/100</span></span><span>Risk <span>&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></span></div></div><div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div></div>';
 }
 function archDayRow(ds,sigs){
@@ -613,9 +629,9 @@ function renderSentimentPanel(sectors){
   document.getElementById('sentNeedle').setAttribute('transform','rotate('+angle+' 100 108)');
   var lbl,col;
   if(breadthPct>=60){lbl='BULLISH';col='#00d68f';}
-  else if(breadthPct>=52){lbl='MILD BULLISH';col='#00d68f';}
-  else if(breadthPct>48){lbl='NEUTRAL';col='#9aa7b6';}
-  else if(breadthPct>40){lbl='MILD BEARISH';col='#ffb454';}
+  else if(breadthPct>=52){lbl='MILD BULLISH';col='rgba(0,214,143,.75)';}
+  else if(breadthPct>48){lbl='NEUTRAL';col='rgba(255,255,255,.6)';}
+  else if(breadthPct>40){lbl='MILD BEARISH';col='rgba(255,77,109,.75)';}
   else{lbl='BEARISH';col='#ff4d6d';}
   var sl=document.getElementById('sentLabel');sl.textContent=lbl;sl.style.color=col;
   document.getElementById('sentDetail').textContent=Math.round(breadthPct)+'% advancing ('+totAdv+'/'+totalStocks+')';
@@ -626,10 +642,10 @@ function renderSentimentPanel(sectors){
     var sc=s.momentum_score||0;var intensity=Math.min(1,Math.abs(sc)/maxAbs);var bg,txt;
     if(sc>0.3){bg='rgba(0,214,143,'+(0.10+intensity*0.45)+')';txt='#00d68f';}
     else if(sc<-0.3){bg='rgba(255,77,109,'+(0.10+intensity*0.45)+')';txt='#ff4d6d';}
-    else{bg='rgba(107,120,136,0.14)';txt='#9aa7b6';}
+    else{bg='rgba(107,120,136,0.14)';txt='rgba(255,255,255,.6)';}
     var adv=s.advancing||0,dec=s.declining||0;
     var r1=(s.ret_1d!=null)?s.ret_1d:0;
-    var rcol=(r1>0)?'#00d68f':(r1<0)?'#ff4d6d':'#6b7888';
+    var rcol=(r1>0)?'#00d68f':(r1<0)?'#ff4d6d':'rgba(255,255,255,.45)';
     return '<div style="border-radius:8px;background:'+bg+';padding:10px 11px">'
       +'<div style="font-weight:700;font-size:12px;color:'+txt+'">'+s.sector+'</div>'
       +'<div style="font-family:monospace;font-size:15px;font-weight:700;color:'+txt+';margin-top:3px">'+(sc>0?'+':'')+sc.toFixed(2)+'<span style="font-size:8px;color:#c4ccd6;font-weight:400;margin-left:3px">MOM</span></div>'
@@ -762,8 +778,8 @@ async function render(){
         var pdh=parseFloat(s.prev_day_high||0);
         var pdl=parseFloat(s.prev_day_low||0);
         var ltp=parseFloat(s.ltp||s.entry||0);
-        if(s.direction==='LONG'&&pdh>0&&ltp>pdh)pdLabel=' <span style="font-size:9px;color:#ffb347">↑PDH</span>';
-        if(s.direction==='SHORT'&&pdl>0&&ltp<pdl)pdLabel=' <span style="font-size:9px;color:#ffb347">↓PDL</span>';
+        if(s.direction==='LONG'&&pdh>0&&ltp>pdh)pdLabel=' <span style="font-size:9px;color:#F58445">↑PDH</span>';
+        if(s.direction==='SHORT'&&pdl>0&&ltp<pdl)pdLabel=' <span style="font-size:9px;color:#F58445">↓PDL</span>';
         return '<span class="'+cls+'">'+arrow+' '+s.symbol+'</span><span style="color:var(--muted)"> ₹'+fmt(s.entry||s.entry_ref)+'</span>'+pdLabel;
       }).join('<span style="color:var(--line);margin:0 8px">|</span>');
       var _sep='<span style="margin:0 40px;color:var(--muted2)">\u00b7</span>';
@@ -812,7 +828,7 @@ async function render(){
     cards=cards.map(function(s){if(bsyms[s.symbol]){s.trade_type='BTST';}return s;});
     btst.forEach(function(s){if(!cards.find(function(e){return e.symbol===s.symbol;}))cards.push(s);});
     cards.sort(function(a,b){return(b.score||0)-(a.score||0);});
-    var bs=isReview?'style="color:var(--amber);border-color:rgba(255,179,71,0.4);background:rgba(255,179,71,0.1)"':'';
+    var bs=isReview?'style="color:var(--amber);border-color:rgba(245,132,69,0.4);background:rgba(245,132,69,0.1)"':'';
     var h='<div class="sec-header"><span class="sec-badge today" '+bs+'>'+label+'</span><span class="sec-date">'+dateLabel+'</span><span class="sec-count">'+cards.length+' SIGNAL'+(cards.length!==1?'S':'')+'</span></div>';
     if(!cards.length){h+='<div class="stay-cash"><h3>STAY CASH</h3><p>No qualifying setups</p></div>';}
     else{
@@ -898,7 +914,7 @@ function updateNavAuth() {
       if(d&&d.length){
         atlasNav.innerHTML = 'ATLAS';
         atlasNav.style.color = 'var(--sky)';
-        atlasNav.style.borderColor = 'rgba(77,184,255,0.3)';
+        atlasNav.style.borderColor = 'rgba(59,169,238,0.3)';
         atlasNav.style.cursor = 'pointer';
         atlasNav.style.textDecoration = 'none';
         atlasNav.onclick = function(){ window.location.href='/atlas'; };
@@ -919,7 +935,7 @@ function updateNavAuth() {
       '</div>'+
     '</div>';
   } else {
-    navAuth.innerHTML = '<button onclick="openAuthModal()" style="font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(77,184,255,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN IN</button>';
+    navAuth.innerHTML = '<button onclick="openAuthModal()" style="font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(59,169,238,0.3);padding:4px 10px;cursor:pointer;font-family:var(--font)">SIGN IN</button>';
   }
 }
 

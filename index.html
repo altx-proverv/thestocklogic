@@ -6,26 +6,45 @@
 <title>The Stock Logic — Institutional-Grade NSE Signals</title>
 <meta name="description" content="SMC-based trade signals for NSE stocks. Entry, SL and targets defined. Daily watchlist for serious traders.">
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#06080a">
+<meta name="theme-color" content="#1B3A6B">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon-192.png" sizes="192x192">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#06080a;--s1:#0c1018;--s2:#111820;--line:rgba(255,255,255,0.06);--sky:#4db8ff;--green:#00d68f;--red:#ff4d6d;--white:#e8f0ff;--muted:rgba(232,240,255,0.4);--muted2:rgba(232,240,255,0.12);--font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
+/* TSL BRAND
+   Green and red are reserved for MARKET DIRECTION ONLY -- price moves, P&L,
+   long/short. Never chrome, buttons, status or nav. A warning uses --orange so
+   it can never read as a loss; a pending state uses --yellow. */
+:root{
+  --navy-deep:#0F1F38;--navy:#1B3A6B;--navy-panel:#16294A;
+  --sky:#3BA9EE;--yellow:#F5D33D;--orange:#F58445;
+  --white:#FFFFFF;--text-2:rgba(255,255,255,.6);--text-3:rgba(255,255,255,.45);
+  /* MARKET DIRECTION ONLY */
+  --up:#00d68f;--down:#ff4d6d;
+  /* legacy aliases so existing rules keep resolving */
+  --bg:var(--navy-deep);--s1:var(--navy-panel);--s2:#12233F;
+  --line:rgba(255,255,255,0.10);--muted:var(--text-2);--muted2:var(--text-3);
+  --green:var(--up);--red:var(--down);
+  --font:'Inconsolata',monospace;--display:'Bebas Neue',sans-serif;--serif:'Crimson Pro',serif}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--white);font-family:var(--font);min-height:100vh;overflow-x:hidden}
-body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(77,184,255,0.006) 3px,rgba(77,184,255,0.006) 4px);pointer-events:none;z-index:9999}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(59,169,238,0.006) 3px,rgba(59,169,238,0.006) 4px);pointer-events:none;z-index:9999}
 
-nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(6,8,10,0.95);backdrop-filter:blur(16px)}
-.logo{font-family:var(--display);font-size:20px;letter-spacing:3px;background:linear-gradient(120deg,var(--sky),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;text-decoration:none}
+nav{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-filter:blur(16px)}
+/* Wordmark only, no reflection -- the mirrored mark is unreadable at nav size. */
+.logo{display:flex;align-items:center;text-decoration:none}
+.logo img{height:19px;width:auto;display:block}
 .nav-r{display:flex;align-items:center;gap:10px}
-.btn-signin{font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(77,184,255,0.3);padding:5px 14px;cursor:pointer;font-family:var(--font);transition:all .15s}
-.btn-signin:hover{background:rgba(77,184,255,0.1)}
-.btn-waitlist{font-size:10px;letter-spacing:2px;color:var(--bg);background:var(--sky);border:1px solid var(--sky);padding:5px 14px;cursor:pointer;font-family:var(--font);text-decoration:none;transition:all .15s}
+.btn-signin{font-size:10px;letter-spacing:2px;color:var(--sky);background:none;border:1px solid rgba(59,169,238,0.45);padding:5px 14px;cursor:pointer;font-family:var(--font);transition:all .15s}
+.btn-signin:hover{background:rgba(59,169,238,0.12)}
+.btn-waitlist{font-size:10px;letter-spacing:2px;color:var(--navy-deep);background:var(--yellow);border:1px solid var(--yellow);padding:5px 14px;cursor:pointer;font-family:var(--font);text-decoration:none;font-weight:600;transition:all .15s}
 .btn-waitlist:hover{opacity:.85}
 
 .hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:80px 20px 60px;position:relative}
+.hero-mark{width:min(420px,72vw);height:auto;margin-bottom:26px;display:block}
 .hero-label{font-size:10px;letter-spacing:4px;color:var(--sky);margin-bottom:16px;display:flex;align-items:center;gap:10px}
 .hero-label::before,.hero-label::after{content:'';flex:1;max-width:60px;height:1px;background:linear-gradient(90deg,transparent,var(--sky))}
 .hero-label::after{background:linear-gradient(90deg,var(--sky),transparent)}
@@ -33,21 +52,21 @@ nav{height:52px;display:flex;align-items:center;justify-content:space-between;pa
 .hero h1 em{font-family:var(--serif);font-style:italic;color:var(--sky);display:block}
 .hero-sub{font-size:14px;color:var(--muted);max-width:480px;line-height:1.8;margin-bottom:36px}
 .hero-btns{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
-.btn-primary{font-size:11px;letter-spacing:3px;color:var(--bg);background:linear-gradient(120deg,var(--sky),var(--green));border:none;padding:14px 32px;cursor:pointer;font-family:var(--font);font-weight:600;text-decoration:none;transition:opacity .15s}
+.btn-primary{font-size:11px;letter-spacing:3px;color:var(--navy-deep);background:var(--yellow);border:none;padding:14px 32px;cursor:pointer;font-family:var(--font);font-weight:600;text-decoration:none;transition:opacity .15s}
 .btn-primary:hover{opacity:.85}
 .btn-secondary{font-size:11px;letter-spacing:3px;color:var(--white);background:transparent;border:1px solid rgba(255,255,255,0.2);padding:14px 32px;cursor:pointer;font-family:var(--font);text-decoration:none;transition:all .15s}
 .btn-secondary:hover{border-color:rgba(255,255,255,.4)}
 .hero-disc{font-size:10px;color:var(--muted2);margin-top:20px}
 
-.ticker{overflow:hidden;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin:0;background:var(--s1)}
+.ticker{overflow:hidden;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin:0;background:var(--navy-panel)}
 .ticker-inner{display:flex;gap:40px;animation:scroll 30s linear infinite;white-space:nowrap;font-size:11px;color:var(--muted)}
-.ticker-inner span{color:var(--green)}
+.ticker-inner span{color:var(--sky)}
 @keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 
 .features{padding:80px 20px;max-width:1000px;margin:0 auto}
 .features-label{font-size:10px;letter-spacing:4px;color:var(--muted);text-align:center;margin-bottom:40px}
 .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
-.feat{background:var(--bg);padding:28px 24px}
+.feat{background:var(--navy-panel);padding:28px 24px}
 .feat-num{font-family:var(--display);font-size:36px;color:var(--sky);opacity:.3;margin-bottom:8px}
 .feat-title{font-size:13px;font-weight:600;margin-bottom:8px;letter-spacing:1px}
 .feat-desc{font-size:12px;color:var(--muted);line-height:1.7}
@@ -55,22 +74,22 @@ nav{height:52px;display:flex;align-items:center;justify-content:space-between;pa
 .how{padding:60px 20px;max-width:800px;margin:0 auto;text-align:center}
 .how h2{font-family:var(--display);font-size:42px;letter-spacing:2px;margin-bottom:40px}
 .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative}
-.steps::before{content:'';position:absolute;top:20px;left:12.5%;right:12.5%;height:1px;background:linear-gradient(90deg,var(--sky),var(--green));opacity:.3}
+.steps::before{content:'';position:absolute;top:20px;left:12.5%;right:12.5%;height:1px;background:linear-gradient(90deg,var(--sky),var(--yellow));opacity:.35}
 .step{padding:0 12px;text-align:center}
-.step-dot{width:40px;height:40px;border-radius:50%;background:var(--s1);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:11px;color:var(--sky);font-weight:600;position:relative;z-index:1}
+.step-dot{width:40px;height:40px;border-radius:50%;background:var(--navy-panel);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:11px;color:var(--sky);font-weight:600;position:relative;z-index:1}
 .step-title{font-size:11px;letter-spacing:1px;margin-bottom:4px}
 .step-desc{font-size:10px;color:var(--muted);line-height:1.5}
 
 .signal-preview{padding:60px 20px;max-width:900px;margin:0 auto}
 .preview-label{font-size:10px;letter-spacing:4px;color:var(--muted);text-align:center;margin-bottom:28px}
-.preview-card{background:var(--s1);border:1px solid var(--line);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:12px}
+.preview-card{background:var(--navy-panel);border:1px solid var(--line);padding:20px 24px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:12px}
 .pc-sym{font-size:18px;font-weight:700;letter-spacing:1px}
 .pc-setup{font-size:10px;color:var(--muted);margin-top:2px}
 .pc-badges{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
 .badge{font-size:9px;padding:2px 7px;border-radius:2px}
 .badge-long{background:rgba(0,214,143,0.1);color:var(--green);border:1px solid rgba(0,214,143,0.3)}
 .badge-short{background:rgba(255,77,109,0.1);color:var(--red);border:1px solid rgba(255,77,109,0.3)}
-.badge-grade{background:rgba(77,184,255,0.1);color:var(--sky);border:1px solid rgba(77,184,255,0.3)}
+.badge-grade{background:rgba(255,255,255,0.06);color:var(--text-2);border:1px solid rgba(255,255,255,0.28)}
 .pc-levels{display:flex;flex-direction:column;gap:6px;justify-content:center}
 .pc-row{display:flex;justify-content:space-between;font-size:11px}
 .pc-key{color:var(--muted)}
@@ -79,7 +98,7 @@ nav{height:52px;display:flex;align-items:center;justify-content:space-between;pa
 .pc-val.target{color:var(--green)}
 .pc-val.sl{color:var(--red)}
 .pc-meta{display:flex;flex-direction:column;gap:6px;justify-content:center;align-items:flex-end}
-.pc-score{font-family:var(--display);font-size:32px;color:var(--green)}
+.pc-score{font-family:var(--display);font-size:32px;color:var(--white)}
 .pc-score-label{font-size:9px;color:var(--muted);letter-spacing:1px}
 .preview-blur{filter:blur(6px);position:relative}
 .preview-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px}
@@ -97,15 +116,15 @@ footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-c
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:flex-end;justify-content:center;z-index:200}
 .modal-bg.open{display:flex}
 @media(min-width:600px){.modal-bg{align-items:center}}
-.modal{background:var(--s1);border:1px solid rgba(77,184,255,.2);padding:28px;width:100%;max-width:380px;border-radius:0}
+.modal{background:var(--navy-panel);border:1px solid rgba(59,169,238,.25);padding:28px;width:100%;max-width:380px;border-radius:0}
 @media(min-width:600px){.modal{border-radius:4px}}
 .modal h3{font-family:var(--display);font-size:24px;letter-spacing:2px;margin-bottom:4px}
 .modal p{font-size:11px;color:var(--muted);margin-bottom:20px}
 .modal input{width:100%;background:var(--s2);border:1px solid var(--line);color:var(--white);padding:10px 12px;font-family:var(--font);font-size:13px;outline:none;margin-bottom:10px}
-.modal input:focus{border-color:rgba(77,184,255,.4)}
-.modal-btn{width:100%;background:linear-gradient(120deg,rgba(77,184,255,0.2),rgba(0,214,143,0.2));border:1px solid rgba(77,184,255,0.4);color:var(--white);padding:11px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer}
+.modal input:focus{border-color:rgba(59,169,238,.5)}
+.modal-btn{width:100%;background:var(--yellow);border:1px solid var(--yellow);color:var(--navy-deep);font-weight:600;padding:11px;font-family:var(--font);font-size:10px;letter-spacing:3px;cursor:pointer}
 .modal-close{position:absolute;top:12px;right:16px;background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;font-family:var(--font)}
-.modal-err{color:var(--red);font-size:11px;text-align:center;margin-top:6px;display:none}
+.modal-err{color:var(--orange);font-size:11px;text-align:center;margin-top:6px;display:none}
 .modal-wrap{position:relative}
 
 @media(max-width:700px){.feat-grid{grid-template-columns:1fr}.steps{grid-template-columns:repeat(2,1fr)}.steps::before{display:none}.preview-card{grid-template-columns:1fr}.hero h1{font-size:56px}}
@@ -114,7 +133,7 @@ footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-c
 <body>
 
 <nav>
-  <a href="/" class="logo">THE STOCK LOGIC</a>
+  <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo-mark.png" alt="The Stock Logic"></a>
   <div class="nav-r">
     <button class="btn-signin" onclick="document.getElementById('signinModal').classList.add('open')">SIGN IN</button>
     <a href="/waitlist" class="btn-waitlist">JOIN WAITLIST</a>
@@ -122,6 +141,7 @@ footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-c
 </nav>
 
 <section class="hero">
+  <img class="hero-mark" src="/logo-full.png" alt="The Stock Logic">
   <div class="hero-label">PRIVATE BETA</div>
   <h1>TRADE <em>Intelligence</em> DAILY</h1>
   <p class="hero-sub">Institutional-grade NSE signals built on Smart Money Concepts. Entry, stop-loss and targets defined. You decide — you trade.</p>
@@ -182,13 +202,13 @@ footer{padding:20px 28px;border-top:1px solid var(--line);display:flex;justify-c
       <div class="feat-num" style="color:var(--sky)">ATLAS</div>
       <div class="feat-title">AGENTIC TRADING ENGINE</div>
       <div class="feat-desc">Autonomous system that scans, decides, executes and manages trades end-to-end. Real capital. Real execution. Zero emotion.</div>
-      <div style="margin-top:12px;font-size:9px;padding:3px 8px;border:1px solid rgba(77,184,255,0.4);color:var(--sky);display:inline-block;letter-spacing:1px">AVAILABLE</div>
+      <div style="margin-top:12px;font-size:9px;padding:3px 8px;border:1px solid rgba(59,169,238,0.5);color:var(--sky);display:inline-block;letter-spacing:1px">AVAILABLE</div>
     </div>
     <div class="feat">
       <div class="feat-num" style="color:var(--muted)">F&O</div>
       <div class="feat-title">OPTIONS INTELLIGENCE</div>
       <div class="feat-desc">Options chain analysis, PCR tracking, max pain levels and institutional positioning for F&amp;O traders.</div>
-      <div style="margin-top:12px;font-size:9px;padding:3px 8px;border:1px solid rgba(255,255,255,0.1);color:var(--muted);display:inline-block;letter-spacing:1px">COMING SOON</div>
+      <div style="margin-top:12px;font-size:9px;padding:3px 8px;border:1px solid rgba(245,132,69,0.5);color:var(--orange);display:inline-block;letter-spacing:1px">COMING SOON</div>
     </div>
     <div class="feat">
       <div class="feat-num" style="color:var(--muted)">MCX</div>

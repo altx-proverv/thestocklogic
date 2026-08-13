@@ -4,13 +4,26 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ATLAS — Trade Record</title>
+<meta name="theme-color" content="#1B3A6B">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
+/* TSL BRAND
+   Green and red are reserved for MARKET DIRECTION ONLY -- price moves, P&L,
+   long/short. Never chrome, buttons, status or nav. Warnings use --orange so
+   they cannot read as a loss; pending uses --yellow. */
 :root{
-  --bg:#07090d; --panel:#0d1119; --panel2:#121826; --line:rgba(255,255,255,.07);
-  --line2:rgba(255,255,255,.04);
-  --ink:#e8eef6; --dim:rgba(232,238,246,.55); --faint:rgba(232,238,246,.28);
-  --long:#00d68f; --short:#ff4d6d; --pend:#ffb454; --shadow:#7d8794; --accent:#4db8ff;
+  --navy-deep:#0F1F38; --navy:#1B3A6B; --navy-panel:#16294A;
+  --sky:#3BA9EE; --yellow:#F5D33D; --orange:#F58445;
+  --white:#FFFFFF; --text-2:rgba(255,255,255,.6); --text-3:rgba(255,255,255,.45);
+  /* MARKET DIRECTION ONLY */
+  --long:#00d68f; --short:#ff4d6d;
+  --bg:var(--navy-deep); --panel:var(--navy-panel); --panel2:#12233F;
+  --line:rgba(255,255,255,.10); --line2:rgba(255,255,255,.06);
+  --ink:var(--white); --dim:var(--text-2); --faint:var(--text-3);
+  --pend:var(--yellow); --shadow:rgba(255,255,255,.42); --accent:var(--sky);
   --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
   --disp:'Bebas Neue',Impact,sans-serif;
 }
@@ -19,19 +32,20 @@ body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:13p
 .wrap{max-width:1320px;margin:0 auto;padding:0 18px}
 a{color:var(--accent);text-decoration:none}
 
-.statusbar{position:sticky;top:0;z-index:50;background:linear-gradient(180deg,#0a0e15,#07090d);border-bottom:1px solid var(--line);padding:13px 0}
+.statusbar{position:sticky;top:0;z-index:50;background:var(--navy);border-bottom:1px solid var(--line);padding:13px 0}
 .statusbar .wrap{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.brand{display:flex;align-items:baseline;gap:10px}
+.brand{display:flex;align-items:center;gap:11px}
+.brand img{height:20px;width:auto;display:block}
 .brand .logo{font-family:var(--disp);font-size:29px;letter-spacing:2px;line-height:1}
-.brand .logo .a{color:var(--accent)}
+.brand .logo .a{color:var(--yellow)}
 .brand .tag{font-size:9px;letter-spacing:3px;color:var(--faint);text-transform:uppercase}
 .chip{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:6px;font-weight:700;font-size:11px;letter-spacing:1px}
 .chip .dot{width:7px;height:7px;border-radius:50%}
-.c-live{background:rgba(0,214,143,.12);color:var(--long);border:1px solid rgba(0,214,143,.35)}
-.c-live .dot{background:var(--long);box-shadow:0 0 9px var(--long);animation:pulse 1.7s infinite}
+.c-live{background:rgba(59,169,238,.13);color:var(--sky);border:1px solid rgba(59,169,238,.38)}
+.c-live .dot{background:var(--sky);box-shadow:0 0 9px var(--sky);animation:pulse 1.7s infinite}
 .c-shadow{background:rgba(125,135,148,.12);color:var(--shadow);border:1px solid rgba(125,135,148,.3)}
 .c-shadow .dot{background:var(--shadow)}
-.c-regime{background:rgba(77,184,255,.1);color:var(--accent);border:1px solid rgba(77,184,255,.28)}
+.c-regime{background:rgba(59,169,238,.1);color:var(--accent);border:1px solid rgba(59,169,238,.28)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .navlinks{margin-left:auto;display:flex;gap:16px;font-size:10px;letter-spacing:1.5px;text-transform:uppercase}
 .navlinks a{color:var(--faint)}
@@ -39,8 +53,8 @@ a{color:var(--accent);text-decoration:none}
 
 .banner{border-radius:8px;padding:11px 15px;margin:16px 0;display:none;align-items:center;gap:10px;font-size:12px}
 .banner.show{display:flex}
-.b-risk{background:rgba(255,77,109,.09);border:1px solid rgba(255,77,109,.38);color:#ffc2cd}
-.b-stale{background:rgba(255,180,84,.08);border:1px solid rgba(255,180,84,.3);color:#ffd9a8}
+.b-risk{background:rgba(245,132,69,.10);border:1px solid rgba(245,132,69,.42);color:var(--orange)}
+.b-stale{background:rgba(245,211,61,.08);border:1px solid rgba(245,211,61,.3);color:#ffd9a8}
 
 .capital{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:16px 0}
 .cap-note{margin-top:12px;font-size:12px;line-height:1.5;opacity:.65}
@@ -50,7 +64,7 @@ a{color:var(--accent);text-decoration:none}
 .cap-fig div{text-align:right}
 .cap-fig .v{font-size:17px;font-weight:700;line-height:1.2}
 .track{height:5px;background:var(--panel2);border-radius:3px;margin-top:12px;overflow:hidden}
-.track i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--long));border-radius:3px;transition:width .4s}
+.track i{display:block;height:100%;background:linear-gradient(90deg,var(--sky),var(--yellow));border-radius:3px;transition:width .4s}
 
 .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:9px;margin:16px 0}
 .stat{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:13px 15px}
@@ -73,13 +87,13 @@ td.sym{font-weight:700;color:var(--ink)}
 .badge{padding:3px 8px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:.5px}
 .bg-long{background:rgba(0,214,143,.14);color:var(--long)}
 .bg-short{background:rgba(255,77,109,.14);color:var(--short)}
-.bg-pend{background:rgba(255,180,84,.14);color:var(--pend)}
-.bg-open{background:rgba(77,184,255,.13);color:var(--accent)}
+.bg-pend{background:rgba(245,211,61,.15);color:var(--yellow)}
+.bg-open{background:rgba(59,169,238,.13);color:var(--accent)}
 .bg-shadow{background:rgba(125,135,148,.13);color:var(--shadow)}
 .bg-closed{background:rgba(255,255,255,.06);color:var(--dim)}
 .empty{padding:34px 18px;text-align:center;color:var(--faint);font-size:12px}
-.btn{background:none;border:1px solid rgba(77,184,255,.3);color:var(--accent);font-family:var(--mono);font-size:10px;letter-spacing:1px;padding:4px 10px;border-radius:4px;cursor:pointer}
-.btn:hover{background:rgba(77,184,255,.1)}
+.btn{background:none;border:1px solid rgba(59,169,238,.3);color:var(--accent);font-family:var(--mono);font-size:10px;letter-spacing:1px;padding:4px 10px;border-radius:4px;cursor:pointer}
+.btn:hover{background:rgba(59,169,238,.1)}
 .btn:disabled{opacity:.35;cursor:not-allowed}
 
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.78);display:none;align-items:center;justify-content:center;z-index:200;padding:18px}
@@ -91,8 +105,8 @@ td.sym{font-weight:700;color:var(--ink)}
 .modal-box input,.modal-box select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);font-family:var(--mono);font-size:13px;padding:9px 11px;border-radius:5px}
 .modal-actions{display:flex;gap:9px;margin-top:20px}
 .modal-actions .btn{flex:1;padding:9px}
-.btn-go{background:rgba(0,214,143,.14);border-color:rgba(0,214,143,.4);color:var(--long)}
-.err{color:var(--short);font-size:11px;margin-top:10px;min-height:15px}
+.btn-go{background:var(--yellow);border-color:var(--yellow);color:var(--navy-deep);font-weight:700}
+.err{color:var(--orange);font-size:11px;margin-top:10px;min-height:15px}
 
 .foot{text-align:center;padding:28px 0 44px;color:var(--faint);font-size:9.5px;letter-spacing:1.2px;line-height:1.9}
 @media(max-width:640px){.cap-fig{gap:16px}.cap-fig .v{font-size:15px}}
@@ -103,6 +117,7 @@ td.sym{font-weight:700;color:var(--ink)}
 <div class="statusbar">
   <div class="wrap">
     <div class="brand">
+      <a href="/" aria-label="The Stock Logic"><img src="/logo-mark.png" alt="The Stock Logic"></a>
       <div class="logo"><span class="a">A</span>TLAS</div>
       <div class="tag">Trade Record</div>
     </div>

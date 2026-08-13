@@ -4,8 +4,8 @@
   "description": "Daily NSE trade signals — SMC-based setups with entry, SL and targets",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#06080a",
-  "theme_color": "#06080a",
+  "background_color": "#0F1F38",
+  "theme_color": "#1B3A6B",
   "orientation": "portrait",
   "icons": [
     {
@@ -21,7 +21,10 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["finance", "business"],
+  "categories": [
+    "finance",
+    "business"
+  ],
   "screenshots": [
     {
       "src": "/screenshot.png",
