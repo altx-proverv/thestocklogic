@@ -713,26 +713,42 @@ async function render(){
   // IST time checks
   var _istNow=new Date(Date.now()+(5.5*60*60*1000));
   var _istMin=_istNow.getUTCHours()*60+_istNow.getUTCMinutes();
-  var _afterMarketClose=_istMin>15*60+30;
   var _afterMarket=_istMin>15*60+15;
 
-  // Next trading day helper
-  function nextTD(ds){var d=new Date(ds+'T00:00:00');d.setDate(d.getDate()+1);while(d.getDay()===0||d.getDay()===6){d.setDate(d.getDate()+1);}return d.toISOString().split('T')[0];}
-
-  // Today and tomorrow EOD
-  var todayEOD=byDate[today]||[];
-  var tomorrowDate=nextTD(today);
-  var tomorrowEOD=byDate[tomorrowDate]||[];
-
-  // Two-section logic
-  var reviewEOD,watchlistEOD,showTwoSections;
-  if(_afterMarketClose&&tomorrowEOD.length){
-    reviewEOD=todayEOD;watchlistEOD=tomorrowEOD;showTwoSections=true;
-  } else {
-    reviewEOD=[];watchlistEOD=todayEOD.length?todayEOD:(byDate[latestDate]||[]);showTwoSections=false;
+  // Next trading day + date label. UTC throughout, deliberately.
+  //
+  // This built the date at LOCAL midnight and read it back with toISOString(),
+  // which is UTC. For any viewer at or east of UTC -- all of India -- the "+1
+  // day" was pulled straight back to the SAME date, so nextTD(today)===today.
+  // byDate[tomorrow] was therefore byDate[today], and the identical batch
+  // rendered under both "Today's Trades" and "Tomorrow's Watchlist".
+  function nextTD(ds){
+    var p=ds.split('-'),d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+    do{d.setUTCDate(d.getUTCDate()+1);}while(d.getUTCDay()===0||d.getUTCDay()===6);
+    return d.toISOString().split('T')[0];
+  }
+  function fmtDate(ds){
+    var p=ds.split('-');
+    return new Date(Date.UTC(+p[0],+p[1]-1,+p[2]))
+      .toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'});
   }
 
-  var displayEOD=showTwoSections?reviewEOD:watchlistEOD;
+  // ONE batch, ONE card list.
+  //
+  // The EOD chain runs at 18:35 IST and stamps signal_date with the evening it
+  // ran, NOT the session it is for -- ATLAS logs "Batch 2026-08-12" on the
+  // morning it trades, the 13th. So the same rows are TOMORROW'S WATCHLIST
+  // that evening and TODAY'S TRADES once IST passes midnight. Only the header
+  // changes. render() re-runs on the existing 5-minute interval and recomputes
+  // `today`, so it flips without a reload.
+  var todayEOD=byDate[today]||[];
+  var batchDate=latestDate;
+  var watchlistEOD=byDate[batchDate]||[];
+  var displayEOD=watchlistEOD;
+  var sessionDate=nextTD(batchDate);
+  var isWatchlist=batchDate>=today;
+  var secLabel=isWatchlist?"TOMORROW'S WATCHLIST":"TODAY'S TRADES";
+  var secDate=(isWatchlist?'For ':'')+fmtDate(sessionDate);
   var allToday=displayEOD.concat(todayLive);
   var lc=allToday.filter(function(s){return s.direction==='LONG';}).length;
   var sc=allToday.filter(function(s){return s.direction==='SHORT';}).length;
@@ -842,23 +858,7 @@ async function render(){
     return h;
   }
 
-  if(showTwoSections){
-    var todayLabel=new Date(today+'T00:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
-    html+=buildSection(reviewEOD,todayLive,"TODAY'S TRADES",todayLabel,true);
-    if(watchlistEOD.length){
-      var tmLabel=new Date(nextTD(tomorrowDate)+'T00:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
-      html+=buildSection(watchlistEOD,[],"TOMORROW'S WATCHLIST",'For '+tmLabel,false);
-    } else {
-      html+='<div class="sec-header"><span class="sec-badge today">TOMORROW\'S WATCHLIST</span></div><div style="padding:12px 0;font-size:11px;color:var(--muted2)">Signals update at 6:35 PM IST</div>';
-    }
-  } else {
-    var srcDate=watchlistEOD.length?watchlistEOD[0].signal_date:latestDate;
-    var _base=new Date(srcDate+'T00:00:00');
-    _base.setDate(_base.getDate()+1);
-    while(_base.getDay()===0||_base.getDay()===6){_base.setDate(_base.getDate()+1);}
-    var _nds=_base.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
-    html+=buildSection(watchlistEOD,todayLive,"TODAY'S WATCHLIST",'For '+_nds,false);
-  }
+  html+=buildSection(watchlistEOD,todayLive,secLabel,secDate,false);
 
   // Live signals date map for archive
   window.byLiveDate={};
@@ -868,8 +868,7 @@ async function render(){
   });
 
   // Archive — exclude whichever date is powering the watchlist + tomorrow
-  var _watchlistSigDate=watchlistEOD.length?watchlistEOD[0].signal_date:today;
-  var archiveDates=allDates.filter(function(d){return d!==_watchlistSigDate&&d!==tomorrowDate;});
+  var archiveDates=allDates.filter(function(d){return d!==batchDate;});
   if(archiveDates.length){
     var yest=archiveDates[0],twoDays=archiveDates[1],older=archiveDates.slice(2);
     html+='<div class="arch-toggle" id="archToggle" onclick="toggleArch()"><span class="arch-icon" id="archIcon">▼</span><span>ARCHIVE</span><span style="margin-left:auto;color:var(--muted2)">'+archiveDates.length+' DAYS</span></div><div class="arch-body" id="archBody">';
