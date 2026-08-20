@@ -369,18 +369,69 @@ function todayIST(){
 }
 function fmtDate(ds){return new Date(ds).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});}
 function sj(s){return JSON.stringify(s).replace(/"/g,'&quot;');}
-async function fetchEOD(){var s=new Date();s.setDate(s.getDate()-30);var r=await fetch(SB+'/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+'&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*',{headers:HDR});return r.json();}
+/* ── one read path for the page, same shape as atlas.html ──────────────
+   These five feeds are read by render() through a single Promise.all, and not
+   one of them used to check r.ok. Two ways that blanked the whole dashboard:
+
+     - a non-200 returns a PostgREST error OBJECT, which is valid JSON, so the
+       caller got {code:...} where it expected an array and the first .filter()
+       on it threw;
+     - a network failure rejected the fetch, Promise.all rejected with it, and
+       render() died before drawing anything -- taking the other four feeds
+       with it, however healthy they were.
+
+   Either way: an empty page, a console error, and nothing else. Every table
+   here is anon-readable, so one feed failing is never a reason to show none of
+   them. Always resolve, always hand back an array, and say what went wrong.
+
+   useSession sends the operator's token instead of the anon key. It is NOT
+   retried as anon on failure: the only session read on this page is
+   subscribers, which is own-row-only, so an anon retry returns [] -- and []
+   here means "not approved". That would invent a verdict rather than degrade
+   to one. */
+async function sbGet(path, useSession){
+  var headers = (useSession && _token)
+    ? {apikey:AK, Authorization:'Bearer '+_token}
+    : HDR;
+  var r;
+  try{
+    r = await fetch(SB+path, {headers:headers});
+  }catch(e){
+    console.error('signals: '+path+' -> '+e.message);
+    return {ok:false, status:0, rows:[]};
+  }
+  if(!r.ok){
+    var body='';
+    try{ body=(await r.text()).slice(0,200); }catch(e){}
+    console.error('signals: '+path+' -> HTTP '+r.status+' '+body);
+    return {ok:false, status:r.status, rows:[]};
+  }
+  var rows=[];
+  try{ rows = await r.json(); }catch(e){ console.error('signals: '+path+' -> bad JSON'); }
+  return {ok:true, status:r.status, rows: Array.isArray(rows)?rows:[]};
+}
+
+async function fetchEOD(){
+  var s=new Date(); s.setDate(s.getDate()-30);
+  return (await sbGet('/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+
+                      '&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*')).rows;
+}
 async function fetchSectors(){
-  var r=await fetch(SB+'/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22',{headers:HDR});
-  var data=await r.json();
-  if(!data||!data.length)return data;
+  var data=(await sbGet('/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22')).rows;
+  if(!data.length) return data;
   // Only use most recent date
   var latestDate=data[0].signal_date;
   return data.filter(function(s){return s.signal_date===latestDate;});
 }
-async function fetchLive(){var r=await fetch(SB+'/rest/v1/live_signals?signal_date=eq.'+todayStr()+'&order=signal_time.asc',{headers:HDR});return r.json();}
-async function fetchOutcomes(){var r=await fetch(SB+'/rest/v1/signal_outcomes?select=signal_id,outcome,pnl,exit_day,days_held',{headers:HDR});return r.json();}
-async function fetchPrices(){var r=await fetch(SB+'/rest/v1/live_prices?select=symbol,ltp,change_pct',{headers:HDR});return r.json();}
+async function fetchLive(){
+  return (await sbGet('/rest/v1/live_signals?signal_date=eq.'+todayStr()+'&order=signal_time.asc')).rows;
+}
+async function fetchOutcomes(){
+  return (await sbGet('/rest/v1/signal_outcomes?select=signal_id,outcome,pnl,exit_day,days_held')).rows;
+}
+async function fetchPrices(){
+  return (await sbGet('/rest/v1/live_prices?select=symbol,ltp,change_pct')).rows;
+}
 function intradayCard(s,isMatch){
   var isL=s.direction==='LONG';
   var rvol=parseFloat(s.rvol||0).toFixed(1);
@@ -888,33 +939,64 @@ var _user = null;
    token. Kept in step with _user through setAuth() -- they are set in four
    different places and drifting apart would silently close the gate. */
 var _token = null;
+/* True when the reader HAD a session and it could not be used. Distinguishes
+   "never signed in" from "signed in, but the token died" -- the second one
+   otherwise looks identical to the first and leaves a paying subscriber
+   staring at the signup gate with no idea why. */
+var _sessionStale = false;
 function setAuth(session){
   _user  = session ? session.user : null;
   _token = session ? session.access_token : null;
 }
+/* A token inside 60s of expiry is treated as already dead: it may not survive
+   the round trip, and sending a dead one earns a 401 where sending none would
+   at least have degraded cleanly. Same rule as atlas.html. */
+function isFresh(s){
+  if(!s || !s.access_token) return false;
+  if(!s.expires_at) return true;
+  return (s.expires_at*1000) - Date.now() > 60000;
+}
 
 async function checkAuth() {
+  _sessionStale = false;
+
+  /* Snapshot before touching supabase-js: when getSession() finds a session it
+     cannot renew it DELETES the localStorage entry, so asking afterwards
+     whether the reader had one always answers no. Same trap as atlas.html. */
+  var hadStored = false;
+  try{
+    for (var i=0;i<localStorage.length;i++){
+      var k=localStorage.key(i);
+      if (k && k.indexOf('sb-')===0 && k.indexOf('-auth-token')>-1){ hadStored = true; break; }
+    }
+  }catch(e){}
+
   if (!_supa) {
     if (!window.supabase) { renderGate(); return; }
     _supa = window.supabase.createClient(SB, AK);
   }
   var res = await _supa.auth.getSession();
-  setAuth(res.data.session);
+  var s = res && res.data ? res.data.session : null;
+  setAuth(isFresh(s) ? s : null);
+
+  if (!_user && hadStored) _sessionStale = true;
+
   if (_user) {
     // Check if subscriber is approved.
     /* Session token, not the anon key -- subscribers is own-row-only now.
        Keyed on user_id: identity, not a string that can differ in case. */
-    var r = await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+encodeURIComponent(_user.id)+'&status=eq.active&limit=1',
-      {headers:{apikey:AK,Authorization:'Bearer '+_token}});
-    /* A failed request is not a verdict. Treating non-200 as "not approved"
-       is how an RLS or network problem would present as a locked-out user
-       with nothing in any log. */
-    if (!r.ok) {
-      console.error('subscriber check failed: HTTP '+r.status+' '+(await r.text()).slice(0,200));
+    var got = await sbGet('/rest/v1/subscribers?user_id=eq.'+encodeURIComponent(_user.id)+
+                          '&status=eq.active&limit=1', true);
+    /* A failed request is not a verdict. Treating non-200 as "not approved" is
+       how an RLS or network problem presents as a locked-out subscriber with
+       nothing on screen and nothing in any log. Distinguish the two: an
+       explicit empty result means not approved; a failure means we do not
+       know, and says so. */
+    if (!got.ok) {
+      _sessionStale = true;
       setAuth(null);
-    } else {
-      var data = await r.json();
-      if (!data || !data.length) setAuth(null); // not approved yet
+    } else if (!got.rows.length) {
+      setAuth(null); // genuinely not approved yet
     }
   }
   renderGate();
@@ -924,10 +1006,11 @@ function updateNavAuth() {
   // Unlock ATLAS only for admin plan
   var atlasNav = document.getElementById("atlasNav");
   if (atlasNav && _user) {
-    fetch(SB+"/rest/v1/subscribers?user_id=eq."+encodeURIComponent(_user.id)+"&plan=eq.admin&limit=1",
-      {headers:{apikey:AK,Authorization:"Bearer "+_token}})
-    .then(function(r){return r.json();})
-    .then(function(d){
+    /* Through sbGet so a failure logs its real status and yields [] rather
+       than a PostgREST error object that d.length would read as truthy. */
+    sbGet("/rest/v1/subscribers?user_id=eq."+encodeURIComponent(_user.id)+"&plan=eq.admin&limit=1", true)
+    .then(function(got){
+      var d = got.rows;
       if(d&&d.length){
         atlasNav.innerHTML = 'ATLAS';
         atlasNav.style.color = 'var(--sky)';
@@ -982,10 +1065,17 @@ function renderGate() {
         var banner = document.createElement('div');
         banner.id = 'gateBanner';
         banner.className = 'gate-banner';
-        banner.innerHTML = '<div class="gate-title">ACCESS RESTRICTED</div>'+
-          '<p class="gate-sub">The Stock Logic is in private beta.<br>Join the waitlist or sign in if you\'re already approved.</p>'+
-          '<a href="/waitlist" class="gate-btn">JOIN WAITLIST &#8250;</a>'+
-          '<button class="gate-btn secondary" onclick="openAuthModal()">SIGN IN</button>';
+        /* An expired session is not the same as never having signed in, and
+           showing an approved subscriber the signup pitch is a poor answer to
+           "your token aged out". Say which one actually happened. */
+        banner.innerHTML = _sessionStale
+          ? '<div class="gate-title">SESSION EXPIRED</div>'+
+            '<p class="gate-sub">You were signed in, but the session has expired or could not be verified.<br>Sign in again to restore access.</p>'+
+            '<button class="gate-btn" onclick="openAuthModal()">SIGN IN AGAIN</button>'
+          : '<div class="gate-title">ACCESS RESTRICTED</div>'+
+            '<p class="gate-sub">The Stock Logic is in private beta.<br>Join the waitlist or sign in if you\'re already approved.</p>'+
+            '<a href="/waitlist" class="gate-btn">JOIN WAITLIST &#8250;</a>'+
+            '<button class="gate-btn secondary" onclick="openAuthModal()">SIGN IN</button>';
         sc.parentNode.insertBefore(banner, sc);
       }
     }, 800);
@@ -1054,13 +1144,18 @@ document.getElementById('authModal').addEventListener('click', function(e){ if(e
 setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
 window.addEventListener('load', function(){
   if (!_supa) _supa = window.supabase.createClient(SB, AK);
+  /* isFresh on both paths: this handler runs on every load and used to accept
+     whatever getSession() returned, so a dead token could reach updateNavAuth
+     and be sent. Reads still degrade (sbGet handles it), but there is no
+     reason to spend a request proving a token is expired. */
   _supa.auth.onAuthStateChange(function(event, session){
-    setAuth(session);
+    setAuth(isFresh(session) ? session : null);
     updateNavAuth();
   });
   // Also check session immediately on load
   _supa.auth.getSession().then(function(res){
-    setAuth(res.data.session);
+    var s = res && res.data ? res.data.session : null;
+    setAuth(isFresh(s) ? s : null);
     updateNavAuth();
   });
   render().catch(function(e){console.error(e);});
