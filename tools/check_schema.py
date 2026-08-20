@@ -100,7 +100,7 @@ ANON_RESTRICTED = {
     "waitlist":    "signup applications; anon may INSERT only "
                    "(20260820194548_waitlist_revoke_anon_select)",
     "subscribers": "own row only, for authenticated; anon has no read at all "
-                   "(20260820_subscribers_revoke_anon_select)",
+                   "(20260820200358_subscribers_revoke_anon_select)",
 }
 
 # Extensions a browser can fetch directly. api/ is excluded: those are Vercel
