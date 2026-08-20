@@ -28,6 +28,9 @@
   --disp:'Bebas Neue',Impact,sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+/* .shead is display:flex, which beats the `hidden` attribute's UA display:none.
+   Without this a section marked hidden stays on screen. */
+[hidden]{display:none !important}
 body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased}
 .wrap{max-width:1320px;margin:0 auto;padding:0 18px}
 a{color:var(--accent);text-decoration:none}
@@ -167,6 +170,12 @@ td.sym{font-weight:700;color:var(--ink)}
 
   <div class="shead"><h2>Open Positions</h2><div class="rule"></div><span class="cnt" id="cntOpen">0</span></div>
   <div class="tblwrap" id="tblOpen"></div>
+
+  <!-- Catch-all: every status that is not OPEN, CLOSED or SHADOW, rendered with
+       its status in the row. Hidden entirely when empty, so a status is absent
+       because there is nothing in it -- never because the page forgot it. -->
+  <div class="shead" id="headOther" hidden><h2>Cancelled &amp; Not Filled</h2><div class="rule"></div><span class="cnt" id="cntOther">0</span></div>
+  <div class="tblwrap" id="tblOther" hidden></div>
 
   <div class="shead"><h2>Closed</h2><div class="rule"></div><span class="cnt" id="cntClosed">0</span></div>
   <div class="tblwrap" id="tblClosed"></div>
@@ -382,6 +391,15 @@ function render(){
   var open   = _trades.filter(function(t){return st(t)==='OPEN';});
   var closed = _trades.filter(function(t){return st(t)==='CLOSED';});
   var shadow = _trades.filter(function(t){return st(t)==='SHADOW';});
+  /* Everything else: CANCELLED, any stray GTT_PENDING, and any status this page
+     has never heard of. The page once rendered a fixed list of statuses and
+     dropped the rest, so when the first four real orders were cancelled they
+     vanished from the record entirely. A catch-all means a new status shows up
+     as a row with its name in it rather than disappearing.
+     The section hides when it is empty -- absent because there is nothing to
+     show, not because the page stopped looking. */
+  var KNOWN  = ['OPEN','CLOSED','SHADOW'];
+  var other  = _trades.filter(function(t){return KNOWN.indexOf(st(t))<0;});
 
   /* Committed and at-risk are derived from the trades themselves. There is no
      allocated pool to show a percentage against, and no "available" figure --
@@ -456,6 +474,7 @@ function render(){
   if(parts.length){ mb.classList.add('show'); document.getElementById('markBannerText').innerHTML=parts.join(' '); }
   else mb.classList.remove('show');
 
+  document.getElementById('cntOther').textContent=other.length;
   document.getElementById('cntOpen').textContent=open.length;
   document.getElementById('cntClosed').textContent=closed.length;
   document.getElementById('cntShadow').textContent=shadow.length;
@@ -478,6 +497,36 @@ function render(){
         '<td>'+(_session?'<button class="btn" title="Record a manual exit — places no order" '+
                 'onclick="openExit('+t.id+')">RECORD EXIT</button>':'')+'</td>'].join('');})) :
     '<div class="empty">No open positions.</div>';
+
+  /* Hidden when empty rather than rendered as an empty state -- there is
+     nothing useful to say about zero cancelled orders, and a permanent empty
+     panel above the book is what made the stale one easy to ignore. */
+  document.getElementById('headOther').hidden = !other.length;
+  document.getElementById('tblOther').hidden  = !other.length;
+  if(other.length){
+    document.getElementById('tblOther').innerHTML=
+      tbl(['Symbol','Dir','Status','Trigger/Entry','Stop','Qty','Notional','Reason','Placed','Ended'],
+        other.map(function(t){
+          var status=st(t);
+          /* Unknown statuses get the pending colour, not the closed one: an
+             unrecognised row should look like something to look at. */
+          var cls=status==='CANCELLED'?'bg-closed':'bg-pend';
+          /* exit_reason is terse (MANUAL); the detail lives in notes. Show the
+             reason, and hang the full note off the title attribute so the record
+             is recoverable without opening the database. */
+          var note=(t.notes||'').replace(/\s+/g,' ').trim();
+          return [
+          '<td class="sym">'+esc(t.symbol)+'</td>',
+          '<td>'+dirBadge(t.direction)+'</td>',
+          '<td><span class="badge '+cls+'">'+esc(status||'—')+'</span></td>',
+          '<td class="amb">'+rup(t.trigger_price||t.entry_price)+'</td>',
+          '<td class="neg">'+rup(t.stop_price)+'</td>',
+          '<td>'+esc(t.qty)+'</td>',
+          '<td>'+rup(notionalOf(t))+'</td>',
+          '<td style="font-size:11px" title="'+esc(note)+'">'+esc(t.exit_reason||'—')+'</td>',
+          '<td>'+fmtDate(t.entry_date)+'</td>',
+          '<td>'+fmtDate(t.exit_date)+'</td>'].join('');}));
+  }
 
   document.getElementById('tblClosed').innerHTML=closed.length?
     /* Realised only, from exit_price. A closed row is never marked to market. */
