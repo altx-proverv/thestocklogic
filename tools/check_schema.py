@@ -46,11 +46,15 @@ WHAT IT CHECKS
      this is the check that would have caught gtt_trigger_id.
   4. Every table the FRONTEND reads is actually visible to the anon key the
      pages ship with -- anon row count vs service-role row count. A mismatch
-     is an RLS policy gap. This one matters more than it looks: the database
-     has an event trigger (`ensure_rls` -> rls_auto_enable()) that turns RLS
-     ON for every new table in public and creates no policy, so every table
-     added from here on is born invisible to the frontend and says nothing
-     about it.
+     is an RLS policy gap.
+  5. Every table with RLS enabled and ZERO policies, whether the frontend
+     reads it today or not. The database has an event trigger
+     (`ensure_rls` -> rls_auto_enable()) that turns RLS ON for every new table
+     in public and creates no policy. Keeping that default is right -- a new
+     table should be private until someone decides otherwise -- but it means
+     a new table is born invisible and says nothing about it. Check 4 only
+     sees tables a page already reads, and only when they have rows; check 5
+     catches the rest, before a page is pointed at one.
 
 WHAT IT CANNOT CHECK
 --------------------
@@ -159,6 +163,54 @@ def check_anon_visibility(tables) -> list:
                 f"Intentional or not, the page cannot tell the difference.")
         else:
             print(f"  {t:<24} anon {anon} / service {svc}   ok")
+    return problems
+
+
+def check_rls_without_policy(frontend_tables) -> list:
+    """Tables with RLS on and no policy at all.
+
+    Reported for every table in public, not just the ones a page reads today.
+    A table in this state is not broken until something points at it -- and
+    then it fails by returning 200 and an empty array, which is the one
+    failure mode nothing in this stack can detect at runtime. Naming them now
+    is the whole point: the trigger will keep creating them.
+
+    Needs public.rls_audit() (migrations/20260820193819_rls_audit_function.sql),
+    because PostgREST cannot reach pg_class or pg_policy directly.
+    """
+    try:
+        r = requests.post(f"{SUPABASE_URL}/rest/v1/rpc/rls_audit",
+                          headers={"apikey": SUPABASE_KEY,
+                                   "Authorization": f"Bearer {SUPABASE_KEY}",
+                                   "Content-Type": "application/json"},
+                          json={}, timeout=30)
+    except requests.RequestException as e:
+        return [f"rls_audit() call failed: {type(e).__name__}: {e}"]
+    if r.status_code == 404:
+        return ["public.rls_audit() is missing — apply "
+                "migrations/20260820193819_rls_audit_function.sql. Check 5 cannot run."]
+    if r.status_code != 200:
+        return [f"rls_audit() returned HTTP {r.status_code} {(r.text or '').strip()[:160]}"]
+
+    naked = [t for t in r.json() if t.get("rls_enabled") and not t.get("n_policies")]
+    if not naked:
+        print("\nRLS coverage: every table in public has at least one policy.")
+        return []
+
+    print(f"\nRLS enabled, NO policy ({len(naked)}):")
+    problems = []
+    for t in naked:
+        name = t["table_name"]
+        # A table no page reads is invisible-but-harmless today. Say which is
+        # which rather than reporting them at the same volume -- a check that
+        # cries wolf about backend-only tables stops being read.
+        if name in frontend_tables:
+            print(f"  {name:<34} READ BY THE FRONTEND — returns empty to every page")
+            problems.append(
+                f"{name}: RLS enabled with no policy AND the frontend reads it — "
+                f"every page query returns 200 and an empty array")
+        else:
+            print(f"  {name:<34} backend-only today; will return empty the moment a page reads it")
     return problems
 
 
@@ -317,6 +369,7 @@ def main() -> int:
     print(f"checked {checked_urls} query URLs and {checked_payloads} write payloads")
 
     problems += check_anon_visibility({t for t in frontend_tables if t in schema})
+    problems += check_rls_without_policy(frontend_tables)
     if UNCHECKABLE:
         print(f"\n{len(UNCHECKABLE)} reference(s) could NOT be checked — the table name "
               f"is built at runtime:")
