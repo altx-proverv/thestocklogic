@@ -9,6 +9,10 @@
 <link rel="icon" href="/icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Same client the other pages load. Without it this page read the stored
+     session straight out of localStorage and had nothing to refresh it: the
+     token dies an hour after signing in elsewhere, and every request 401'd. -->
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
 /* TSL BRAND
    Green and red are reserved for MARKET DIRECTION ONLY -- price moves, P&L,
@@ -153,6 +157,13 @@ td.sym{font-weight:700;color:var(--ink)}
     <span id="markBannerText"></span>
   </div>
 
+  <div id="sessionBanner" class="banner b-stale">
+    <span>&#9888;</span>
+    <span><b>SIGNED-IN SESSION EXPIRED</b> &mdash; showing the public view. The record
+      below is complete and current; only the RECORD EXIT button is unavailable.
+      Sign in again on the <a href="/dashboard">dashboard</a> to record an exit.</span>
+  </div>
+
   <div class="capital">
     <div class="cap-top">
       <div><div class="cap-lbl">Committed Exposure</div></div>
@@ -248,7 +259,7 @@ var CFG={riskPerTrade:3000, maxNotionalPerTrade:100000, maxTradesPerDay:3};
                   keeping the first hit per symbol takes the latest close. */
 var MARK_ROWS=400;
 
-var _trades=[], _mark={}, _session=null, _editing=null;
+var _trades=[], _mark={}, _session=null, _editing=null, _supa=null, _sessionStale=false;
 
 function hdr(){
   var h={apikey:AK, Authorization:'Bearer '+AK, 'Content-Type':'application/json'};
@@ -279,21 +290,76 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){retu
 
 /* ── auth: exit editing requires a signed-in session AND an RLS policy.
       Client-side hiding is not security -- the policy is what enforces it. ── */
-function loadSession(){
+
+/* A token expiring within the minute is treated as already dead: it may not
+   survive the round trip, and sending a dead one is worse than sending none.
+   Every table this page reads is readable by anon, so no session at all still
+   renders the full book. */
+function isFresh(s){
+  if(!s || !s.access_token) return false;
+  if(!s.expires_at) return true;   // nothing recorded -- let the server judge
+  return (s.expires_at*1000) - Date.now() > 60000;
+}
+
+/* This page used to scan localStorage for sb-*-auth-token and send whatever
+   access_token it found. Nothing here refreshes that token -- the other pages
+   get refreshes from supabase-js, this one had no client at all -- so an hour
+   after the operator signed in anywhere on the site, /atlas sent a dead token,
+   PostgREST answered 401, and the page rendered "Could not load trades" while
+   the anon key sitting right next to it could have read every row.
+   getSession() renews from the refresh_token; the localStorage scan stays as a
+   fallback for when the CDN script does not load, but never returns a dead
+   token now. */
+async function loadSession(){
+  /* Snapshot the stored session BEFORE touching supabase-js. When getSession()
+     finds one it cannot renew it DELETES the localStorage entry, so asking
+     afterwards whether the operator had a session always answers no -- and the
+     EXIT button would vanish with nothing on screen explaining why. */
+  var stored=null;
   try{
     for(var i=0;i<localStorage.length;i++){
       var k=localStorage.key(i);
       if(k && k.indexOf('sb-')===0 && k.indexOf('-auth-token')>-1){
-        var v=JSON.parse(localStorage.getItem(k));
-        if(v && v.access_token) return v;
+        stored=JSON.parse(localStorage.getItem(k));
+        break;
       }
     }
   }catch(e){}
+
+  try{
+    if(window.supabase && window.supabase.createClient){
+      if(!_supa) _supa=window.supabase.createClient(SB,AK);
+      var res=await _supa.auth.getSession();
+      var s=(res && res.data) ? res.data.session : null;
+      if(isFresh(s)) return s;
+    }
+  }catch(e){ console.error('ATLAS: session refresh failed: '+e.message); }
+
+  /* Fallback for when the CDN script did not load at all. */
+  if(isFresh(stored)) return stored;
+
+  if(stored && stored.access_token){
+    _sessionStale=true;
+    console.error('ATLAS: stored session is expired and could not be refreshed');
+  }
   return null;
 }
 
+/* Reads are permitted for anon on every table this page touches, so a rejected
+   session is never a reason to show an empty page. Drop to the anon key, note
+   it, and carry on -- the book still renders, only the EXIT button goes. */
+async function sbGet(path){
+  var r=await fetch(SB+path,{headers:hdr()});
+  if((r.status===401 || r.status===403) && _session){
+    console.error('ATLAS: session rejected ('+r.status+') — retrying as anon');
+    _session=null; _sessionStale=true;
+    r=await fetch(SB+path,{headers:hdr()});
+  }
+  return r;
+}
+
 async function fetchTrades(){
-  var r=await fetch(SB+'/rest/v1/atlas_trades?order=entry_date.desc,created_at.desc&limit=300',{headers:hdr()});
+  var r=await sbGet('/rest/v1/atlas_trades?order=entry_date.desc,created_at.desc&limit=300');
   if(!r.ok) throw new Error('HTTP '+r.status);
   return await r.json();
 }
@@ -311,7 +377,7 @@ function inFilter(symbols){
 
 async function getJSON(path){
   try{
-    var r=await fetch(SB+path,{headers:hdr()});
+    var r=await sbGet(path);
     if(!r.ok){ console.error('ATLAS: '+path+' -> HTTP '+r.status); return []; }
     return await r.json()||[];
   }catch(e){ console.error('ATLAS: '+path+' -> '+e.message); return []; }
@@ -470,6 +536,8 @@ function render(){
         'for them, so they contribute nothing to the unrealised total.');
     }
   }
+  document.getElementById('sessionBanner').classList.toggle('show', _sessionStale);
+
   var mb=document.getElementById('markBanner');
   if(parts.length){ mb.classList.add('show'); document.getElementById('markBannerText').innerHTML=parts.join(' '); }
   else mb.classList.remove('show');
@@ -608,7 +676,8 @@ async function saveExit(){
 
 async function load(){
   try{
-    _session=loadSession();
+    _sessionStale=false;
+    _session=await loadSession();
     _trades=await fetchTrades();
     /* Prices are fetched for OPEN symbols only. Nothing else on this page is
        marked to market. */
