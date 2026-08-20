@@ -88,14 +88,25 @@ def fetch_signals() -> pd.DataFrame:
 
 
 def load_closes() -> dict:
-    """{symbol: DataFrame[date, close]} sorted ascending."""
+    """{symbol: DataFrame[date, open, close]} sorted ascending.
+
+    `open` is here for SHORT marks: a short is MIS, one session, entered at the
+    open and squared off at the close of the same day.
+    """
     out = {}
     for f in STOCKS_DIR.glob("*.parquet"):
         try:
-            d = pd.read_parquet(f, columns=["date", "close"])
-        except Exception as e:
-            log.warning(f"{f.stem}: unreadable ({e})")
-            continue
+            d = pd.read_parquet(f, columns=["date", "open", "close"])
+        except Exception:
+            # A file without `open` should not cost us the symbol entirely --
+            # longs only need close. Its shorts simply cannot be marked.
+            try:
+                d = pd.read_parquet(f, columns=["date", "close"])
+                d["open"] = float("nan")
+                log.warning(f"{f.stem}: no `open` column — SHORT marks unavailable")
+            except Exception as e:
+                log.warning(f"{f.stem}: unreadable ({e})")
+                continue
         d["date"] = pd.to_datetime(d["date"])
         out[f.stem] = d.sort_values("date").reset_index(drop=True)
     return out
@@ -175,18 +186,44 @@ def mark_one_date(signals: pd.DataFrame, closes: dict, all_dates: list,
             hit = d.loc[d["date"] == dt, "close"]
             return float(hit.iloc[0]) if len(hit) else None
 
-        ref, prev, cur = close_on(s.signal_date), close_on(prev_date), close_on(mark_date)
-        if ref is None or prev is None or cur is None or ref <= 0 or prev <= 0:
-            continue
-
-        sign  = 1.0 if s.direction == "LONG" else -1.0
-        daily = (cur - prev) / prev * 100.0 * sign
-        cum   = (cur - ref) / ref * 100.0 * sign
-        # Exactly flat: neither correct nor incorrect. NULL, not False.
-        correct = None if cur == prev else bool(daily > 0)
+        def open_on(dt):
+            hit = d.loc[d["date"] == dt, "open"]
+            if not len(hit):
+                return None
+            v = float(hit.iloc[0])
+            return None if pd.isna(v) or v <= 0 else v
 
         age = sum(1 for x in all_dates
                   if s.signal_date < x <= mark_date)
+
+        if s.direction == "SHORT":
+            # MIS: one session. Entered at the open of the first trading day
+            # AFTER the signal published, squared off at that day's close.
+            #
+            # Not the signal date -- the EOD chain publishes after that close,
+            # so entering on it would trade on information that did not exist.
+            # Not close-to-close -- that carries the overnight gap, which MIS
+            # cannot hold. And no second mark: 1093 of the 1180 SHORT marks
+            # this replaces were measuring a position squared off days earlier.
+            if age != 1:
+                continue
+            entry = open_on(mark_date)
+            cur   = close_on(mark_date)
+            if entry is None or cur is None:
+                continue
+            daily = (entry - cur) / entry * 100.0     # short profits as price falls
+            cum   = daily                             # one session, nothing to accumulate
+            correct = None if cur == entry else bool(daily > 0)
+            ref = prev = entry                        # the entry is the only reference
+        else:
+            # LONG: CNC, held, marked close-to-close every day it stays live.
+            ref, prev, cur = close_on(s.signal_date), close_on(prev_date), close_on(mark_date)
+            if ref is None or prev is None or cur is None or ref <= 0 or prev <= 0:
+                continue
+            daily = (cur - prev) / prev * 100.0
+            cum   = (cur - ref) / ref * 100.0
+            # Exactly flat: neither correct nor incorrect. NULL, not False.
+            correct = None if cur == prev else bool(daily > 0)
 
         rows.append({
             "signal_date":    s.signal_date.date().isoformat(),
