@@ -161,12 +161,14 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   </table></div>
 
   <div class="shead"><h2>Open book</h2><span class="cnt" id="bookCnt"></span></div>
-  <div class="tbl-wrap"><table id="bookTbl" style="min-width:680px">
-    <thead><tr><th class="sortable" data-sort="symbol"    tabindex="0" aria-sort="none">Symbol<span class="sort-arrow"></span></th>
-               <th class="sortable" data-sort="direction" tabindex="0" aria-sort="none">Direction<span class="sort-arrow"></span></th>
-               <th class="num sortable" data-sort="age"   tabindex="0" aria-sort="none">Age<span class="sort-arrow"></span></th>
+  <div class="tbl-wrap"><table id="bookTbl" style="min-width:790px">
+    <thead><tr><th class="sortable" data-sort="symbol"     tabindex="0" aria-sort="none">Symbol<span class="sort-arrow"></span></th>
+               <th class="sortable" data-sort="direction"  tabindex="0" aria-sort="none">Direction<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-sort="called" tabindex="0" aria-sort="none">Call date<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-sort="age"    tabindex="0" aria-sort="none"
+                   title="Trading days since the call, not calendar days">Age · trading days<span class="sort-arrow"></span></th>
                <th class="num">Today</th><th class="num">Since call</th></tr></thead>
-    <tbody><tr><td colspan="5" class="loading">loading…</td></tr></tbody>
+    <tbody><tr><td colspan="6" class="loading">loading…</td></tr></tbody>
   </table></div>
 
   <div class="note" id="notes"></div>
@@ -255,15 +257,29 @@ function drawChart(days){
 var _book = [], _bookSort = null, _bookAsc = true;
 
 var BOOK_SORTS = {
-  symbol:    {asc:'A–Z',        desc:'Z–A',
+  symbol:    {label:'symbol',    asc:'A–Z',        desc:'Z–A',
               cmp:function(a,b){ return String(a.symbol||'').localeCompare(String(b.symbol||'')); }},
   /* LONG sorts before SHORT alphabetically, which is all "group them" needs. */
-  direction: {asc:'long first',      desc:'short first',
+  direction: {label:'direction', asc:'long first',      desc:'short first',
               cmp:function(a,b){ return String(a.direction||'').localeCompare(String(b.direction||'')); }},
-  /* age_days ascending = the most recently published signals first. */
-  age:       {asc:'newest first',    desc:'oldest first',
+  /* ISO dates sort lexicographically, which is also chronologically. */
+  called:    {label:'call date', asc:'oldest first',    desc:'newest first',
+              cmp:function(a,b){ return String(a.signal_date||'').localeCompare(String(b.signal_date||'')); }},
+  /* age_days ascending = the most recently published signals first. It is
+     TRADING days, not calendar -- verified against the observed trading
+     calendar, and the header says so. */
+  age:       {label:'age',       asc:'newest first',    desc:'oldest first',
               cmp:function(a,b){ return (Number(a.age_days)||0)-(Number(b.age_days)||0); }}
 };
+
+var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/* Formatted from the string. new Date('2026-07-24') is UTC midnight, which
+   renders as the 23rd anywhere west of Greenwich -- and a call date that is
+   off by one is worse than no call date. */
+function fmtDay(s){
+  var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||''));
+  return m ? (+m[3])+' '+MON[+m[2]-1] : '—';
+}
 
 function renderBook(){
   var rows = _book.slice();
@@ -275,7 +291,7 @@ function renderBook(){
   }
 
   var order = _bookSort && BOOK_SORTS[_bookSort]
-    ? 'sorted by '+_bookSort+' ('+(_bookAsc ? BOOK_SORTS[_bookSort].asc : BOOK_SORTS[_bookSort].desc)+')'
+    ? 'sorted by '+BOOK_SORTS[_bookSort].label+' ('+(_bookAsc ? BOOK_SORTS[_bookSort].asc : BOOK_SORTS[_bookSort].desc)+')'
     : 'sorted by today’s move';
   document.getElementById('bookCnt').textContent =
     _book.length+(_book.length>=500?'+ (showing first 500)':'')+' live signals · '+order;
@@ -292,10 +308,11 @@ function renderBook(){
   document.querySelector('#bookTbl tbody').innerHTML = rows.length ? rows.map(function(b){
     return '<tr><td class="sym">'+esc(b.symbol)+'</td>'+
            '<td><span class="pill '+(b.direction==='LONG'?'dir-long':'dir-short')+'">'+esc(b.direction)+'</span></td>'+
+           '<td class="num">'+fmtDay(b.signal_date)+'</td>'+
            '<td class="num">'+b.age_days+'d</td>'+
            '<td class="num '+(Number(b.daily_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.daily_move_pct,2)+'</td>'+
            '<td class="num '+(Number(b.cum_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.cum_move_pct,2)+'</td></tr>';
-  }).join('') : '<tr><td colspan="5" class="loading">No live signals.</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="loading">No live signals.</td></tr>';
 }
 
 function sortBook(key){

@@ -39,6 +39,9 @@ import pandas as pd
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
+# Repo root too: build_market imports `engine.upstox_ws` by package path, and
+# the Nifty fallback below imports build_market.
+sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     from engine.trading_calendar import is_trading_day
 except ModuleNotFoundError:
@@ -105,6 +108,34 @@ def nifty_series() -> pd.DataFrame:
     d = pd.read_parquet(MARKET_FILE, columns=["date", "nifty_close"])
     d["date"] = pd.to_datetime(d["date"])
     return d.dropna().sort_values("date").reset_index(drop=True)
+
+
+def nifty_from_upstox() -> pd.DataFrame:
+    """Daily Nifty closes straight from Upstox, same source build_market uses.
+
+    The benchmark used to come ONLY from market.parquet. Nothing in this repo
+    schedules build_market.py, which writes that file -- so it froze on
+    2026-08-11 and market_marks stopped with it, while signal_marks kept being
+    written nightly. The dashboard then compared the book against an index that
+    had stopped moving, and the only trace was a log line nobody reads.
+
+    This is not a second opinion on the number; it is a shorter path to the
+    same one, so the benchmark survives that file going stale again.
+    """
+    try:
+        from engine.build_market import _fetch_index_daily, NIFTY_KEY
+    except Exception as e:                      # noqa: BLE001 - want the reason
+        log.error(f"Nifty fallback unavailable: cannot import build_market ({e})")
+        return pd.DataFrame()
+    try:
+        df = _fetch_index_daily(NIFTY_KEY)
+    except Exception as e:                      # noqa: BLE001
+        log.error(f"Nifty fallback fetch raised: {e}")
+        return pd.DataFrame()
+    if df.empty or "close" not in df.columns:
+        return pd.DataFrame()
+    return (df[["date", "close"]].rename(columns={"close": "nifty_close"})
+              .dropna().sort_values("date").reset_index(drop=True))
 
 
 def trading_dates(closes: dict) -> list:
@@ -236,7 +267,36 @@ def main() -> int:
 
     # Benchmark
     nf = nifty_series()
-    if not nf.empty:
+
+    # Does the parquet actually cover the dates we are marking? Previously this
+    # was never asked: a stale file produced zero benchmark rows and one
+    # warning, and the dashboard quietly compared the book against nothing.
+    need = {pd.Timestamp(md) for md in want}
+    have = set(nf["date"]) if not nf.empty else set()
+    missing = sorted(need - have)
+    if missing:
+        log.warning(
+            f"market.parquet covers {len(need) - len(missing)} of {len(need)} mark date(s); "
+            f"missing {missing[0].date()}..{missing[-1].date()} — falling back to Upstox. "
+            f"build_market.py has not refreshed the file."
+        )
+        live = nifty_from_upstox()
+        if live.empty:
+            log.error("Nifty fallback returned nothing — benchmark will be incomplete")
+        else:
+            nf = (live if nf.empty
+                  else pd.concat([nf, live], ignore_index=True)
+                         .drop_duplicates(subset="date", keep="last"))
+            nf = nf.sort_values("date").reset_index(drop=True)
+            still = sorted(need - set(nf["date"]))
+            log.info(f"Nifty series now spans {nf['date'].min().date()}..{nf['date'].max().date()}"
+                     + (f"; {len(still)} mark date(s) still unbenchmarked" if still else "; all mark dates covered"))
+
+    if nf.empty:
+        # Loud: this is the state that stopped market_marks for eight sessions.
+        log.error("no Nifty series from market.parquet or Upstox — benchmark NOT written; "
+                  "excess-move on the dashboard will read '—' for these dates")
+    else:
         mrows = []
         for md in want:
             i = nf.index[nf["date"] == md]
@@ -252,9 +312,14 @@ def main() -> int:
                           "nifty_move_pct": round((cur - prev) / prev * 100.0, 4)})
         if mrows:
             upsert("/rest/v1/market_marks", mrows, "mark_date")
-            log.info(f"benchmark: {len(mrows)} Nifty mark(s)")
+            log.info(f"benchmark: {len(mrows)} Nifty mark(s) for "
+                     f"{mrows[0]['mark_date']}..{mrows[-1]['mark_date']}")
         else:
-            log.warning("no Nifty marks written — market.parquet may lag the stock closes")
+            # ERROR, not warning. This is the exact condition that ran for eight
+            # sessions unnoticed, and it means the dashboard's excess-move
+            # figure silently narrows or disappears.
+            log.error(f"no Nifty marks written for {len(want)} mark date(s) — neither "
+                      f"market.parquet nor Upstox had a usable close for them")
 
     log.info(f"DONE — {total} mark row(s)")
     return 0
