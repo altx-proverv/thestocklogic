@@ -101,8 +101,13 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   .loading{padding:60px 0;text-align:center;color:var(--muted2);font-family:var(--mono);font-size:12px}
 
   /* ── daily directional accuracy ─────────────────────────────── */
-  .srow{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:14px}
-  @media(max-width:820px){.srow{grid-template-columns:repeat(2,1fr)}}
+  .srow{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-top:14px}
+  @media(max-width:980px){.srow{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:600px){.srow{grid-template-columns:repeat(2,1fr)}}
+  /* Long/short is one card holding two figures, so the colour has to go on
+     each half rather than on the card. */
+  .scard .v .g{color:var(--green)} .scard .v .r{color:var(--red)}
+  .scard .v .slash{color:var(--muted2);font-weight:300;margin:0 6px}
   .chartbox{margin-top:22px;border:1px solid var(--line);border-radius:10px;background:var(--s1);padding:18px 18px 10px}
   .chartbox h2{font-size:13px;font-weight:700;letter-spacing:.3px}
   .chartbox .cs{font-family:var(--mono);font-size:10px;color:var(--muted2);margin-top:3px}
@@ -138,7 +143,6 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
     <div class="sub" id="hdrLine">loading…</div>
 
     <div class="srow" id="row1"></div>
-    <div class="srow" id="row2"></div>
   </div>
 </header>
 
@@ -328,33 +332,82 @@ async function load(){
     var t = days[0];                          // most recent mark date
     var asc = days.slice().reverse();
 
-    // Window average = mean of the daily accuracies, NOT a pooled ratio. Each
+    /* ── five headline figures, one row ───────────────────────────────
+       Each answers a different question. What went: "correct today" and "book
+       move today" (one day of noise -- they swung 25-65% day to day), notional
+       P&L (a hypothetical portfolio nobody could hold), and "cumulative"
+       (the same question as mean move since call, asked twice). */
+
+    // 1. Window average = mean of the daily accuracies, NOT a pooled ratio. Each
     // trading day counts once regardless of how many signals were live that day.
     var scored = days.filter(function(d){return d.accuracy_pct!==null;});
     var winAvg = scored.length ? scored.reduce(function(a,d){return a+Number(d.accuracy_pct);},0)/scored.length : null;
+    var winMarks = days.reduce(function(a,d){return a+(Number(d.n_scored)||0);},0);
+
+    /* Weighted by the marks behind each day: a 400-signal day should not count
+       the same as a 100-signal one when the figure is a per-signal average. */
+    function weighted(valKey, wKey){
+      var w=0, n=0;
+      days.forEach(function(d){
+        if(d[valKey]===null || d[valKey]===undefined) return;
+        var wt = Number(d[wKey])||0;
+        w += Number(d[valKey])*wt; n += wt;
+      });
+      return {val: n ? w/n : null, n: n};
+    }
+
+    // 3. Mean cumulative move since the signal date.
+    var meanCum = weighted('mean_cum_move','n_marks');
+    // 4. Accuracy split by direction -- this is where the book actually differs.
+    var lng = weighted('long_accuracy_pct','long_n');
+    var sht = weighted('short_accuracy_pct','short_n');
+    // 5. Signals per day, averaged across the window.
+    var spdAvg = days.length
+      ? days.reduce(function(a,d){return a+(Number(d.signals_per_day)||0);},0)/days.length : null;
+
+    /* 2. Excess move: the book's total move minus NIFTY's, over exactly the days
+       that HAVE a benchmark. market_marks currently stops short of the newest
+       marks, so summing the book across all 20 days against NIFTY across 13
+       would not be the same period -- and would quietly change the answer in
+       the book's favour. Both sides use the same days, and the card says how
+       many that is. */
+    var bench = days.filter(function(d){return d.nifty_move_pct!==null;});
+    var bookB = bench.reduce(function(a,d){return a+(Number(d.mean_daily_move)||0);},0);
+    var nifB  = bench.reduce(function(a,d){return a+(Number(d.nifty_move_pct)||0);},0);
+    var excess = bench.length ? bookB-nifB : null;
 
     document.getElementById('hdrLine').innerHTML =
       t.n_marks+' signals live · '+days.length+' trading days · '+
       n2(t.signals_per_day,1)+' signals/day · marked '+t.mark_date;
 
-    document.getElementById('row1').innerHTML =
-      card('Correct today', pctTxt(t.accuracy_pct,1),
-           Number(t.accuracy_pct)>=50?'green':'red',
-           t.n_correct+' of '+t.n_scored+(t.n_marks>t.n_scored?' · '+(t.n_marks-t.n_scored)+' flat':'')) +
-      card('Window average', pctTxt(winAvg,1),
-           winAvg>=50?'green':'red', 'across '+scored.length+' days') +
-      card('Book move today', signTxt(t.mean_daily_move,3), signCls(t.mean_daily_move), 'mean per signal') +
-      card('Cumulative', signTxt(t.mean_cum_move,2), signCls(t.mean_cum_move), 'mean since signal date');
+    function half(v){
+      return '<span class="'+(v===null?'':(Number(v)>=50?'g':'r'))+'">'+pctTxt(v,1)+'</span>';
+    }
 
-    document.getElementById('row2').innerHTML =
-      card('Long today', pctTxt(t.long_accuracy_pct,1),
-           Number(t.long_accuracy_pct)>=50?'green':'red', 'n='+t.long_n) +
-      card('Short today', pctTxt(t.short_accuracy_pct,1),
-           Number(t.short_accuracy_pct)>=50?'green':'red', 'n='+t.short_n) +
-      card('Notional P&amp;L', rup(t.notional_pnl), signCls(t.notional_pnl),
-           '₹1L/signal · cumulative') +
-      card('Nifty today', signTxt(t.nifty_move_pct,2), signCls(t.nifty_move_pct),
-           t.nifty_move_pct===null?'benchmark unavailable':'benchmark');
+    document.getElementById('row1').innerHTML =
+      card('Directional accuracy · '+days.length+'d', pctTxt(winAvg,1),
+           winAvg>=50?'green':'red',
+           'n='+winMarks+' marks · '+scored.length+' days') +
+
+      /* Signed, and labelled against the index, so it cannot be misread as a
+         second accuracy percentage. */
+      card('Excess move vs NIFTY',
+           bench.length ? signTxt(excess,2) : '—',
+           bench.length ? signCls(excess) : '',
+           bench.length
+             ? 'book '+signTxt(bookB,2)+' − index '+signTxt(nifB,2)+' · '+bench.length+' of '+days.length+' days'
+             : 'no NIFTY benchmark in this window') +
+
+      card('Mean move since call', signTxt(meanCum.val,2), signCls(meanCum.val),
+           'per signal · n='+meanCum.n) +
+
+      card('Long / short accuracy',
+           half(lng.val)+'<span class="slash">/</span>'+half(sht.val),
+           '',
+           'n='+lng.n+' long · '+sht.n+' short') +
+
+      card('Signals per day', n2(spdAvg,1), '',
+           'mean across '+days.length+' days');
 
     drawChart(asc);
 
