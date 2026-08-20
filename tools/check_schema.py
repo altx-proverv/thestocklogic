@@ -55,6 +55,12 @@ WHAT IT CHECKS
      a new table is born invisible and says nothing about it. Check 4 only
      sees tables a page already reads, and only when they have rows; check 5
      catches the rest, before a page is pointed at one.
+  6. No file served to a browser contains a JWT that decodes to
+     role=service_role. admin.html carried one as `const SK` while /admin was
+     publicly routed, so anyone loading the page got a key that bypasses RLS
+     on every table, read AND write, before touching the login form. This one
+     is static -- it runs even with no service key configured, because the
+     machine that most needs to catch a leaked key may not have one set.
 
 WHAT IT CANNOT CHECK
 --------------------
@@ -64,6 +70,8 @@ check catches that. Response-status checks in the callers cover the rest.
 """
 
 import ast
+import base64
+import json
 import os
 import re
 import sys
@@ -79,6 +87,75 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 UNCHECKABLE = []
 CONTROL = {"select", "order", "limit", "offset", "on_conflict", "columns", "and", "or"}
 SKIP_DIRS = {"venv", ".git", "node_modules", "engine/legacy"}
+
+# Tables the frontend queries that anon is DELIBERATELY not allowed to read.
+# Check 4 would otherwise report each as an RLS gap, and a check that reports
+# a decision as a defect stops being read. Every entry needs a reason.
+#
+# The check runs in BOTH directions: an allowlisted table that becomes readable
+# by anon again is a regression and fails, which is the case actually worth
+# catching -- a policy added back by hand, or a table recreated by a migration
+# that reinstated the old blanket grant.
+ANON_RESTRICTED = {
+    "waitlist":    "signup applications; anon may INSERT only "
+                   "(20260820194548_waitlist_revoke_anon_select)",
+    "subscribers": "own row only, for authenticated; anon has no read at all "
+                   "(20260820_subscribers_revoke_anon_select)",
+}
+
+# Extensions a browser can fetch directly. api/ is excluded: those are Vercel
+# serverless functions and run server-side.
+BROWSER_EXT = {".html", ".js", ".json", ".css", ".svg"}
+SERVER_ONLY_DIRS = {"api"}
+JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+")
+
+
+def _jwt_role(token: str):
+    """The `role` claim of a JWT, without verifying the signature.
+
+    Signature does not matter here -- the question is what the token claims to
+    be, and a service_role claim sitting in a shipped file is the finding
+    whether or not it still validates.
+    """
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload)).get("role")
+    except Exception:
+        return None
+
+
+def check_no_service_role_keys() -> list:
+    """Any service_role JWT committed as a literal. Static; needs no network."""
+    problems = []
+    scanned = 0
+    for p in sorted(ROOT.rglob("*")):
+        if not p.is_file() or p.suffix not in BROWSER_EXT:
+            continue
+        rel = str(p.relative_to(ROOT))
+        if any(rel.startswith(d) or f"/{d}/" in f"/{rel}" for d in SKIP_DIRS):
+            continue
+        try:
+            text = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        scanned += 1
+        server_side = rel.split("/")[0] in SERVER_ONLY_DIRS
+        for tok in set(JWT_RE.findall(text)):
+            if _jwt_role(tok) != "service_role":
+                continue
+            if server_side:
+                problems.append(
+                    f"{rel}: service_role key committed as a literal — "
+                    f"read it from an environment variable instead")
+            else:
+                problems.append(
+                    f"{rel}: SERVICE_ROLE KEY IS SERVED TO BROWSERS — it bypasses RLS "
+                    f"on every table, read and write. Move the operation server-side "
+                    f"and treat this key as compromised.")
+    print(f"scanned {scanned} browser-served file(s) for leaked service keys: "
+          f"{'none found' if not problems else str(len(problems)) + ' FOUND'}")
+    return problems
 
 
 def live_schema() -> dict:
@@ -150,6 +227,16 @@ def check_anon_visibility(tables) -> list:
         if anon_err:
             print(f"  {t:<24} anon read failed: {anon_err}")
             problems.append(f"{t}: anon read failed: {anon_err}")
+            continue
+        if t in ANON_RESTRICTED:
+            # Deliberately unreadable. Verify it STAYS that way.
+            if anon:
+                print(f"  {t:<24} anon {anon} / service {svc}   <-- REGRESSION, should be unreadable")
+                problems.append(
+                    f"{t}: anon can read {anon} row(s) but is meant to be restricted "
+                    f"({ANON_RESTRICTED[t]}). A policy has been added back.")
+            else:
+                print(f"  {t:<24} anon 0 / service {svc}   restricted on purpose")
             continue
         if svc and not anon:
             print(f"  {t:<24} anon 0 / service {svc}   <-- RLS POLICY GAP")
@@ -331,14 +418,24 @@ def scan_payloads(path: Path):
 
 
 def main() -> int:
+    # Check 6 first, and before the service-key gate: it needs no network and
+    # no credentials, and the machine most likely to be holding a leaked key is
+    # the one with nothing configured.
+    leaked = check_no_service_role_keys()
+
     if not SUPABASE_KEY:
         print("SUPABASE_SERVICE_KEY not set — cannot read the live schema.")
+        if leaked:
+            print(f"\n{len(leaked)} PROBLEM(S):\n")
+            for p in leaked:
+                print(f"  {p}")
+            return 1
         return 2
 
     schema = live_schema()
     print(f"live schema: {len(schema)} tables\n")
 
-    problems = []
+    problems = list(leaked)
     checked_urls = checked_payloads = 0
     frontend_tables = set()
 

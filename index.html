@@ -343,8 +343,13 @@ async function doSignIn(){
   var res = await _supa.auth.signInWithPassword({email:email, password:pass});
   if(res.error){err.textContent='Invalid email or password.';err.style.display='block';return;}
   // Check if approved subscriber
-  var r = await fetch(SB+'/rest/v1/subscribers?email=eq.'+encodeURIComponent(email)+'&status=eq.active&limit=1',
-    {headers:{apikey:AK,Authorization:'Bearer '+AK}});
+  /* Session token, not the anon key: subscribers is readable only by the
+     signed-in owner of the row now. Matched on user_id rather than the email
+     typed into the form -- the row is found by identity, so a capitalised
+     address can no longer read as "pending approval". */
+  var _s = res.data.session;
+  var r = await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+encodeURIComponent(_s.user.id)+'&status=eq.active&limit=1',
+    {headers:{apikey:AK,Authorization:'Bearer '+_s.access_token}});
   var data = await r.json();
   if(!data||!data.length){
     await _supa.auth.signOut();

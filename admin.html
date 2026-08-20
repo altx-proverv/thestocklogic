@@ -110,11 +110,29 @@ input:focus{border-color:rgba(77,184,255,.4)}
 <script>
 const SB  = 'https://eibdlcanpudjgmkjxrga.supabase.co';
 const AK  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
-const SK  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODUzNTE4MywiZXhwIjoyMDk0MTExMTgzfQ.zUTVliCU56zNRIvdC_joEl9JxuErFlLioahkQfwBJ6g';
+/* There is no service key on this page.
+   One used to sit here as `const SK`, and /admin is public -- so anyone who
+   loaded the page got a service_role key that bypasses RLS on every table,
+   read and write, before the login form below had been touched.
+   Every request here now goes out with the operator's own session token and is
+   governed by RLS: subscribers/waitlist reads and the waitlist status update
+   are gated on public.is_admin(). The one operation that genuinely needs
+   service_role -- creating an auth user -- lives in /api/admin-approve, where
+   the key is an environment variable and never reaches a browser. */
 
 var _supa = null;
 var _session = null;
+/* Cosmetic only: it decides which form to show, not what the database will
+   answer. Authorisation is public.is_admin() and cannot be edited from here. */
 var _adminEmails = ['dua.hemal@gmail.com'];
+
+/* Session token, not the anon key. apikey stays AK because PostgREST wants a
+   project key in that header; the ROLE comes from the bearer token. */
+function ahdr(extra){
+  var h = {apikey: AK, Authorization: 'Bearer ' + (_session ? _session.access_token : AK)};
+  if (extra) for (var k in extra) h[k] = extra[k];
+  return h;
+}
 
 async function adminLogin() {
   var email = document.getElementById('loginEmail').value.trim();
@@ -143,15 +161,15 @@ async function adminLogout() {
 }
 
 async function loadDashboard() {
-  var hdrs = {apikey: SK, Authorization: 'Bearer ' + SK};
-  var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK};
-
-  // Load waitlist
-  var wRes = await fetch(SB + '/rest/v1/waitlist?order=created_at.desc', {headers: hdrs});
+  // Both reads are RLS-gated on public.is_admin(). A non-admin session gets an
+  // empty array here, not an error -- so check the status rather than trusting
+  // the length, or "not authorised" renders identically to "nothing pending".
+  var wRes = await fetch(SB + '/rest/v1/waitlist?order=created_at.desc', {headers: ahdr()});
+  if (!wRes.ok) { adminError('Could not load the waitlist', wRes); return; }
   var waitlist = await wRes.json();
 
-  // Load subscribers count
-  var sRes = await fetch(SB + '/rest/v1/subscribers?select=id', {headers: {apikey: SK, Authorization: 'Bearer ' + SK}});
+  var sRes = await fetch(SB + '/rest/v1/subscribers?select=id', {headers: ahdr()});
+  if (!sRes.ok) { adminError('Could not load subscribers', sRes); return; }
   var subs = await sRes.json();
 
   var pending  = waitlist.filter(function(w){return w.status==='pending';});
@@ -207,61 +225,58 @@ function renderApproved(list) {
     '</tbody></table>';
 }
 
-function genPassword() {
-  var chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#';
-  var pass = '';
-  for (var i = 0; i < 10; i++) pass += chars[Math.floor(Math.random()*chars.length)];
-  return pass;
+async function adminError(what, res) {
+  var detail = '';
+  try { detail = (await res.text()).slice(0, 200); } catch (e) {}
+  alert(what + ' (HTTP ' + res.status + ').' +
+        (res.status === 401 || res.status === 403
+          ? '\n\nThe session is not recognised as an admin. Sign out and back in.'
+          : '') +
+        (detail ? '\n\n' + detail : ''));
 }
 
+/* Creating an auth user requires service_role, which no policy can grant and
+   which must never be in this page. The server does those three writes -- auth
+   user, subscriber row, waitlist status -- behind a check on the caller's
+   session, and returns the temporary password once. */
 async function approveUser(waitlistId, email, name) {
-  var tempPass = genPassword();
-  var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK, 'Content-Type': 'application/json'};
-
-  // 1. Create auth user via Supabase Admin API
-  var authRes = await fetch(SB + '/auth/v1/admin/users', {
+  var res = await fetch('/api/admin-approve', {
     method: 'POST',
-    headers: shdrs,
-    body: JSON.stringify({email: email, password: tempPass, email_confirm: true})
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + (_session ? _session.access_token : '')
+    },
+    body: JSON.stringify({waitlistId: waitlistId, email: email, name: name})
   });
-  var authData = await authRes.json();
 
-  if (!authData.id) {
-    alert('Failed to create user: ' + (authData.message || JSON.stringify(authData)));
+  var data = {};
+  try { data = await res.json(); } catch (e) {}
+
+  if (!res.ok && res.status !== 207) {
+    alert('Could not approve: ' + (data.error || 'HTTP ' + res.status) +
+          (data.detail ? '\n\n' + data.detail : ''));
+    loadDashboard();
     return;
   }
+  if (data.warning) alert(data.warning + (data.detail ? '\n\n' + data.detail : ''));
 
-  // 2. Add to subscribers table
-  await fetch(SB + '/rest/v1/subscribers', {
-    method: 'POST',
-    headers: {...shdrs, 'Prefer': 'return=minimal'},
-    body: JSON.stringify({user_id: authData.id, email: email, name: name, status: 'active', plan: 'beta'})
-  });
-
-  // 3. Update waitlist status
-  await fetch(SB + '/rest/v1/waitlist?id=eq.' + waitlistId, {
-    method: 'PATCH',
-    headers: {...shdrs, 'Prefer': 'return=minimal'},
-    body: JSON.stringify({status: 'approved', approved_at: new Date().toISOString()})
-  });
-
-  // 4. Show credentials
   document.getElementById('credEmail').textContent = email;
-  document.getElementById('credPass').textContent  = tempPass;
+  document.getElementById('credPass').textContent  = data.password || '(not returned)';
   document.getElementById('credModal').classList.add('open');
 
-  // Reload dashboard
   loadDashboard();
 }
 
+/* Stays client-side: a status change is an ordinary UPDATE, and the
+   "waitlist admin update" policy authorises it for an admin session. */
 async function rejectUser(waitlistId) {
   if (!confirm('Reject this application?')) return;
-  var shdrs = {apikey: SK, Authorization: 'Bearer ' + SK, 'Content-Type': 'application/json'};
-  await fetch(SB + '/rest/v1/waitlist?id=eq.' + waitlistId, {
+  var r = await fetch(SB + '/rest/v1/waitlist?id=eq.' + waitlistId, {
     method: 'PATCH',
-    headers: {...shdrs, 'Prefer': 'return=minimal'},
+    headers: ahdr({'Content-Type': 'application/json', 'Prefer': 'return=minimal'}),
     body: JSON.stringify({status: 'rejected'})
   });
+  if (!r.ok) { await adminError('Could not reject the application', r); }
   loadDashboard();
 }
 

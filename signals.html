@@ -884,6 +884,14 @@ function toggleArch(){document.getElementById('archBody').classList.toggle('open
 // ── SUPABASE AUTH ─────────────────────────────────────────────
 var _supa = null;
 var _user = null;
+/* subscribers is own-row-only now, so every read of it needs the session
+   token. Kept in step with _user through setAuth() -- they are set in four
+   different places and drifting apart would silently close the gate. */
+var _token = null;
+function setAuth(session){
+  _user  = session ? session.user : null;
+  _token = session ? session.access_token : null;
+}
 
 async function checkAuth() {
   if (!_supa) {
@@ -891,14 +899,22 @@ async function checkAuth() {
     _supa = window.supabase.createClient(SB, AK);
   }
   var res = await _supa.auth.getSession();
-  _user = res.data.session ? res.data.session.user : null;
+  setAuth(res.data.session);
   if (_user) {
-    // Check if subscriber is approved
-    var r = await fetch(SB+'/rest/v1/subscribers?email=eq.'+encodeURIComponent(_user.email)+'&status=eq.active&limit=1',
-      {headers:{apikey:AK,Authorization:'Bearer '+AK}});
-    var data = await r.json();
-    if (!data || !data.length) {
-      _user = null; // not approved yet
+    // Check if subscriber is approved.
+    /* Session token, not the anon key -- subscribers is own-row-only now.
+       Keyed on user_id: identity, not a string that can differ in case. */
+    var r = await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+encodeURIComponent(_user.id)+'&status=eq.active&limit=1',
+      {headers:{apikey:AK,Authorization:'Bearer '+_token}});
+    /* A failed request is not a verdict. Treating non-200 as "not approved"
+       is how an RLS or network problem would present as a locked-out user
+       with nothing in any log. */
+    if (!r.ok) {
+      console.error('subscriber check failed: HTTP '+r.status+' '+(await r.text()).slice(0,200));
+      setAuth(null);
+    } else {
+      var data = await r.json();
+      if (!data || !data.length) setAuth(null); // not approved yet
     }
   }
   renderGate();
@@ -908,8 +924,8 @@ function updateNavAuth() {
   // Unlock ATLAS only for admin plan
   var atlasNav = document.getElementById("atlasNav");
   if (atlasNav && _user) {
-    fetch(SB+"/rest/v1/subscribers?email=eq."+encodeURIComponent(_user.email)+"&plan=eq.admin&limit=1",
-      {headers:{apikey:AK,Authorization:"Bearer "+AK}})
+    fetch(SB+"/rest/v1/subscribers?user_id=eq."+encodeURIComponent(_user.id)+"&plan=eq.admin&limit=1",
+      {headers:{apikey:AK,Authorization:"Bearer "+_token}})
     .then(function(r){return r.json();})
     .then(function(d){
       if(d&&d.length){
@@ -1027,7 +1043,7 @@ function showResetPassword() {
 }
 async function signOut() {
   await _supa.auth.signOut();
-  _user = null;
+  setAuth(null);
   window.location.href = "/";
 }
 
@@ -1039,12 +1055,12 @@ setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}
 window.addEventListener('load', function(){
   if (!_supa) _supa = window.supabase.createClient(SB, AK);
   _supa.auth.onAuthStateChange(function(event, session){
-    _user = session ? session.user : null;
+    setAuth(session);
     updateNavAuth();
   });
   // Also check session immediately on load
   _supa.auth.getSession().then(function(res){
-    _user = res.data.session ? res.data.session.user : null;
+    setAuth(res.data.session);
     updateNavAuth();
   });
   render().catch(function(e){console.error(e);});
