@@ -27,6 +27,10 @@ BASE_URL = "https://api.upstox.com/v2"
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
+# Supabase writes ran with no timeout at all: a hung connection would stall a
+# cron run indefinitely. Matches btst_engine and daily_report.
+HTTP_TIMEOUT = 15
+
 # The deployment box runs Etc/UTC and cron fires in UTC. Every session window
 # below is IST, so a naive datetime.now() compared them against UTC wall clock:
 # three of the four scheduled --update runs matched no window at all and exited
@@ -352,7 +356,7 @@ def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
     # Delete existing live sector data for today's session
     requests.delete(
         f"{supabase_url}/rest/v1/sector_heatmap?signal_date=eq.{today}",
-        headers=headers
+        headers=headers, timeout=HTTP_TIMEOUT
     )
 
     records = []
@@ -375,7 +379,7 @@ def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
 
     r = requests.post(
         f"{supabase_url}/rest/v1/sector_heatmap",
-        headers=headers, json=records
+        headers=headers, json=records, timeout=HTTP_TIMEOUT
     )
     if r.status_code in (200, 201):
         log.info(f"Live regime pushed to Supabase — session: {session}")
@@ -384,7 +388,11 @@ def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
         bot2   = sector_df[sector_df["trade_bias"]=="short"]["sector"].tolist()[:2]
         log.info(f"Regime: {regime} | Long: {top2} | Short: {bot2}")
     else:
-        log.warning(f"Live regime push failed: {r.status_code}")
+        # Body, not just the status. This function already checked its response
+        # -- which is why the regime feed works and live_prices did not -- but a
+        # bare status code would not name the next PGRST failure either.
+        log.error(f"Live regime push failed: HTTP {r.status_code} "
+                  f"{(r.text or '').strip()[:300] or '(empty body)'}")
 
 
 def run_session_update():
@@ -470,11 +478,33 @@ def run_session_update():
 
 
 def push_live_prices(quotes: dict, instrument_keys: dict):
-    """Push latest LTP for all stocks to live_prices table."""
+    """Push latest LTP for all stocks to live_prices table.
+
+    This function reported success it had not earned. It logged
+    "Live prices updated: N stocks" unconditionally after the batch loop, where
+    N was the number of records BUILT, not the number accepted. A failing batch
+    logged a warning with a bare status code and no body, and then the success
+    line printed anyway and contradicted it. reports/live.log therefore read as
+    a healthy feed twice a day while live_prices stayed empty, and the atlas
+    dashboard had no price to mark open positions against.
+
+    Same shape as _log_intent posting gtt_trigger_id, btst_engine selecting
+    live_prices.volume, and btst pushing delivery_pct: a write nobody checked,
+    or checked without printing what PostgREST actually said. The status code
+    alone does not distinguish a missing column (PGRST204) from an upsert with
+    no unique constraint to conflict on (42P10) -- the body does, so log it.
+
+    Raises on a missing service key rather than returning quietly: a no-op that
+    looks identical to a successful run is what let this hide for months.
+    """
     supabase_url = os.environ.get("SUPABASE_URL", "https://eibdlcanpudjgmkjxrga.supabase.co")
     supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not supabase_key:
-        return
+        raise RuntimeError(
+            "SUPABASE_SERVICE_KEY is not set -- live_prices cannot be written. "
+            "Refusing to exit quietly: this used to return None and the caller "
+            "logged a completed session update either way."
+        )
 
     headers = {
         "apikey":        supabase_key,
@@ -502,18 +532,40 @@ def push_live_prices(quotes: dict, instrument_keys: dict):
     if not records:
         return
 
-    # Push in batches of 200
+    # Push in batches of 200. Count what is ACCEPTED, not what was built.
+    sent = 0
+    failures = []
     for i in range(0, len(records), 200):
         batch = records[i:i+200]
-        r = requests.post(
-            f"{supabase_url}/rest/v1/live_prices",
-            headers=headers,
-            json=batch,
-        )
-        if r.status_code not in (200, 201):
-            log.warning(f"live_prices push failed: {r.status_code}")
+        try:
+            r = requests.post(
+                f"{supabase_url}/rest/v1/live_prices",
+                headers=headers,
+                json=batch,
+                timeout=HTTP_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            failures.append(f"batch {i//200}: {type(e).__name__}: {e}")
+            log.error(f"live_prices push batch {i//200} raised: {e}")
+            continue
+        if r.status_code in (200, 201):
+            sent += len(batch)
+        else:
+            # The body carries the PostgREST code. Without it the log says 400
+            # and nothing more, which is how live_prices.volume survived.
+            detail = (r.text or "").strip()[:300] or "(empty body)"
+            failures.append(f"batch {i//200}: HTTP {r.status_code} {detail}")
+            log.error(f"live_prices push failed: HTTP {r.status_code} {detail}")
 
-    log.info(f"Live prices updated: {len(records)} stocks")
+    if failures:
+        log.error(
+            f"live_prices: {sent}/{len(records)} rows accepted, "
+            f"{len(failures)} batch(es) rejected. First: {failures[0]}"
+        )
+    else:
+        log.info(f"Live prices updated: {sent} stocks")
+
+    return sent
 
 
 if __name__ == "__main__":
