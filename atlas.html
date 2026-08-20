@@ -102,7 +102,12 @@ td.sym{font-weight:700;color:var(--ink)}
 .modal.show{display:flex}
 .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:24px;max-width:420px;width:100%}
 .modal-box h3{font-family:var(--disp);font-size:21px;letter-spacing:1.2px;font-weight:400;margin-bottom:4px}
-.modal-box .sub{font-size:11px;color:var(--faint);margin-bottom:16px}
+.modal-box .sub{font-size:11px;color:var(--faint);margin-bottom:14px}
+/* The EXIT button writes the record and nothing else. It has to read that way
+   before it is pressed, not after. */
+.modal-note{font-size:11px;line-height:1.5;color:var(--orange);background:rgba(245,132,69,.08);
+  border:1px solid rgba(245,132,69,.32);border-radius:6px;padding:9px 11px;margin-bottom:4px}
+.marksub{font-size:9px;color:var(--faint);letter-spacing:.3px;margin-top:2px}
 .modal-box label{display:block;font-size:9px;letter-spacing:1.5px;color:var(--faint);text-transform:uppercase;margin:12px 0 5px}
 .modal-box input,.modal-box select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);font-family:var(--mono);font-size:13px;padding:9px 11px;border-radius:5px}
 .modal-actions{display:flex;gap:9px;margin-top:20px}
@@ -140,9 +145,9 @@ td.sym{font-weight:700;color:var(--ink)}
     <span><b>MANUAL RISK REQUIRED</b> &mdash; <span id="riskCount">0</span> open position(s). ATLAS does not place stop-losses. Recommended stops are shown in the STOP column.</span>
   </div>
 
-  <div id="staleBanner" class="banner b-stale">
+  <div id="markBanner" class="banner b-stale">
     <span>&#9888;</span>
-    <span><b>PRICE FEED STALE</b> &mdash; last update <span id="staleWhen">—</span>. Unrealised P&amp;L is marked against old prices and should not be relied on.</span>
+    <span id="markBannerText"></span>
   </div>
 
   <div class="capital">
@@ -151,7 +156,7 @@ td.sym{font-weight:700;color:var(--ink)}
       <div class="cap-fig">
         <div><div class="cap-lbl">Committed</div><div class="v amb" id="capDep">—</div></div>
         <div><div class="cap-lbl">Risk at Stop</div><div class="v neg" id="capRisk">—</div></div>
-        <div><div class="cap-lbl">Positions + Triggers</div><div class="v" id="capTrades">—</div></div>
+        <div><div class="cap-lbl">Open Positions</div><div class="v" id="capTrades">—</div></div>
       </div>
     </div>
     <div class="cap-note">Available funds are read live from the broker at
@@ -159,9 +164,6 @@ td.sym{font-weight:700;color:var(--ink)}
   </div>
 
   <div class="summary" id="summary"></div>
-
-  <div class="shead"><h2>Cancelled &amp; Not Filled</h2><div class="rule"></div><span class="cnt" id="cntOther">0</span></div>
-  <div class="tblwrap" id="tblOther"></div>
 
   <div class="shead"><h2>Open Positions</h2><div class="rule"></div><span class="cnt" id="cntOpen">0</span></div>
   <div class="tblwrap" id="tblOpen"></div>
@@ -182,6 +184,9 @@ td.sym{font-weight:700;color:var(--ink)}
   <div class="modal-box">
     <h3>Record Exit</h3>
     <div class="sub" id="exitSym">—</div>
+    <div class="modal-note"><b>Record-keeping only — this places no order.</b>
+      It writes the exit price, date and reason to the trade record and marks the
+      position CLOSED. Sell the position at the broker yourself.</div>
     <label>Exit price</label>
     <input id="exitPrice" type="number" step="0.05" placeholder="0.00">
     <label>Exit date</label>
@@ -197,7 +202,7 @@ td.sym{font-weight:700;color:var(--ink)}
     <div class="err" id="exitErr"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeExit()">Cancel</button>
-      <button class="btn btn-go" id="exitSave" onclick="saveExit()">Save</button>
+      <button class="btn btn-go" id="exitSave" title="Writes the trade record. No order is placed." onclick="saveExit()">Save record</button>
     </div>
   </div>
 </div>
@@ -216,10 +221,25 @@ var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV
    derives from the trades themselves. */
 var CFG={riskPerTrade:3000, maxNotionalPerTrade:100000, maxTradesPerDay:3};
 
-/* Unrealised P&L is only shown if the price feed is fresher than this. */
-var PRICE_STALE_HOURS=24;
+/* Open positions are marked against the most recent price that exists, and the
+   page always says which date that price is from. It does NOT hide the number
+   behind a freshness threshold -- the old page suppressed P&L entirely once the
+   feed passed 24h, so the operator saw "stale" and learned nothing, while a
+   19-hour-old close rendered as though it were a live quote. Both failures came
+   from the same thing: a mark with no date attached to it.
 
-var _trades=[], _prices={}, _priceAt=null, _session=null, _editing=null;
+   Two sources, most recent wins:
+     live_prices  intraday LTP, written by engine/upstox_ws.py at each session
+                  update (the last lands 15:15 IST). As of 21 Aug 2026 this
+                  table returns ZERO rows to the anon role, so in practice the
+                  close below is what marks the book. If the feed comes back
+                  this picks it up automatically.
+     signal_marks daily mark_close from the EOD chain. One row per signal, so a
+                  symbol repeats within a mark_date; ordering mark_date desc and
+                  keeping the first hit per symbol takes the latest close. */
+var MARK_ROWS=400;
+
+var _trades=[], _mark={}, _session=null, _editing=null;
 
 function hdr(){
   var h={apikey:AK, Authorization:'Bearer '+AK, 'Content-Type':'application/json'};
@@ -234,6 +254,17 @@ function pnlHtml(v){
   return '<span class="'+(v>=0?'pos':'neg')+'" style="font-weight:700">'+money(v)+'</span>';
 }
 function fmtDate(d){ if(!d) return '—'; var x=new Date(d); return isNaN(x)?'—':x.toLocaleDateString('en-IN',{day:'numeric',month:'short'}); }
+var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/* 'YYYY-MM-DD' -> '20 Aug', formatted from the string. new Date('2026-08-20')
+   is UTC midnight, which renders as the 19th in any timezone west of London --
+   a mark date is the one thing on this page that must not be off by a day. */
+function fmtDay(s){
+  var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||''));
+  return m ? (+m[3])+' '+MON[+m[2]-1] : '—';
+}
+/* The record is an IST one; the browser may be anywhere. */
+function istDay(d){ return new Date(d.getTime()+330*60000).toISOString().split('T')[0]; }
+function todayIST(){ return istDay(new Date()); }
 function st(t){ return (t.status||'').toUpperCase(); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 
@@ -258,30 +289,77 @@ async function fetchTrades(){
   return await r.json();
 }
 
-async function fetchPrices(symbols){
+/* PostgREST: a bare in.(M&M,GRASIM) ends the query parameter at the ampersand
+   and the whole request 400s -- which suppressed the mark for EVERY open
+   position, not just the one with the ampersand. M&M is a real NSE symbol and
+   has already been traded here. Quote each value and encode the filter.
+   atlas/reporting/daily_report.py carries the same fix for the same reason. */
+function inFilter(symbols){
+  return encodeURIComponent('in.('+symbols.map(function(s){
+    return '"'+String(s).replace(/"/g,'""')+'"';
+  }).join(',')+')');
+}
+
+async function getJSON(path){
+  try{
+    var r=await fetch(SB+path,{headers:hdr()});
+    if(!r.ok){ console.error('ATLAS: '+path+' -> HTTP '+r.status); return []; }
+    return await r.json()||[];
+  }catch(e){ console.error('ATLAS: '+path+' -> '+e.message); return []; }
+}
+
+/* _mark[symbol] = {px, day:'YYYY-MM-DD', src:'LTP'|'CLOSE', at:Date|null}.
+   A mark without a date it can name is not used at all -- an undated number is
+   how a stale price passes for a live one. */
+async function fetchMarks(symbols){
+  _mark={};
   if(!symbols.length) return;
-  var r=await fetch(SB+'/rest/v1/live_prices?symbol=in.('+symbols.join(',')+')',{headers:hdr()});
-  if(!r.ok) return;
-  var rows=await r.json()||[];
-  rows.forEach(function(p){
-    _prices[p.symbol]=parseFloat(p.ltp||0);
-    var t=p.updated_at?new Date(p.updated_at):null;
-    if(t && (!_priceAt || t>_priceAt)) _priceAt=t;
+  var f=inFilter(symbols);
+  var res=await Promise.all([
+    getJSON('/rest/v1/live_prices?symbol='+f+'&select=symbol,ltp,updated_at'),
+    getJSON('/rest/v1/signal_marks?symbol='+f+
+            '&select=symbol,mark_date,mark_close&order=mark_date.desc&limit='+MARK_ROWS)
+  ]);
+  var live=res[0], marks=res[1];
+
+  marks.forEach(function(m){
+    var px=parseFloat(m.mark_close);
+    if(!px || !m.mark_date) return;
+    if(_mark[m.symbol] && _mark[m.symbol].day>=m.mark_date) return;
+    _mark[m.symbol]={px:px, day:String(m.mark_date).slice(0,10), src:'CLOSE', at:null};
+  });
+  live.forEach(function(p){
+    var px=parseFloat(p.ltp);
+    if(!px || !p.updated_at) return;
+    var t=new Date(p.updated_at);
+    if(isNaN(t)) return;
+    var day=istDay(t);
+    /* A same-day tie goes to the LTP: it is the later of the two. */
+    if(_mark[p.symbol] && _mark[p.symbol].day>day) return;
+    _mark[p.symbol]={px:px, day:day, src:'LTP', at:t};
   });
 }
 
-function priceFresh(){
-  if(!_priceAt) return false;
-  return (Date.now()-_priceAt.getTime())/36e5 < PRICE_STALE_HOURS;
+function markLabel(m){
+  if(!m) return 'no mark';
+  if(m.src==='LTP'){
+    return 'LTP '+fmtDay(m.day)+' '+m.at.toLocaleTimeString('en-IN',
+      {hour:'2-digit',minute:'2-digit',timeZone:'Asia/Kolkata'})+' IST';
+  }
+  return fmtDay(m.day)+' close';
 }
 
+/* Only an OPEN position is marked. Once a trade is CLOSED its P&L is realised
+   and comes from exit_price; marking it against a later close would invent a
+   number the account never had. The status check is here rather than at the
+   call site so no future caller can get it wrong. */
 function unrealised(t){
-  if(!priceFresh()) return null;
-  var ltp=_prices[t.symbol];
-  if(!ltp) return null;
+  if(st(t)!=='OPEN') return null;
+  var m=_mark[t.symbol];
+  if(!m) return null;
   var e=parseFloat(t.entry_price||0), q=parseFloat(t.qty||0);
   if(!e||!q) return null;
-  return (t.direction==='SHORT') ? (e-ltp)*q : (ltp-e)*q;
+  return {v:(t.direction==='SHORT') ? (e-m.px)*q : (m.px-e)*q, m:m};
 }
 function realised(t){
   var x=parseFloat(t.exit_price||0), e=parseFloat(t.entry_price||0), q=parseFloat(t.qty||0);
@@ -304,30 +382,29 @@ function render(){
   var open   = _trades.filter(function(t){return st(t)==='OPEN';});
   var closed = _trades.filter(function(t){return st(t)==='CLOSED';});
   var shadow = _trades.filter(function(t){return st(t)==='SHADOW';});
-  /* Everything else: CANCELLED, any stray GTT_PENDING, and any status this page
-     does not know about. The page used to render exactly four statuses and drop
-     the rest, so when the first four real orders were cancelled they vanished
-     from the record entirely. A catch-all means a new status shows up as a row
-     with its name in it rather than disappearing. */
-  var KNOWN  = ['OPEN','CLOSED','SHADOW'];
-  var other  = _trades.filter(function(t){return KNOWN.indexOf(st(t))<0;});
-  /* A resting trigger still commits cash even though ATLAS no longer places
-     them; a cancelled one does not. */
-  var resting = _trades.filter(function(t){return st(t)==='GTT_PENDING';});
 
   /* Committed and at-risk are derived from the trades themselves. There is no
      allocated pool to show a percentage against, and no "available" figure --
      that lives at the broker and is read live at decision time by
-     atlas/risk/funds.py, not stored anywhere this page can see. */
-  var committed = open.concat(resting).reduce(function(s,t){return s+notionalOf(t);},0);
-  var atRisk    = open.concat(resting).reduce(function(s,t){return s+riskOf(t);},0);
+     atlas/risk/funds.py, not stored anywhere this page can see.
+     Only OPEN counts: the GTT path is gone, so there are no resting triggers
+     committing cash any more. */
+  var committed = open.reduce(function(s,t){return s+notionalOf(t);},0);
+  var atRisk    = open.reduce(function(s,t){return s+riskOf(t);},0);
   document.getElementById('capDep').textContent=rup(committed);
   document.getElementById('capRisk').textContent=rup(atRisk);
-  document.getElementById('capTrades').textContent=open.length+resting.length;
+  document.getElementById('capTrades').textContent=open.length;
 
   var realTotal=closed.reduce(function(s,t){var v=realised(t); return s+(v||0);},0);
-  var unrealTotal=0, haveUnreal=false;
-  open.forEach(function(t){var v=unrealised(t); if(v!==null){unrealTotal+=v; haveUnreal=true;}});
+  /* The headline is only as current as its STALEST input, so carry the oldest
+     mark date across the open book, not the newest. */
+  var unrealTotal=0, marked=0, asOf=null, asOfSrc='';
+  open.forEach(function(t){
+    var u=unrealised(t);
+    if(!u) return;
+    unrealTotal+=u.v; marked++;
+    if(asOf===null || u.m.day<asOf){ asOf=u.m.day; asOfSrc=u.m.src; }
+  });
   var wins=closed.filter(function(t){var v=realised(t); return v!==null && v>0;}).length;
   var settled=closed.filter(function(t){return realised(t)!==null;}).length;
 
@@ -336,10 +413,15 @@ function render(){
   chip.className='chip '+(live?'c-live':'c-shadow');
   txt.textContent=live?'LIVE':'SHADOW';
 
+  /* The mark date rides with the number wherever the number goes. */
+  var unrealSub = !open.length ? 'no open positions'
+    : !marked   ? 'no price for any open position'
+    : (asOfSrc==='LTP' ? 'LTP '+fmtDay(asOf) : 'at '+fmtDay(asOf)+' close')
+      + (marked<open.length ? ' · '+marked+'/'+open.length+' marked' : '');
+
   var stats=[
-    {v:other.length,l:'Cancelled / Unfilled',c:'amb'},
     {v:open.length,l:'Open Positions',c:'acc',s:'no limit'},
-    {v:haveUnreal?money(unrealTotal):'—',l:'Unrealised P&L',c:unrealTotal>=0?'pos':'neg',s:haveUnreal?'':'no fresh prices'},
+    {v:marked?money(unrealTotal):'—',l:'Unrealised P&L',c:marked&&unrealTotal<0?'neg':(marked?'pos':''),s:unrealSub},
     {v:money(realTotal),l:'Realised P&L',c:realTotal>=0?'pos':'neg',s:settled+' settled'},
     {v:settled?Math.round(wins/settled*100)+'%':'—',l:'Win Rate',s:settled?wins+'W / '+(settled-wins)+'L':'no closed trades'},
     {v:rup(atRisk),l:'Risk if All Stops Hit',c:'neg'}
@@ -353,41 +435,33 @@ function render(){
   if(open.length){rb.classList.add('show');document.getElementById('riskCount').textContent=open.length;}
   else rb.classList.remove('show');
 
-  var sb=document.getElementById('staleBanner');
-  if(open.length && !priceFresh()){
-    sb.classList.add('show');
-    document.getElementById('staleWhen').textContent=_priceAt?_priceAt.toLocaleString('en-IN'):'never';
-  } else sb.classList.remove('show');
+  /* Say what the mark actually is. The number is always shown; the banner is
+     what stops it being mistaken for a live one. */
+  var parts=[];
+  if(open.length && !marked){
+    parts.push('<b>NO PRICE MARK</b> &mdash; no price of any age was found for the '+
+      'open positions, so unrealised P&amp;L is not computed. Entry, stop and risk below are still exact.');
+  } else if(open.length){
+    if(asOf!==todayIST()){
+      parts.push('<b>NOT A LIVE PRICE</b> &mdash; unrealised P&amp;L is marked against the '+
+        esc(fmtDay(asOf))+(asOfSrc==='LTP'?' feed update':' close')+
+        ', the most recent price available. Nothing newer exists.');
+    }
+    if(marked<open.length){
+      parts.push('<b>'+(open.length-marked)+' position(s) unmarked</b> &mdash; no price was found '+
+        'for them, so they contribute nothing to the unrealised total.');
+    }
+  }
+  var mb=document.getElementById('markBanner');
+  if(parts.length){ mb.classList.add('show'); document.getElementById('markBannerText').innerHTML=parts.join(' '); }
+  else mb.classList.remove('show');
 
-  document.getElementById('cntOther').textContent=other.length;
   document.getElementById('cntOpen').textContent=open.length;
   document.getElementById('cntClosed').textContent=closed.length;
   document.getElementById('cntShadow').textContent=shadow.length;
 
-  document.getElementById('tblOther').innerHTML=other.length?
-    tbl(['Symbol','Dir','Status','Trigger/Entry','Stop','Qty','Notional','Reason','Placed','Ended'],
-      other.map(function(t){
-        var status=st(t);
-        var cls=status==='CANCELLED'?'bg-closed':'bg-pend';
-        /* exit_reason is terse (MANUAL); the detail lives in notes. Show the
-           reason, and hang the full note off the title attribute so the record
-           is recoverable without opening the database. */
-        var note=(t.notes||'').replace(/\s+/g,' ').trim();
-        return [
-        '<td class="sym">'+esc(t.symbol)+'</td>',
-        '<td>'+dirBadge(t.direction)+'</td>',
-        '<td><span class="badge '+cls+'">'+esc(status||'—')+'</span></td>',
-        '<td class="amb">'+rup(t.trigger_price||t.entry_price)+'</td>',
-        '<td class="neg">'+rup(t.stop_price)+'</td>',
-        '<td>'+esc(t.qty)+'</td>',
-        '<td>'+rup(notionalOf(t))+'</td>',
-        '<td style="font-size:11px" title="'+esc(note)+'">'+esc(t.exit_reason||'—')+'</td>',
-        '<td>'+fmtDate(t.entry_date)+'</td>',
-        '<td>'+fmtDate(t.exit_date)+'</td>'].join('');})) :
-    '<div class="empty">Nothing cancelled or unfilled.</div>';
-
   document.getElementById('tblOpen').innerHTML=open.length?
-    tbl(['Symbol','Dir','Entry','Stop','Qty','Notional','Risk','Unrealised','Setup','Date',''],
+    tbl(['Symbol','Dir','Entry','Stop','Qty','Notional','Risk','Marked At','Unrealised','Setup','Date',''],
       open.map(function(t){
         var u=unrealised(t);
         return [
@@ -396,14 +470,18 @@ function render(){
         '<td class="neg">'+rup(t.stop_price)+'</td>',
         '<td>'+esc(t.qty)+'</td>', '<td>'+rup(notionalOf(t))+'</td>',
         '<td>'+rup(riskOf(t))+'</td>',
-        '<td>'+(u===null?'<span style="color:var(--faint)">stale</span>':pnlHtml(u))+'</td>',
+        '<td>'+(u?rup(u.m.px)+'<div class="marksub">'+esc(markLabel(u.m))+'</div>'
+                 :'<span style="color:var(--faint)">no price</span>')+'</td>',
+        '<td>'+(u?pnlHtml(u.v):'<span style="color:var(--faint)">—</span>')+'</td>',
         '<td style="font-size:11px">'+esc(t.setup_name||'—')+'</td>',
         '<td>'+fmtDate(t.entry_date)+'</td>',
-        '<td>'+(_session?'<button class="btn" onclick="openExit('+t.id+')">EXIT</button>':'')+'</td>'].join('');})) :
+        '<td>'+(_session?'<button class="btn" title="Record a manual exit — places no order" '+
+                'onclick="openExit('+t.id+')">RECORD EXIT</button>':'')+'</td>'].join('');})) :
     '<div class="empty">No open positions.</div>';
 
   document.getElementById('tblClosed').innerHTML=closed.length?
-    tbl(['Symbol','Dir','Entry','Exit','Qty','P&L','Reason','Held','Setup'],
+    /* Realised only, from exit_price. A closed row is never marked to market. */
+    tbl(['Symbol','Dir','Entry','Exit','Qty','Realised P&L','Reason','Held','Setup'],
       closed.map(function(t){
         var held='—';
         if(t.entry_date&&t.exit_date){
@@ -476,16 +554,17 @@ async function saveExit(){
     closeExit();
     await load();
   }catch(e){ err.textContent='Save failed: '+e.message; }
-  finally{ btn.disabled=false; btn.textContent='Save'; }
+  finally{ btn.disabled=false; btn.textContent='Save record'; }
 }
 
 async function load(){
   try{
     _session=loadSession();
     _trades=await fetchTrades();
+    /* Prices are fetched for OPEN symbols only. Nothing else on this page is
+       marked to market. */
     var syms=_trades.filter(function(t){return st(t)==='OPEN';}).map(function(t){return t.symbol;});
-    _prices={}; _priceAt=null;
-    await fetchPrices(syms);
+    await fetchMarks(syms);
     render();
   }catch(e){
     document.getElementById('tblOpen').innerHTML='<div class="empty">Could not load trades. '+esc(e.message)+'</div>';
