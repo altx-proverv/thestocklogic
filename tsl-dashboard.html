@@ -56,8 +56,14 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   .vtoggle button.active{background:var(--s2);color:var(--sky)}
   .tbl-wrap{margin-top:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden;overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:12px;min-width:920px}
-  thead th{background:var(--s2);font-family:var(--mono);font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted2);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer;user-select:none}
-  thead th:hover{color:var(--muted)}
+  thead th{background:var(--s2);font-family:var(--mono);font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted2);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  /* cursor:pointer used to sit on every th, so every header in every table
+     looked clickable and none of them were. It belongs on the ones that sort. */
+  thead th.sortable{cursor:pointer;user-select:none}
+  thead th.sortable:hover{color:var(--muted)}
+  thead th.sortable:focus-visible{outline:1px solid rgba(59,169,238,.6);outline-offset:-1px;color:var(--muted)}
+  thead th.sorted{color:var(--sky)}
+  .sort-arrow{display:inline-block;width:8px;margin-left:5px;font-size:8px;opacity:.9}
   tbody td{padding:9px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
   tbody tr:hover{background:rgba(255,255,255,.02)}
   .sym{font-weight:700}
@@ -152,7 +158,9 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
 
   <div class="shead"><h2>Open book</h2><span class="cnt" id="bookCnt"></span></div>
   <div class="tbl-wrap"><table id="bookTbl" style="min-width:680px">
-    <thead><tr><th>Symbol</th><th>Direction</th><th class="num">Age</th>
+    <thead><tr><th class="sortable" data-sort="symbol"    tabindex="0" aria-sort="none">Symbol<span class="sort-arrow"></span></th>
+               <th class="sortable" data-sort="direction" tabindex="0" aria-sort="none">Direction<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-sort="age"   tabindex="0" aria-sort="none">Age<span class="sort-arrow"></span></th>
                <th class="num">Today</th><th class="num">Since call</th></tr></thead>
     <tbody><tr><td colspan="5" class="loading">loading…</td></tr></tbody>
   </table></div>
@@ -235,6 +243,80 @@ function drawChart(days){
     g+'<path d="'+line+'" fill="none" stroke="#3BA9EE" stroke-width="1.8"/>'+dots+labs+'</svg>';
 }
 
+/* ── open book sorting ────────────────────────────────────────────────
+   _bookSort null means "as the view returned it" -- v_open_book is ordered by
+   daily_move_pct desc server-side, and that stays the initial state. Clicking
+   a header sorts, clicking the same one again reverses, and clicking a
+   different one starts that column ascending. */
+var _book = [], _bookSort = null, _bookAsc = true;
+
+var BOOK_SORTS = {
+  symbol:    {asc:'A–Z',        desc:'Z–A',
+              cmp:function(a,b){ return String(a.symbol||'').localeCompare(String(b.symbol||'')); }},
+  /* LONG sorts before SHORT alphabetically, which is all "group them" needs. */
+  direction: {asc:'long first',      desc:'short first',
+              cmp:function(a,b){ return String(a.direction||'').localeCompare(String(b.direction||'')); }},
+  /* age_days ascending = the most recently published signals first. */
+  age:       {asc:'newest first',    desc:'oldest first',
+              cmp:function(a,b){ return (Number(a.age_days)||0)-(Number(b.age_days)||0); }}
+};
+
+function renderBook(){
+  var rows = _book.slice();
+  if (_bookSort && BOOK_SORTS[_bookSort]) {
+    var cmp = BOOK_SORTS[_bookSort].cmp;
+    /* Array.prototype.sort is stable, so ties keep the order the view returned:
+       sorting by direction still leaves each group ordered by today's move. */
+    rows.sort(function(a,b){ return _bookAsc ? cmp(a,b) : -cmp(a,b); });
+  }
+
+  var order = _bookSort && BOOK_SORTS[_bookSort]
+    ? 'sorted by '+_bookSort+' ('+(_bookAsc ? BOOK_SORTS[_bookSort].asc : BOOK_SORTS[_bookSort].desc)+')'
+    : 'sorted by today’s move';
+  document.getElementById('bookCnt').textContent =
+    _book.length+(_book.length>=500?'+ (showing first 500)':'')+' live signals · '+order;
+
+  /* The header has to say which column is active and which way, or a reversed
+     sort is indistinguishable from a page that ignored the click. */
+  [].forEach.call(document.querySelectorAll('#bookTbl thead th.sortable'), function(th){
+    var active = th.getAttribute('data-sort') === _bookSort;
+    th.classList.toggle('sorted', active);
+    th.setAttribute('aria-sort', active ? (_bookAsc?'ascending':'descending') : 'none');
+    th.querySelector('.sort-arrow').textContent = active ? (_bookAsc ? '▲' : '▼') : '';
+  });
+
+  document.querySelector('#bookTbl tbody').innerHTML = rows.length ? rows.map(function(b){
+    return '<tr><td class="sym">'+esc(b.symbol)+'</td>'+
+           '<td><span class="pill '+(b.direction==='LONG'?'dir-long':'dir-short')+'">'+esc(b.direction)+'</span></td>'+
+           '<td class="num">'+b.age_days+'d</td>'+
+           '<td class="num '+(Number(b.daily_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.daily_move_pct,2)+'</td>'+
+           '<td class="num '+(Number(b.cum_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.cum_move_pct,2)+'</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="loading">No live signals.</td></tr>';
+}
+
+function sortBook(key){
+  if (!BOOK_SORTS[key]) return;
+  if (_bookSort === key) _bookAsc = !_bookAsc;   // same column: reverse
+  else { _bookSort = key; _bookAsc = true; }     // new column: start ascending
+  renderBook();
+}
+
+/* Delegated, so it survives every tbody rewrite. */
+(function(){
+  var head = document.querySelector('#bookTbl thead');
+  if (!head) return;
+  head.addEventListener('click', function(e){
+    var th = e.target.closest ? e.target.closest('th.sortable') : null;
+    if (th) sortBook(th.getAttribute('data-sort'));
+  });
+  /* The headers are focusable, so they have to work from the keyboard too. */
+  head.addEventListener('keydown', function(e){
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var th = e.target.closest ? e.target.closest('th.sortable') : null;
+    if (th) { e.preventDefault(); sortBook(th.getAttribute('data-sort')); }
+  });
+})();
+
 async function load(){
   try{
     var days = await jget('/rest/v1/v_marks_daily?order=mark_date.desc&limit='+WINDOW_DAYS);
@@ -285,16 +367,8 @@ async function load(){
              '<td class="num '+(Number(s.mean_daily_move)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(s.mean_daily_move,3)+'</td></tr>';
     }).join('') : '<tr><td colspan="4" class="loading">No setups marked today.</td></tr>';
 
-    var book = await jget('/rest/v1/v_open_book?order=daily_move_pct.desc&limit=500');
-    document.getElementById('bookCnt').textContent =
-      book.length+(book.length>=500?'+ (showing first 500)':'')+' live signals · sorted by today\'s move';
-    document.querySelector('#bookTbl tbody').innerHTML = book.length ? book.map(function(b){
-      return '<tr><td class="sym">'+esc(b.symbol)+'</td>'+
-             '<td><span class="pill '+(b.direction==='LONG'?'dir-long':'dir-short')+'">'+esc(b.direction)+'</span></td>'+
-             '<td class="num">'+b.age_days+'d</td>'+
-             '<td class="num '+(Number(b.daily_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.daily_move_pct,2)+'</td>'+
-             '<td class="num '+(Number(b.cum_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.cum_move_pct,2)+'</td></tr>';
-    }).join('') : '<tr><td colspan="5" class="loading">No live signals.</td></tr>';
+    _book = await jget('/rest/v1/v_open_book?order=daily_move_pct.desc&limit=500');
+    renderBook();
 
     // Context that changes how the headline should be read.
     var spd = Number(t.signals_per_day);
