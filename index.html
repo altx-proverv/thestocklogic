@@ -324,13 +324,46 @@ var SB = 'https://eibdlcanpudjgmkjxrga.supabase.co';
 var AK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
 var _supa = null;
 
+/* A token inside 60s of expiry is treated as already dead -- same rule as
+   atlas.html and signals.html. */
+function isFresh(s){
+  if(!s || !s.access_token) return false;
+  if(!s.expires_at) return true;
+  return (s.expires_at*1000) - Date.now() > 60000;
+}
+
+/* Same read path as atlas.html and signals.html: check the status, log what
+   actually came back, always hand back an array.
+   It matters more here than anywhere else, because the one caller signs the
+   user OUT on a negative answer. Unchecked, a 401 or a dropped connection
+   returns a PostgREST error object, `!data.length` reads it as falsy, and an
+   approved subscriber is told they are pending approval and logged out. */
+async function sbGet(path, token){
+  var r;
+  try{
+    r = await fetch(SB+path, {headers:{apikey:AK, Authorization:'Bearer '+(token||AK)}});
+  }catch(e){
+    console.error('index: '+path+' -> '+e.message);
+    return {ok:false, rows:[]};
+  }
+  if(!r.ok){
+    var body='';
+    try{ body=(await r.text()).slice(0,200); }catch(e){}
+    console.error('index: '+path+' -> HTTP '+r.status+' '+body);
+    return {ok:false, rows:[]};
+  }
+  var rows=[];
+  try{ rows = await r.json(); }
+  catch(e){ console.error('index: '+path+' -> bad JSON'); return {ok:false, rows:[]}; }
+  return {ok:true, rows: Array.isArray(rows)?rows:[]};
+}
+
 window.addEventListener('load', function(){
   _supa = window.supabase.createClient(SB, AK);
   // Check if already logged in — redirect to dashboard
   _supa.auth.getSession().then(function(res){
-    if(res.data.session){
-      window.location.href = '/dashboard';
-    }
+    var s = res && res.data ? res.data.session : null;
+    if(isFresh(s)) window.location.href = '/dashboard';
   });
 });
 
@@ -340,18 +373,42 @@ async function doSignIn(){
   var err   = document.getElementById('siErr');
   err.style.display = 'none';
   if(!email||!pass){err.textContent='Please enter email and password.';err.style.display='block';return;}
-  var res = await _supa.auth.signInWithPassword({email:email, password:pass});
+  var res;
+  try{
+    res = await _supa.auth.signInWithPassword({email:email, password:pass});
+  }catch(e){
+    /* A rejected sign-in used to leave the button doing nothing at all. */
+    console.error('index: sign-in failed: '+e.message);
+    err.textContent='Could not reach the sign-in service. Please try again.';
+    err.style.display='block';
+    return;
+  }
   if(res.error){err.textContent='Invalid email or password.';err.style.display='block';return;}
+
   // Check if approved subscriber
   /* Session token, not the anon key: subscribers is readable only by the
      signed-in owner of the row now. Matched on user_id rather than the email
      typed into the form -- the row is found by identity, so a capitalised
      address can no longer read as "pending approval". */
-  var _s = res.data.session;
-  var r = await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+encodeURIComponent(_s.user.id)+'&status=eq.active&limit=1',
-    {headers:{apikey:AK,Authorization:'Bearer '+_s.access_token}});
-  var data = await r.json();
-  if(!data||!data.length){
+  var _s = res.data ? res.data.session : null;
+  if(!_s){
+    err.textContent='Signed in, but no session was returned. Please try again.';
+    err.style.display='block';
+    return;
+  }
+
+  var got = await sbGet('/rest/v1/subscribers?user_id=eq.'+encodeURIComponent(_s.user.id)+
+                        '&status=eq.active&limit=1', _s.access_token);
+
+  /* Three outcomes, not two. "The request failed" is not "you are not
+     approved" -- and it must never sign the user out, because being signed
+     out is exactly what makes the next attempt fail the same way. */
+  if(!got.ok){
+    err.textContent='Could not verify your subscription just now. Please try again in a moment.';
+    err.style.display='block';
+    return;
+  }
+  if(!got.rows.length){
     await _supa.auth.signOut();
     err.textContent='Your account is pending approval. Check back soon.';
     err.style.display='block';
