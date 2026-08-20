@@ -27,6 +27,14 @@ each time silently:
                                 query succeeded, returned rows that could not
                                 join, and the page rendered nothing.
 
+  live_prices RLS               RLS enabled, ZERO policies, from the day the
+                                table was created. Anon reads returned
+                                200 + [] -- indistinguishable from "no data" --
+                                for eleven weeks, while the feed wrote 500
+                                symbols twice a day. atlas.html marked open
+                                positions against nothing and signals.html
+                                showed no LTP. Nothing logged, nothing 400'd.
+
 Every one was a query naming something that did not exist (or could not match),
 returning a response nobody checked. This makes that visible before it ships.
 
@@ -36,6 +44,13 @@ WHAT IT CHECKS
   2. Every column named in select= / order= / a filter exists on that table.
   3. Every literal dict POSTed or PATCHed to a table has only real columns --
      this is the check that would have caught gtt_trigger_id.
+  4. Every table the FRONTEND reads is actually visible to the anon key the
+     pages ship with -- anon row count vs service-role row count. A mismatch
+     is an RLS policy gap. This one matters more than it looks: the database
+     has an event trigger (`ensure_rls` -> rls_auto_enable()) that turns RLS
+     ON for every new table in public and creates no policy, so every table
+     added from here on is born invisible to the frontend and says nothing
+     about it.
 
 WHAT IT CANNOT CHECK
 --------------------
@@ -70,6 +85,81 @@ def live_schema() -> dict:
     r.raise_for_status()
     defs = r.json().get("definitions", {})
     return {t: set(d.get("properties", {})) for t, d in defs.items()}
+
+
+def anon_key() -> str:
+    """The anon key the pages actually ship with, scraped from the HTML.
+
+    Deliberately not an env var first: the point of check 4 is to test the key
+    a real browser sends. Reading it from the page is the only way to be sure
+    the thing under test is the thing deployed.
+    """
+    env = os.environ.get("SUPABASE_ANON_KEY", "")
+    if env:
+        return env
+    for p, _ in _files():
+        if p.suffix != ".html":
+            continue
+        m = re.search(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", p.read_text())
+        if m:
+            return m.group(0)
+    return ""
+
+
+def _count(table: str, key: str):
+    """(row_count, error). Exact count via PostgREST's content-range header."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/{table}?select=*&limit=1",
+            headers={"apikey": key, "Authorization": f"Bearer {key}",
+                     "Prefer": "count=exact"}, timeout=30)
+    except requests.RequestException as e:
+        return None, f"{type(e).__name__}: {e}"
+    if r.status_code not in (200, 206):
+        return None, f"HTTP {r.status_code} {(r.text or '').strip()[:120]}"
+    total = r.headers.get("content-range", "").split("/")[-1]
+    return (int(total) if total.isdigit() else None), ""
+
+
+def check_anon_visibility(tables) -> list:
+    """Frontend-read tables the anon key cannot actually see.
+
+    An RLS-enabled table with no policy answers 200 with an empty array. It
+    looks exactly like a table that happens to have no rows, which is why
+    live_prices stayed broken for eleven weeks with nothing in any log.
+    Comparing against the service-role count is what tells them apart.
+    """
+    problems = []
+    akey = anon_key()
+    if not akey:
+        print("  anon key not found in any page — skipping the visibility check.")
+        return ["could not find the frontend anon key to run the RLS visibility check"]
+
+    print(f"\nanon visibility ({len(tables)} frontend-read tables):")
+    for t in sorted(tables):
+        svc, svc_err = _count(t, SUPABASE_KEY)
+        anon, anon_err = _count(t, akey)
+        if svc_err:
+            print(f"  {t:<24} service-role read failed: {svc_err}")
+            problems.append(f"{t}: service-role read failed: {svc_err}")
+            continue
+        if anon_err:
+            print(f"  {t:<24} anon read failed: {anon_err}")
+            problems.append(f"{t}: anon read failed: {anon_err}")
+            continue
+        if svc and not anon:
+            print(f"  {t:<24} anon 0 / service {svc}   <-- RLS POLICY GAP")
+            problems.append(
+                f"{t}: anon sees 0 of {svc} rows — RLS is on with no anon SELECT "
+                f"policy. The frontend gets 200 and an empty array and cannot tell.")
+        elif svc and anon is not None and anon < svc:
+            print(f"  {t:<24} anon {anon} / service {svc}   <-- partial (row-filtered)")
+            problems.append(
+                f"{t}: anon sees {anon} of {svc} rows — a policy is filtering rows. "
+                f"Intentional or not, the page cannot tell the difference.")
+        else:
+            print(f"  {t:<24} anon {anon} / service {svc}   ok")
+    return problems
 
 
 def _files():
@@ -198,12 +288,17 @@ def main() -> int:
 
     problems = []
     checked_urls = checked_payloads = 0
+    frontend_tables = set()
 
     for path, rel in _files():
         text = path.read_text()
 
         for table, cols in scan_urls(text):
             checked_urls += 1
+            # Only .html reads travel with the anon key; .py runs as service_role
+            # and bypasses RLS entirely, so it can never see this class of gap.
+            if path.suffix == ".html":
+                frontend_tables.add(table)
             if table not in schema:
                 problems.append(f"{rel}: table '{table}' does not exist")
                 continue
@@ -220,6 +315,8 @@ def main() -> int:
                     problems.append(f"{rel}:{line}: writes {table}.{c} — column does not exist")
 
     print(f"checked {checked_urls} query URLs and {checked_payloads} write payloads")
+
+    problems += check_anon_visibility({t for t in frontend_tables if t in schema})
     if UNCHECKABLE:
         print(f"\n{len(UNCHECKABLE)} reference(s) could NOT be checked — the table name "
               f"is built at runtime:")
@@ -235,8 +332,10 @@ def main() -> int:
     print(f"\n{len(problems)} PROBLEM(S):\n")
     for p in problems:
         print(f"  {p}")
-    print("\nEach of these returns 400 at runtime. If the caller does not check the"
-          "\nresponse status, it fails silently.")
+    print("\nSchema problems return 400 at runtime; if the caller does not check the"
+          "\nresponse status, they fail silently. RLS gaps are worse -- they return"
+          "\n200 with an empty array, so there is no status to check and no error to"
+          "\nlog. The page just renders nothing and looks like a quiet day.")
     return 1
 
 
