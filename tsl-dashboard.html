@@ -165,17 +165,16 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   </div>
 
   <div class="shead"><h2>By setup &mdash; rolling 20 days</h2><span class="cnt" id="setupCnt"></span></div>
-  <div class="tbl-wrap"><table id="setupTbl" style="min-width:880px">
+  <div class="tbl-wrap"><table id="setupTbl" style="min-width:820px">
     <thead><tr><th class="sortable" data-ssort="setup"     tabindex="0" aria-sort="none">Setup<span class="sort-arrow"></span></th>
                <th class="num sortable" data-ssort="signals"  tabindex="0" aria-sort="none">Signals<span class="sort-arrow"></span></th>
                <th class="num sortable" data-ssort="target"   tabindex="0" aria-sort="none">Target<span class="sort-arrow"></span></th>
                <th class="num sortable" data-ssort="stop"     tabindex="0" aria-sort="none">Stop<span class="sort-arrow"></span></th>
                <th class="num sortable" data-ssort="sameday"  tabindex="0" aria-sort="none"
-                   title="Shorts: MIS, resolved on their single session. Never a target or a stop.">Same day<span class="sort-arrow"></span></th>
+                   title="Shorts: MIS, resolved on their single session. Never a target or a stop.">Intraday Shorts<span class="sort-arrow"></span></th>
                <th class="num sortable" data-ssort="hit"      tabindex="0" aria-sort="none">Hit rate<span class="sort-arrow"></span></th>
-               <th class="num sortable" data-ssort="pnl"      tabindex="0" aria-sort="none">Resolved P&amp;L<span class="sort-arrow"></span></th>
-               <th class="num sortable" data-ssort="unres"    tabindex="0" aria-sort="none">Unresolved<span class="sort-arrow"></span></th></tr></thead>
-    <tbody><tr><td colspan="8" class="loading">loading…</td></tr></tbody>
+               <th class="num sortable" data-ssort="pnl"      tabindex="0" aria-sort="none">Resolved P&amp;L<span class="sort-arrow"></span></th></tr></thead>
+    <tbody><tr><td colspan="7" class="loading">loading…</td></tr></tbody>
   </table></div>
 
   <div class="shead"><h2>Signals Performance &mdash; rolling 20 days</h2><span class="cnt" id="bookCnt"></span></div>
@@ -366,10 +365,9 @@ var SETUP_SORTS = {
   signals: {label:'signals',      asc:'fewest',     desc:'most',    key:'n_resolved'},
   target:  {label:'targets',      asc:'fewest',     desc:'most',    key:'n_target'},
   stop:    {label:'stops',        asc:'fewest',     desc:'most',    key:'n_stop'},
-  sameday: {label:'same-day',     asc:'fewest',     desc:'most',    key:'n_same_day'},
+  sameday: {label:'intraday shorts', asc:'fewest',  desc:'most',    key:'n_same_day'},
   hit:     {label:'hit rate',     asc:'lowest',     desc:'highest', key:'hit_rate_pct'},
-  pnl:     {label:'resolved P&L', asc:'worst',      desc:'best',    key:'resolved_pnl'},
-  unres:   {label:'unresolved',   asc:'fewest',     desc:'most',    key:'n_unresolved'}
+  pnl:     {label:'resolved P&L', asc:'worst',      desc:'best',    key:'resolved_pnl'}
 };
 
 function renderSetups(){
@@ -405,9 +403,8 @@ function renderSetups(){
            '<td class="num">'+((s.n_same_day||0) || '—')+'</td>'+
            '<td class="num '+(scorable ? (Number(s.hit_rate_pct)>=50?'pnl-pos':'pnl-neg') : 'pnl-zero')+'">'+
              (scorable ? pctTxt(s.hit_rate_pct,1) : '—')+'</td>'+
-           '<td class="num '+(Number(s.resolved_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(s.resolved_pnl)+'</td>'+
-           '<td class="num pnl-zero">'+((s.n_unresolved||0) || '—')+'</td></tr>';
-  }).join('') : '<tr><td colspan="8" class="loading">No setups in the window.</td></tr>';
+           '<td class="num '+(Number(s.resolved_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(s.resolved_pnl)+'</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="loading">No setups in the window.</td></tr>';
 }
 
 function sortSetups(key){
