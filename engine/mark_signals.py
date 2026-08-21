@@ -171,8 +171,10 @@ def resolve_signal(s, closes: dict, all_dates: list) -> dict:
     carry no intraday sequence, so which came first is unknowable; the
     conservative reading is hardcoded rather than guessed.
 
-    ENTRY IS entry_ref, NOT THE SIGNAL-DATE CLOSE. THIS IS DELIBERATE.
-    ================================================================
+    ENTRY IS entry_ref FOR LONGS, NOT THE SIGNAL-DATE CLOSE. DELIBERATE.
+    ===================================================================
+    Shorts are the exception and enter at the day-one open -- see the SHORT
+    branch for why the entry_ref argument does not transfer to them.
     The daily marks in mark_one_date() enter at the signal-date close, and that
     is also correct -- for what they measure. The two are different questions
     and they need different entries:
@@ -220,16 +222,26 @@ def resolve_signal(s, closes: dict, all_dates: list) -> dict:
             return None
         return None if pd.isna(f) or f <= 0 else f
 
-    # entry_ref for BOTH directions -- see the docstring. The stop and the
-    # target are defined against it, so anything else changes the R of the trade
-    # before it is measured.
-    entry = num(getattr(s, "entry_ref", None))
-    if entry is None:
-        return {}
-
-    # SHORT: MIS, one session. Entered at entry_ref, squared off at the close of
-    # the first trading day after the signal. The EXIT is the same close its
-    # single mark uses; only the entry differs, and deliberately so.
+    # SHORT: MIS, one session. Entered at the OPEN of the first trading day
+    # after the signal, squared off at that day's close.
+    #
+    # NOT entry_ref, unlike the long branch below. The entry_ref argument is
+    # that sl and target_1 are defined against it, so entering elsewhere
+    # changes the trade's R -- but a SAME_DAY short never touches sl or
+    # target_1. It exits at the close. There is no R to preserve, so the
+    # argument does not transfer.
+    #
+    # What entry_ref does here instead is charge the trade for a gap it was
+    # never exposed to. entry_ref sits BELOW the day-one open on 50 of 77
+    # shorts, 1.73% below on average, and of the -Rs1,65,044 that entry_ref
+    # produces, -Rs1,33,046 -- 81% -- is the entry_ref-to-open move. An MIS
+    # position does not exist overnight and cannot lose money in that gap.
+    # Only the -Rs31,998 open-to-close part is a session that was actually
+    # held.
+    #
+    # This was briefly changed to entry_ref and is deliberately back. Do not
+    # "make it consistent" with the long branch: the two branches measure
+    # different trades.
     if s.direction == "SHORT":
         later = [x for x in all_dates if x > s.signal_date]
         if not later:
@@ -238,10 +250,19 @@ def resolve_signal(s, closes: dict, all_dates: list) -> dict:
         b = bar(day1)
         if b is None:
             return {}
+        entry = num(b["open"])
+        if entry is None:
+            return {}
         exit_px = float(b["close"])
         return {"resolved_pnl_pct": round((entry - exit_px) / entry * 100.0, 4),
                 "resolved_on": day1.date().isoformat(),
                 "resolution": "SAME_DAY"}
+
+    # LONG: entry_ref, because sl and target_1 are defined against it and the
+    # 2R structure is the thing being measured. See the docstring.
+    entry = num(getattr(s, "entry_ref", None))
+    if entry is None:
+        return {}
 
     sl  = num(s.sl)
     tgt = num(s.target_1)
