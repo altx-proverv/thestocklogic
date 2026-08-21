@@ -84,6 +84,9 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   .o-inval{color:var(--muted2);border:1px solid var(--line)}
   .o-ns{color:var(--muted2);border:1px dashed var(--line)}
   .pnl-pos{color:var(--green);font-weight:700}.pnl-neg{color:var(--red);font-weight:700}.pnl-zero{color:var(--muted2)}
+  /* The ROLLUP row is an aggregate of the rows above it, not another row. */
+  tbody tr.dir-total td{border-top:1px solid var(--line);background:rgba(255,255,255,.025)}
+  tbody tr.dir-total td.sym{letter-spacing:.06em}
   /* Resolution type sits next to the number: -4.2% STOP and -4.2% EXPIRED are
      the same figure and completely different outcomes. */
   .res-stop{color:var(--red);border:1px solid rgba(255,77,109,.35);background:rgba(255,77,109,.07);margin-left:7px}
@@ -163,6 +166,13 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
     <div class="cs">One point per trading day. Dashed line = 50%.</div>
     <div id="chart"><div class="loading">loading…</div></div>
   </div>
+
+  <div class="shead"><h2>By direction &mdash; rolling 20 days</h2><span class="cnt" id="dirCnt"></span></div>
+  <div class="tbl-wrap"><table id="dirTbl" style="min-width:620px">
+    <thead><tr><th>Direction</th><th class="num">Signals</th><th class="num">Total profit</th>
+               <th class="num">Total loss</th><th class="num">Net P&amp;L</th></tr></thead>
+    <tbody><tr><td colspan="5" class="loading">loading…</td></tr></tbody>
+  </table></div>
 
   <div class="shead"><h2>By setup &mdash; rolling 20 days</h2><span class="cnt" id="setupCnt"></span></div>
   <div class="tbl-wrap"><table id="setupTbl" style="min-width:820px">
@@ -345,6 +355,33 @@ function renderBook(){
            '<td><span class="pill '+(b.closed_same_day?'o-inval':'o-open')+'">'+
              (b.closed_same_day?'closed same day':'held')+'</span></td></tr>';
   }).join('') : '<tr><td colspan="8" class="loading">No signals in the window.</td></tr>';
+}
+
+/* ── by-direction table ───────────────────────────────────────────────
+   A net figure hides the ratio. Shorts at -Rs31,836 read as a small bleed;
+   +Rs30,267 against -Rs62,102 says they lose two rupees for every one made,
+   which is a different conclusion. Gross profit and gross loss are shown
+   separately so the ratio is on the page rather than inferred.
+
+   TOTAL comes from a ROLLUP inside the view, so it cannot drift from the two
+   rows above it, and it reconciles with the Indicative P&L card by
+   construction -- both sum resolved_pnl_pct over the same rows. */
+var _dirs = [];
+
+function renderDirections(){
+  document.getElementById('dirCnt').textContent =
+    'resolved signals only · same window and basis as the table below';
+
+  document.querySelector('#dirTbl tbody').innerHTML = _dirs.length ? _dirs.map(function(d){
+    var isTotal = d.direction === 'TOTAL';
+    return '<tr'+(isTotal ? ' class="dir-total"' : '')+'>'+
+           '<td class="sym">'+esc(d.direction)+'</td>'+
+           /* Counts stay neutral: a signal count is not good or bad. */
+           '<td class="num">'+(d.n_signals||0)+'</td>'+
+           '<td class="num pnl-pos">'+rup(d.gross_profit)+'</td>'+
+           '<td class="num pnl-neg">'+rup(d.gross_loss)+'</td>'+
+           '<td class="num '+(Number(d.net_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(d.net_pnl)+'</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="loading">No resolved signals in the window.</td></tr>';
 }
 
 /* ── by-setup table ───────────────────────────────────────────────────
@@ -540,6 +577,9 @@ async function load(){
       card('Indicative P&amp;L', rup(W.indicative_pnl), signCls(W.indicative_pnl), '');
 
     drawChart(asc);
+
+    _dirs = await jget('/rest/v1/v_direction_window?order=sort_ord.asc');
+    renderDirections();
 
     _setups = await jget('/rest/v1/v_setup_window');
     renderSetups();
