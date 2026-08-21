@@ -436,9 +436,17 @@ function riskOf(t){
 }
 function notionalOf(t){ return (parseFloat(t.entry_price||0))*(parseFloat(t.qty||0)); }
 
+/* Display only. The stored value stays LONG / SHORT and every comparison,
+   filter and query below still uses it -- this renames the label, nothing else.
+   Longs are CNC and held; shorts are MIS and squared off the same session. */
+function dirLabel(d){
+  var u = String(d == null ? '' : d).toUpperCase();
+  return u === 'LONG' ? 'Long CNC' : u === 'SHORT' ? 'Intraday Short' : String(d);
+}
+
 function dirBadge(d){
   var u=(d||'').toUpperCase();
-  return '<span class="badge '+(u==='LONG'?'bg-long':'bg-short')+'">'+esc(u||'—')+'</span>';
+  return '<span class="badge '+(u==='LONG'?'bg-long':'bg-short')+'">'+esc(u?dirLabel(u):'—')+'</span>';
 }
 
 function render(){

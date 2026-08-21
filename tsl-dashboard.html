@@ -300,6 +300,14 @@ var BOOK_SORTS = {
               cmp:function(a,b){ return (Number(a.age_days)||0)-(Number(b.age_days)||0); }}
 };
 
+/* Display only. The stored value stays LONG / SHORT and every comparison,
+   filter and query below still uses it -- this renames the label, nothing else.
+   Longs are CNC and held; shorts are MIS and squared off the same session. */
+function dirLabel(d){
+  var u = String(d == null ? '' : d).toUpperCase();
+  return u === 'LONG' ? 'Long CNC' : u === 'SHORT' ? 'Intraday Short' : String(d);
+}
+
 var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 /* Formatted from the string. new Date('2026-07-24') is UTC midnight, which
    renders as the 23rd anywhere west of Greenwich -- and a call date that is
@@ -337,7 +345,7 @@ function renderBook(){
 
   document.querySelector('#bookTbl tbody').innerHTML = rows.length ? rows.map(function(b){
     return '<tr><td class="sym">'+esc(b.symbol)+'</td>'+
-           '<td><span class="pill '+(b.direction==='LONG'?'dir-long':'dir-short')+'">'+esc(b.direction)+'</span></td>'+
+           '<td><span class="pill '+(b.direction==='LONG'?'dir-long':'dir-short')+'">'+esc(dirLabel(b.direction))+'</span></td>'+
            '<td class="num">'+fmtDay(b.signal_date)+'</td>'+
            '<td class="num">'+b.age_days+'d</td>'+
            '<td class="num '+(Number(b.daily_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.daily_move_pct,2)+'</td>'+
@@ -375,7 +383,7 @@ function renderDirections(){
   document.querySelector('#dirTbl tbody').innerHTML = _dirs.length ? _dirs.map(function(d){
     var isTotal = d.direction === 'TOTAL';
     return '<tr'+(isTotal ? ' class="dir-total"' : '')+'>'+
-           '<td class="sym">'+esc(d.direction)+'</td>'+
+           '<td class="sym">'+esc(dirLabel(d.direction))+'</td>'+
            /* Counts stay neutral: a signal count is not good or bad. */
            '<td class="num">'+(d.n_signals||0)+'</td>'+
            '<td class="num pnl-pos">'+rup(d.gross_profit)+'</td>'+

@@ -55,6 +55,14 @@ FOOTER = ("REMINDER: ATLAS places no stop-losses. Set them manually.\n"
           "Trailing levels above are recommendations only — nothing is placed.")
 
 
+def _dir_label(direction: str) -> str:
+    """Display only. `dirn` stays LONG/SHORT for the P&L sign and recommend_trail;
+    this is what the operator reads. Longs are CNC and held, shorts are MIS and
+    squared off the same session."""
+    u = (direction or "").upper()
+    return {"LONG": "Long CNC", "SHORT": "Intraday Short"}.get(u, u or "—")
+
+
 def _headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json"}
@@ -343,7 +351,7 @@ def _fmt_positions(positions: list, prices: dict, stale: bool, as_of: str) -> st
         qty   = int(p.get("qty") or 0)
         entry = float(p.get("entry_price") or 0)
         stop  = p.get("stop_price")
-        out.append(f"  {_pad(sym, 11)} {dirn} · {qty} qty @ Rs{_inr(entry, 1)} · "
+        out.append(f"  {_pad(sym, 11)} {_dir_label(dirn)} · {qty} qty @ Rs{_inr(entry, 1)} · "
                    f"Rs{_inr(entry * qty)} notional")
 
         ltp = prices.get(sym)
