@@ -182,9 +182,6 @@ td.sym{font-weight:700;color:var(--ink)}
   <div class="shead"><h2>Closed</h2><div class="rule"></div><span class="cnt" id="cntClosed">0</span></div>
   <div class="tblwrap" id="tblClosed"></div>
 
-  <div class="shead"><h2>Shadow Log</h2><div class="rule"></div><span class="cnt" id="cntShadow">0</span></div>
-  <div class="tblwrap" id="tblShadow"></div>
-
   <div class="foot">
     Auto-refreshes every 60s &middot; Last update <span id="lastUpd">—</span><br>
     Educational record of an individual trading account. Not investment advice, not a solicitation, and not a representation of future results.
@@ -447,11 +444,10 @@ function dirBadge(d){
 function render(){
   var open   = _trades.filter(function(t){return st(t)==='OPEN';});
   var closed = _trades.filter(function(t){return st(t)==='CLOSED';});
-  var shadow = _trades.filter(function(t){return st(t)==='SHADOW';});
-  /* This page renders OPEN, CLOSED and SHADOW. Anything else -- CANCELLED, a
-     stray GTT_PENDING, a status added later -- is deliberately not shown at
-     all. Removed at the operator's request: the cancelled orders are stale and
-     the GTT path is gone. Read atlas_trades directly if you need them. */
+  /* This page renders OPEN and CLOSED only. Everything else -- SHADOW,
+     CANCELLED, a stray GTT_PENDING, a status added later -- is deliberately
+     not shown, at the operator's request. Read atlas_trades directly if you
+     need them. */
 
   /* Committed and at-risk are derived from the trades themselves. There is no
      allocated pool to show a percentage against, and no "available" figure --
@@ -530,7 +526,6 @@ function render(){
 
   document.getElementById('cntOpen').textContent=open.length;
   document.getElementById('cntClosed').textContent=closed.length;
-  document.getElementById('cntShadow').textContent=shadow.length;
 
   document.getElementById('tblOpen').innerHTML=open.length?
     tbl(['Symbol','Dir','Entry','Stop','Qty','Notional','Risk','Marked At','Unrealised','Setup','Date',''],
@@ -568,16 +563,6 @@ function render(){
         '<td>'+held+'</td>',
         '<td style="font-size:11px">'+esc(t.setup_name||'—')+'</td>'].join('');})) :
     '<div class="empty">No closed trades yet.</div>';
-
-  document.getElementById('tblShadow').innerHTML=shadow.length?
-    tbl(['Symbol','Dir','Would Enter','Stop','Qty','Risk','Setup','Date'],
-      shadow.slice(0,40).map(function(t){return [
-        '<td class="sym">'+esc(t.symbol)+'</td>', '<td>'+dirBadge(t.direction)+'</td>',
-        '<td>'+rup(t.entry_price)+'</td>', '<td>'+rup(t.stop_price)+'</td>',
-        '<td>'+esc(t.qty)+'</td>', '<td>'+rup(riskOf(t))+'</td>',
-        '<td style="font-size:11px">'+esc(t.setup_name||'—')+'</td>',
-        '<td>'+fmtDate(t.entry_date)+'</td>'].join('');})) :
-    '<div class="empty">No shadow entries.</div>';
 
   document.getElementById('lastUpd').textContent=new Date().toLocaleTimeString('en-IN');
 }

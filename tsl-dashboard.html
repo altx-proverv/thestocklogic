@@ -164,15 +164,15 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
     <tbody><tr><td colspan="4" class="loading">loading…</td></tr></tbody>
   </table></div>
 
-  <div class="shead"><h2>Open book</h2><span class="cnt" id="bookCnt"></span></div>
-  <div class="tbl-wrap"><table id="bookTbl" style="min-width:790px">
+  <div class="shead"><h2>Signals Performance &mdash; rolling 20 days</h2><span class="cnt" id="bookCnt"></span></div>
+  <div class="tbl-wrap"><table id="bookTbl" style="min-width:900px">
     <thead><tr><th class="sortable" data-sort="symbol"     tabindex="0" aria-sort="none">Symbol<span class="sort-arrow"></span></th>
                <th class="sortable" data-sort="direction"  tabindex="0" aria-sort="none">Direction<span class="sort-arrow"></span></th>
                <th class="num sortable" data-sort="called" tabindex="0" aria-sort="none">Call date<span class="sort-arrow"></span></th>
                <th class="num sortable" data-sort="age"    tabindex="0" aria-sort="none"
                    title="Trading days since the call, not calendar days">Age · trading days<span class="sort-arrow"></span></th>
-               <th class="num">Today</th><th class="num">Since call</th></tr></thead>
-    <tbody><tr><td colspan="6" class="loading">loading…</td></tr></tbody>
+               <th class="num">Today</th><th class="num">Since call</th><th>Status</th></tr></thead>
+    <tbody><tr><td colspan="7" class="loading">loading…</td></tr></tbody>
   </table></div>
 
   <div class="note" id="notes"></div>
@@ -254,7 +254,7 @@ function drawChart(days){
 }
 
 /* ── open book sorting ────────────────────────────────────────────────
-   _bookSort null means "as the view returned it" -- v_open_book is ordered by
+   _bookSort null means "as the view returned it" -- v_signal_window is ordered by
    daily_move_pct desc server-side, and that stays the initial state. Clicking
    a header sorts, clicking the same one again reverses, and clicking a
    different one starts that column ascending. */
@@ -298,7 +298,9 @@ function renderBook(){
     ? 'sorted by '+BOOK_SORTS[_bookSort].label+' ('+(_bookAsc ? BOOK_SORTS[_bookSort].asc : BOOK_SORTS[_bookSort].desc)+')'
     : 'sorted by today’s move';
   document.getElementById('bookCnt').textContent =
-    _book.length+(_book.length>=500?'+ (showing first 500)':'')+' live signals · '+order;
+    /* "signals called", not "live signals" -- this is a 20-day performance
+       record, not a list of positions anyone is holding. */
+    _book.length+(_book.length>=500?'+ (showing first 500)':'')+' signals called in the window · '+order;
 
   /* The header has to say which column is active and which way, or a reversed
      sort is indistinguishable from a page that ignored the click. */
@@ -315,8 +317,12 @@ function renderBook(){
            '<td class="num">'+fmtDay(b.signal_date)+'</td>'+
            '<td class="num">'+b.age_days+'d</td>'+
            '<td class="num '+(Number(b.daily_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.daily_move_pct,2)+'</td>'+
-           '<td class="num '+(Number(b.cum_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.cum_move_pct,2)+'</td></tr>';
-  }).join('') : '<tr><td colspan="6" class="loading">No live signals.</td></tr>';
+           '<td class="num '+(Number(b.cum_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.cum_move_pct,2)+'</td>'+
+           /* Says why a short has one mark, rather than leaving it to be read
+              as missing data. */
+           '<td><span class="pill '+(b.closed_same_day?'o-inval':'o-open')+'">'+
+             (b.closed_same_day?'closed same day':'held')+'</span></td></tr>';
+  }).join('') : '<tr><td colspan="7" class="loading">No signals in the window.</td></tr>';
 }
 
 function sortBook(key){
@@ -379,33 +385,38 @@ async function load(){
       t.n_marks+' signals live · '+days.length+' trading days · '+
       n2(t.signals_per_day,1)+' signals/day · marked '+t.mark_date;
 
-    /* Per-SIGNAL aggregates. v_marks_daily is per mark_date and v_open_book is
-       the latest mark date only -- which, now that a short has exactly one mark
-       at age 1, would leave shorts out of the P&L entirely while the label
-       still said "every signal". v_window_summary counts each signal once, at
-       its latest mark inside the window. */
+    /* Every card below comes from v_window_summary, which is an aggregate OF
+       v_signal_window -- the same rows the table renders. One population,
+       defined once, so the cards and the table cannot disagree.
+       The window is 20 trading days of INTAKE: a signal counts while its
+       signal_date is inside it and ages out entirely on day 21. */
     var wrows = await jget('/rest/v1/v_window_summary');
     var W = (wrows && wrows[0]) ? wrows[0] : {};
     var line = function(lbl, val){ return '<span class="lbl">'+lbl+'</span>'+val; };
 
     document.getElementById('row1').innerHTML =
       /* Neutral. An accuracy number is not good or bad on its own -- it depends
-         on the signal rate below it, and colouring it asserts a verdict. */
-      card('Directional accuracy · '+days.length+'d', pctTxt(winAvg,1), '',
-           'n='+winMarks+' marks · '+scored.length+' days · long and short pooled') +
+         on the signal rate below it, and colouring it asserts a verdict.
+         Per mark, across the intake population: every day a long is held is its
+         own directional call, and a short contributes its single day. */
+      card('Directional accuracy · '+(W.window_days||days.length)+'d',
+           pctTxt(W.accuracy_pct,1), '',
+           'n='+(W.n_marks_scored||0)+' marks · '+(W.n_signals||0)+' signals · long and short pooled') +
 
       /* Both figures, plainly, no difference computed. Neutral for the same
-         reason: which one "wins" is the reader's call, not the card's. */
+         reason: which one "wins" is the reader's call, not the card's.
+         The two are on different bases -- a per-signal average against an index
+         total -- so the sub-label says which is which rather than implying they
+         are subtractable. */
       card('vs NIFTY',
            bench.length
-             ? '<span class="pair">'+line('Signals ', signTxt(bookB,2))+'<br>'+
+             ? '<span class="pair">'+line('Signals ', signTxt(W.mean_cum_move_pct,2))+'<br>'+
                                      line('Nifty ',   signTxt(nifB,2))+'</span>'
              : '—',
            '',
            bench.length
-             ? (bench.length < days.length
-                  ? 'benchmarked on '+bench.length+' of '+days.length+' days only'
-                  : 'same '+days.length+' days, same units')
+             ? 'signals: mean since own call · nifty: '+bench.length+'-day total'
+               + (bench.length < days.length ? ' ('+bench.length+' of '+days.length+' benchmarked)' : '')
              : 'no NIFTY benchmark in this window') +
 
       /* Counts, not an average: representational, so the colours are too. */
@@ -427,7 +438,7 @@ async function load(){
 
       /* The real one. Longs accrue daily; a short carries its single intraday
          mark and stays in the total for as long as that mark is in the window. */
-      card('Notional P&amp;L', rup(W.notional_pnl), signCls(W.notional_pnl),
+      card('Indicative P&amp;L', rup(W.indicative_pnl), signCls(W.indicative_pnl),
            'hypothetical · ₹1L per signal · '+(W.n_long||0)+' long, '+(W.n_short||0)+' short');
 
     drawChart(asc);
@@ -441,7 +452,7 @@ async function load(){
              '<td class="num '+(Number(s.mean_daily_move)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(s.mean_daily_move,3)+'</td></tr>';
     }).join('') : '<tr><td colspan="4" class="loading">No setups marked today.</td></tr>';
 
-    _book = await jget('/rest/v1/v_open_book?order=daily_move_pct.desc&limit=500');
+    _book = await jget('/rest/v1/v_signal_window?order=daily_move_pct.desc&limit=500');
     renderBook();
 
     // Context that changes how the headline should be read.

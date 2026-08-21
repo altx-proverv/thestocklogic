@@ -1144,21 +1144,18 @@ document.getElementById('authModal').addEventListener('click', function(e){ if(e
 setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
 window.addEventListener('load', function(){
   if (!_supa) _supa = window.supabase.createClient(SB, AK);
-  /* isFresh on both paths: this handler runs on every load and used to accept
-     whatever getSession() returned, so a dead token could reach updateNavAuth
-     and be sent. Reads still degrade (sbGet handles it), but there is no
-     reason to spend a request proving a token is expired. */
-  _supa.auth.onAuthStateChange(function(event, session){
-    setAuth(isFresh(session) ? session : null);
-    updateNavAuth();
-  });
-  // Also check session immediately on load
-  _supa.auth.getSession().then(function(res){
-    var s = res && res.data ? res.data.session : null;
-    setAuth(isFresh(s) ? s : null);
-    updateNavAuth();
-  });
-  render().catch(function(e){console.error(e);});
+  /* Both paths go through checkAuth(), which is the ONLY thing that verifies
+     the subscription. They used to call setAuth() + updateNavAuth() directly,
+     and updateNavAuth builds the signed-in dropdown from _user alone -- so
+     anyone holding a Supabase session that was not an approved active
+     subscriber got the full menu (dashboard, change password, sign out) while
+     the gate behind it stayed shut. The nav claimed one thing and the page
+     another. checkAuth applies isFresh, runs the approval check, and calls
+     renderGate, so the two can no longer disagree. */
+  _supa.auth.onAuthStateChange(function(){ checkAuth(); });
+  /* checkAuth -> renderGate -> render, so no separate render() here: calling
+     both fetched all five feeds twice on every load. */
+  checkAuth();
   setInterval(function(){render().catch(function(e){console.error(e);});},5*60*1000);
 });
 </script>
