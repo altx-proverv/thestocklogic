@@ -108,6 +108,10 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
      each half rather than on the card. */
   .scard .v .g{color:var(--green)} .scard .v .r{color:var(--red)}
   .scard .v .slash{color:var(--muted2);font-weight:300;margin:0 6px}
+  /* Two figures that will not fit on one line at 24px. Stacked and smaller,
+     rather than truncated or overflowing the card. */
+  .scard .v .pair{display:block;font-size:15px;line-height:1.45;letter-spacing:-.2px}
+  .scard .v .lbl{color:var(--muted2);font-weight:400;margin-right:5px}
   .chartbox{margin-top:22px;border:1px solid var(--line);border-radius:10px;background:var(--s1);padding:18px 18px 10px}
   .chartbox h2{font-size:13px;font-weight:700;letter-spacing:.3px}
   .chartbox .cs{font-family:var(--mono);font-size:10px;color:var(--muted2);margin-top:3px}
@@ -361,28 +365,7 @@ async function load(){
     var winAvg = scored.length ? scored.reduce(function(a,d){return a+Number(d.accuracy_pct);},0)/scored.length : null;
     var winMarks = days.reduce(function(a,d){return a+(Number(d.n_scored)||0);},0);
 
-    /* Weighted by the marks behind each day: a 400-signal day should not count
-       the same as a 100-signal one when the figure is a per-signal average. */
-    function weighted(valKey, wKey){
-      var w=0, n=0;
-      days.forEach(function(d){
-        if(d[valKey]===null || d[valKey]===undefined) return;
-        var wt = Number(d[wKey])||0;
-        w += Number(d[valKey])*wt; n += wt;
-      });
-      return {val: n ? w/n : null, n: n};
-    }
-
-    // 3. Mean cumulative move since the signal date.
-    var meanCum = weighted('mean_cum_move','n_marks');
-    // 4. Accuracy split by direction -- this is where the book actually differs.
-    var lng = weighted('long_accuracy_pct','long_n');
-    var sht = weighted('short_accuracy_pct','short_n');
-    // 5. Signals per day, averaged across the window.
-    var spdAvg = days.length
-      ? days.reduce(function(a,d){return a+(Number(d.signals_per_day)||0);},0)/days.length : null;
-
-    /* 2. Excess move: the book's total move minus NIFTY's, over exactly the days
+    /* 2. vs NIFTY: the book's total move and NIFTY's, over exactly the days
        that HAVE a benchmark. market_marks currently stops short of the newest
        marks, so summing the book across all 20 days against NIFTY across 13
        would not be the same period -- and would quietly change the answer in
@@ -391,40 +374,61 @@ async function load(){
     var bench = days.filter(function(d){return d.nifty_move_pct!==null;});
     var bookB = bench.reduce(function(a,d){return a+(Number(d.mean_daily_move)||0);},0);
     var nifB  = bench.reduce(function(a,d){return a+(Number(d.nifty_move_pct)||0);},0);
-    var excess = bench.length ? bookB-nifB : null;
 
     document.getElementById('hdrLine').innerHTML =
       t.n_marks+' signals live · '+days.length+' trading days · '+
       n2(t.signals_per_day,1)+' signals/day · marked '+t.mark_date;
 
-    function half(v){
-      return '<span class="'+(v===null?'':(Number(v)>=50?'g':'r'))+'">'+pctTxt(v,1)+'</span>';
-    }
+    /* Per-SIGNAL aggregates. v_marks_daily is per mark_date and v_open_book is
+       the latest mark date only -- which, now that a short has exactly one mark
+       at age 1, would leave shorts out of the P&L entirely while the label
+       still said "every signal". v_window_summary counts each signal once, at
+       its latest mark inside the window. */
+    var wrows = await jget('/rest/v1/v_window_summary');
+    var W = (wrows && wrows[0]) ? wrows[0] : {};
+    var line = function(lbl, val){ return '<span class="lbl">'+lbl+'</span>'+val; };
 
     document.getElementById('row1').innerHTML =
-      card('Directional accuracy · '+days.length+'d', pctTxt(winAvg,1),
-           winAvg>=50?'green':'red',
-           'n='+winMarks+' marks · '+scored.length+' days') +
+      /* Neutral. An accuracy number is not good or bad on its own -- it depends
+         on the signal rate below it, and colouring it asserts a verdict. */
+      card('Directional accuracy · '+days.length+'d', pctTxt(winAvg,1), '',
+           'n='+winMarks+' marks · '+scored.length+' days · long and short pooled') +
 
-      /* Signed, and labelled against the index, so it cannot be misread as a
-         second accuracy percentage. */
-      card('Excess move vs NIFTY',
-           bench.length ? signTxt(excess,2) : '—',
-           bench.length ? signCls(excess) : '',
+      /* Both figures, plainly, no difference computed. Neutral for the same
+         reason: which one "wins" is the reader's call, not the card's. */
+      card('vs NIFTY',
            bench.length
-             ? 'book '+signTxt(bookB,2)+' − index '+signTxt(nifB,2)+' · '+bench.length+' of '+days.length+' days'
+             ? '<span class="pair">'+line('Signals ', signTxt(bookB,2))+'<br>'+
+                                     line('Nifty ',   signTxt(nifB,2))+'</span>'
+             : '—',
+           '',
+           bench.length
+             ? (bench.length < days.length
+                  ? 'benchmarked on '+bench.length+' of '+days.length+' days only'
+                  : 'same '+days.length+' days, same units')
              : 'no NIFTY benchmark in this window') +
 
-      card('Mean move since call', signTxt(meanCum.val,2), signCls(meanCum.val),
-           'per signal · n='+meanCum.n) +
-
-      card('Long / short accuracy',
-           half(lng.val)+'<span class="slash">/</span>'+half(sht.val),
+      /* Counts, not an average: representational, so the colours are too. */
+      card('Winners / losers',
+           '<span class="g">'+(W.winners!==undefined?W.winners:'—')+'</span>'+
+           '<span class="slash">/</span>'+
+           '<span class="r">'+(W.losers!==undefined?W.losers:'—')+'</span>',
            '',
-           'n='+lng.n+' long · '+sht.n+' short') +
+           (W.n_signals||0)+' signals since their own call'+
+           (W.flat ? ' · '+W.flat+' flat' : '')) +
 
-      card('Signals per day', n2(spdAvg,1), '',
-           'mean across '+days.length+' days');
+      card('Top gainer / top loser',
+           (W.top_gainer_symbol
+             ? '<span class="pair"><span class="g">'+esc(W.top_gainer_symbol)+' '+signTxt(W.top_gainer_pct,1)+'</span><br>'+
+                                  '<span class="r">'+esc(W.top_loser_symbol)+' '+signTxt(W.top_loser_pct,1)+'</span></span>'
+             : '—'),
+           '',
+           'best and worst single signal') +
+
+      /* The real one. Longs accrue daily; a short carries its single intraday
+         mark and stays in the total for as long as that mark is in the window. */
+      card('Notional P&amp;L', rup(W.notional_pnl), signCls(W.notional_pnl),
+           'hypothetical · ₹1L per signal · '+(W.n_long||0)+' long, '+(W.n_short||0)+' short');
 
     drawChart(asc);
 
