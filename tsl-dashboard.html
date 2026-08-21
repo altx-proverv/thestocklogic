@@ -175,13 +175,15 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   <div class="cs" id="capNote"></div>
 
   <div class="shead"><h2>By direction &mdash; rolling 20 days</h2><span class="cnt" id="dirCnt"></span></div>
-  <div class="tbl-wrap"><table id="dirTbl" style="min-width:940px">
+  <div class="tbl-wrap"><table id="dirTbl" style="min-width:1180px">
     <thead><tr><th>Direction</th><th class="num">Signals</th><th class="num">Total profit</th>
                <th class="num">Total loss</th><th class="num">Net P&amp;L</th>
-               <th class="num" title="Most capital this direction had committed on any single session in the window.">Peak capital</th>
+               <th class="num" title="Most capital this direction had committed on any single session — what you would need to never be blocked.">Peak capital</th>
+               <th class="num" title="Mean capital committed across all 20 window sessions, idle ones counted as zero — what was actually working.">Avg capital</th>
                <th class="num" title="Trading days from entry to resolution.">Median hold</th>
-               <th class="num" title="Net P&amp;L divided by this direction's own peak capital.">Return</th></tr></thead>
-    <tbody><tr><td colspan="8" class="loading">loading…</td></tr></tbody>
+               <th class="num" title="Net P&amp;L ÷ peak capital. The conservative read.">Return on peak</th>
+               <th class="num" title="Net P&amp;L ÷ average capital. The optimistic read.">Return on avg</th></tr></thead>
+    <tbody><tr><td colspan="10" class="loading">loading…</td></tr></tbody>
   </table></div>
   <div class="cs" id="dirFoot"></div>
 
@@ -414,16 +416,22 @@ function renderCapital(){
   document.getElementById('rowCap').innerHTML =
     /* Neutral: gross turnover is a volume, not a verdict. */
     card('Total deployed', rup(T.total_deployed), '',
-         (T.n_resolved||0)+' positions × ₹1L') +
+         (T.n_resolved||0)+' positions at own size') +
 
-    /* Neutral for the same reason, and the date matters -- a peak is a single
-       session, not a level the book sat at. */
-    card('Peak concurrent', rup(T.peak_capital), '',
-         (T.peak_concurrent||0)+' open on '+esc(T.peak_date||'—')) +
+    /* Peak and average are shown as a pair and always in this order, because
+       each on its own is a different and equally partial claim. */
+    card('Peak capital', rup(T.peak_capital), '',
+         'never blocked · '+esc(T.peak_date||'—')) +
 
-    /* The one that means something. Green or red by sign. */
+    card('Avg capital', rup(T.avg_capital), '',
+         'actually working · '+(T.sessions_active||0)+'/'+(T.sessions_total||0)+' sessions') +
+
+    /* The returns carry the sign, so these are the only coloured cards. */
     card('Return on peak', pctTxt(T.return_on_peak_pct,2), signCls(T.return_on_peak_pct),
-         'net P&L ÷ peak capital') +
+         'conservative') +
+
+    card('Return on avg', pctTxt(T.return_on_avg_pct,2), signCls(T.return_on_avg_pct),
+         'optimistic') +
 
     /* Neutral: a holding period is neither good nor bad on its own. */
     card('Median hold', n2(T.median_hold_days,1)+' d', '',
@@ -433,10 +441,23 @@ function renderCapital(){
      flatterer for a book that turns over quickly, and quoting only the
      favourable one is how a 1% book gets described as a 3% book. */
   document.getElementById('capNote').innerHTML =
-    'Against gross turnover of '+rup(T.total_deployed)+' the same net P&amp;L is '+
-    pctTxt(T.return_on_deployed_pct,2)+'; against peak committed capital of '+
-    rup(T.peak_capital)+' it is '+pctTxt(T.return_on_peak_pct,2)+'. '+
-    'The second is the rate the book earned on the cash it actually tied up.'+
+    '<b>Peak or average — neither alone is honest.</b> '+
+    '<b>Peak</b> ('+rup(T.peak_capital)+') is what you would need on hand to never '+
+    'have an entry blocked; dividing by it gives the conservative '+
+    pctTxt(T.return_on_peak_pct,2)+'. <b>Average</b> ('+rup(T.avg_capital)+
+    ', across all '+(T.sessions_total||0)+' sessions in the window, idle ones '+
+    'counted as zero) is what was actually working; dividing by it gives the '+
+    'optimistic '+pctTxt(T.return_on_avg_pct,2)+'. '+
+    'The true figure sits between them, nearer the conservative end the lumpier '+
+    'the book — and this book is lumpy: peak is '+
+    n2(Number(T.peak_capital)/Math.max(1,Number(T.avg_capital)),1)+'× the average, '+
+    'so most of that capital sits idle most of the time.'+
+    '<br>Against gross turnover of '+rup(T.total_deployed)+' the same net P&amp;L is '+
+    pctTxt(T.return_on_deployed_pct,2)+', which flatters a fast-turnover book and '+
+    'is shown only so the difference is visible.'+
+    '<br>Positions are sized at their own stored notional (averaging ~₹78k, not a '+
+    'flat ₹1L), and '+esc(dirLabel('SHORT'))+' positions are charged 20% MIS '+
+    'margin rather than full cash, matching how the sizer actually commits capital.'+
     '<br>Unresolved positions are excluded, matching the P&amp;L they would be '+
     'divided into — they are still open and do tie up capital, so the true peak '+
     'is higher than shown.'+
@@ -466,13 +487,16 @@ function renderDirections(){
            '<td class="num pnl-neg">'+rup(d.gross_loss)+'</td>'+
            '<td class="num '+(Number(d.net_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(d.net_pnl)+'</td>'+
            /* Capital and hold stay neutral -- they are magnitudes, not results.
-              Only the return carries a sign worth colouring. */
-           '<td class="num" title="'+(c.peak_concurrent||0)+' open on '+esc(c.peak_date||'—')+'">'+
-             rup(c.peak_capital)+'</td>'+
+              Only the returns carry a sign worth colouring. */
+           '<td class="num" title="peak session '+esc(c.peak_date||'—')+'">'+rup(c.peak_capital)+'</td>'+
+           '<td class="num" title="active on '+(c.sessions_active||0)+' of '+(c.sessions_total||0)+' sessions">'+
+             rup(c.avg_capital)+'</td>'+
            '<td class="num">'+(c.median_hold_days!==undefined?n2(c.median_hold_days,1)+' d':'—')+'</td>'+
            '<td class="num '+(Number(c.return_on_peak_pct)>=0?'pnl-pos':'pnl-neg')+'">'+
-             pctTxt(c.return_on_peak_pct,2)+'</td></tr>';
-  }).join('') : '<tr><td colspan="8" class="loading">No resolved signals in the window.</td></tr>';
+             pctTxt(c.return_on_peak_pct,2)+'</td>'+
+           '<td class="num '+(Number(c.return_on_avg_pct)>=0?'pnl-pos':'pnl-neg')+'">'+
+             pctTxt(c.return_on_avg_pct,2)+'</td></tr>';
+  }).join('') : '<tr><td colspan="10" class="loading">No resolved signals in the window.</td></tr>';
 
   /* Without this the table reads as an arithmetic error. */
   var L=capOf('LONG'), S=capOf('SHORT'), T=capOf('TOTAL');
@@ -484,10 +508,13 @@ function renderDirections(){
            esc(dirLabel('SHORT'))+' on '+esc(S.peak_date)+', the book as a whole on '+
            esc(T.peak_date)+'. The total is the most positions open at once across '+
            'both directions, not '+rup(L.peak_capital)+' + '+rup(S.peak_capital)+'.';
-    foot += '<br>Return is measured against each direction’s own peak, so the two are '+
-            'comparable per rupee tied up. '+esc(dirLabel('SHORT'))+' positions close the '+
-            'session they open and tie up little capital, which is why a small loss '+
-            'reads as a large negative return. That is the intended reading.';
+    foot += '<br>Both returns are measured against each direction’s own capital, so the '+
+            'two directions are comparable per rupee tied up. '+esc(dirLabel('SHORT'))+
+            ' positions close the session they open and are charged 20% MIS margin, so '+
+            'they tie up very little — which is why a '+rup(Math.abs(Number(S.net_pnl)))+
+            ' loss reads as '+pctTxt(S.return_on_peak_pct,2)+' on peak and '+
+            pctTxt(S.return_on_avg_pct,2)+' on average. Small base, large rate. That is '+
+            'the intended reading, and it is the reason the split exists.';
   }
   document.getElementById('dirFoot').innerHTML = foot;
 }
