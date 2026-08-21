@@ -381,7 +381,7 @@ var _dirs = [];
 
 function renderDirections(){
   document.getElementById('dirCnt').textContent =
-    'resolved signals only · same window and basis as the table below';
+    'resolved only · one position per symbol · same window and basis as the table below';
 
   document.querySelector('#dirTbl tbody').innerHTML = _dirs.length ? _dirs.map(function(d){
     var isTotal = d.direction === 'TOTAL';
@@ -427,7 +427,7 @@ function renderSetups(){
   }
 
   document.getElementById('setupCnt').textContent =
-    rows.length+' setups · resolved signals in the '+(_setups.length?20:0)+
+    rows.length+' setups · one position per symbol in the '+(_setups.length?20:0)+
     '-day window, not today’s marks · sorted by '+
     (spec ? spec.label+' ('+(_setupAsc?spec.asc:spec.desc)+')' : 'resolved P&L');
 
@@ -537,10 +537,18 @@ async function load(){
       n2(t.signals_per_day,1)+' signals/day · marked '+t.mark_date;
 
     /* Every card below comes from v_window_summary, which is an aggregate OF
-       v_signal_window -- the same rows the table renders. One population,
-       defined once, so the cards and the table cannot disagree.
+       v_signal_window -- the same rows the table renders, defined once, so the
+       cards and the table cannot disagree.
        The window is 20 trading days of INTAKE: a signal counts while its
-       signal_date is inside it and ages out entirely on day 21. */
+       signal_date is inside it and ages out entirely on day 21.
+       TWO BASES, deliberately. Anything position-level -- winners/losers, the
+       extremes, and Indicative P&L -- counts one position per symbol and
+       direction, matching what ATLAS would actually hold under Gate 3b.
+       Publication counts (signals/day, the long-short split) count every
+       signal, because output volume is a different question from positions
+       held. Directional accuracy is per MARK across all publications: a
+       republished symbol is reweighted but not biased, since the same stock on
+       the same day resolves the same way under either publication. */
     var wrows = await jget('/rest/v1/v_window_summary');
     var W = (wrows && wrows[0]) ? wrows[0] : {};
     var line = function(lbl, val){ return '<span class="lbl">'+lbl+'</span>'+val; };
@@ -614,13 +622,34 @@ async function load(){
              'target rather than marking it to market, so it stops moving once one is hit. '+
              'Stop and target on the same daily bar resolve as a STOP — daily bars carry no '+
              'intraday sequence, and the conservative reading is deliberate.';
-    notes += (Number(W.n_unresolved) >= Number(W.n_signals))
+    /* n_first_signals, not n_signals: the resolution counts beside it are on
+       the first-signal basis, so counting publications here would describe a
+       different population than the numbers it introduces. */
+    notes += (Number(W.n_unresolved) >= Number(W.n_first_signals))
       ? '<br>No signals resolved yet — mark_signals has not run since resolution was added.'
-      : '<br>Of '+(W.n_signals||0)+' signals in the window: '+
+      : '<br>Of '+(W.n_first_signals||0)+' positions in the window: '+
         (W.n_stop||0)+' stopped out, '+(W.n_target||0)+' hit target, '+
         (W.n_expired||0)+' expired at 20 days, '+(W.n_same_day||0)+' closed same day (shorts)'+
         ((W.n_unresolved||0) ? ', '+W.n_unresolved+' still open inside the horizon' : '')+
-        '. Mean resolved move '+signTxt(W.mean_resolved_pct,2)+' per signal.';
+        '. Mean resolved move '+signTxt(W.mean_resolved_pct,2)+' per position.';
+
+    /* State the basis where the number is, not only in a migration comment.
+       A reader who does not know these are two different questions will read
+       the larger figure as the better one. */
+    if(W.n_first_signals!==undefined && Number(W.n_signals) > Number(W.n_first_signals)){
+      notes += '<br><br><b>Basis.</b> P&amp;L counts one position per symbol and direction — '+
+               'the first signal of a run. A zone that survives more than one session '+
+               'republishes, so the '+(W.n_signals||0)+' signals published in this window '+
+               'are '+(W.n_first_signals||0)+' distinct positions. ATLAS takes the first and '+
+               'skips the rest (Gate 3b), so counting every republication would measure '+
+               'positions the agent is built not to take.'+
+               (W.indicative_pnl_all_pub!==undefined && W.indicative_pnl_all_pub!==null
+                 ? '<br>Across all '+(W.n_signals||0)+' publications the same measure totals '+
+                   rup(W.indicative_pnl_all_pub)+'. That is a signal-quality figure — how '+
+                   'everything published performed — and not a P&amp;L: the repeats overlap in '+
+                   'time and no book ever held them.'
+                 : '');
+    }
 
     document.getElementById('notes').innerHTML = notes;
 

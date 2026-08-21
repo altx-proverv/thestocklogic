@@ -22,6 +22,17 @@ log = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def _num(v, default: float = 0.0) -> float:
+    """Coerce a PostgREST value to float. NULL columns arrive as None, and
+    dict.get(key, 0) does NOT protect against that -- the default only applies
+    when the key is absent, and these keys are present-but-null. float(None)
+    raises, which is how a null stop took down the whole run."""
+    try:
+        return default if v is None or v == "" else float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def _headers():
     return {
         "apikey":        SUPABASE_KEY,
@@ -71,12 +82,14 @@ def get_zerodha_positions() -> dict:
 def close_trade(trade: dict, exit_price: float, exit_reason: str) -> bool:
     """Mark a trade as CLOSED in Supabase and release capital."""
     trade_id  = trade["id"]
-    entry     = float(trade.get("entry_price", 0))
-    qty       = int(trade.get("qty", 0))
+    entry     = _num(trade.get("entry_price"))
+    qty       = int(_num(trade.get("qty")))
     direction = trade.get("direction", "LONG")
-    capital   = float(trade.get("capital_deployed", 0))
     symbol    = trade.get("symbol", "")
     now       = datetime.now(IST)
+    # capital_deployed was read here into an unused local. It is not a column
+    # on atlas_trades at all, so it was always the 0 default -- see the note
+    # below on why no capital is released.
 
     # Calculate P&L
     if direction == "LONG":
@@ -166,28 +179,53 @@ def run():
     for trade in open_trades:
         symbol    = trade.get("symbol", "")
         direction = trade.get("direction", "LONG")
-        entry     = float(trade.get("entry_price", 0))
-        sl        = float(trade.get("sl", 0))
-        t1        = float(trade.get("target_1", 0))
-        t2        = float(trade.get("target_2", 0))
 
-        # Check if position still exists in Zerodha
-        zerodha_qty = zerodha_positions.get(symbol, 0)
+        # One malformed row must not end the run. Everything below this point
+        # is per-trade, and the loop previously had no guard at all -- the
+        # first bad row killed the process before any other position was even
+        # looked at.
+        try:
+            entry = _num(trade.get("entry_price"))
 
-        if zerodha_qty == 0:
+            # THE STOP LIVES IN stop_price, NOT sl.
+            #
+            # atlas_entry._log_intent writes stop_price and has never written
+            # sl. The sl column exists, so PostgREST returns "sl": null, and
+            # .get("sl", 0) yields None rather than the default -- the default
+            # only applies when the KEY is absent. float(None) then raised
+            # TypeError on the first open trade, before the zerodha_qty check,
+            # killing run() outright. It did not degrade to CLOSED_UNKNOWN; it
+            # meant this module could not close anything at all while any
+            # position was open, which is why atlas_trades holds zero CLOSED
+            # rows. Read stop_price first and fall back to sl for hand-inserted
+            # rows; _num() absorbs null either way.
+            stop = _num(trade.get("stop_price")) or _num(trade.get("sl"))
+            t1   = _num(trade.get("target_1"))
+            t2   = _num(trade.get("target_2"))
+
+            # Check if position still exists in Zerodha
+            zerodha_qty = zerodha_positions.get(symbol, 0)
+            if zerodha_qty != 0:
+                continue
+
             # Position closed in Zerodha — determine exit reason using LTP
             ltp = get_ltp(symbol)
             if ltp <= 0:
                 log.warning(f"Could not get LTP for {symbol} — skipping")
                 continue
 
-            # Determine exit reason
+            # Determine exit reason. NOTE: ATLAS enters without targets by
+            # design -- see atlas_entry's docstring, "No SL, no target, no exit
+            # orders. Exits manual." So t1/t2 are absent on agent-created rows
+            # and the T1_HIT/T2_HIT branches only fire for rows that carry
+            # targets from somewhere else. The stop branch is the one that
+            # matters here, and it is the one that was unreachable.
             if direction == "LONG":
                 if t2 and ltp >= t2 * 0.995:
                     exit_reason = "T2_HIT"
                 elif t1 and ltp >= t1 * 0.995:
                     exit_reason = "T1_HIT"
-                elif sl and ltp <= sl * 1.005:
+                elif stop and ltp <= stop * 1.005:
                     exit_reason = "SL_HIT"
                 else:
                     exit_reason = "CLOSED_UNKNOWN"
@@ -196,13 +234,27 @@ def run():
                     exit_reason = "T2_HIT"
                 elif t1 and ltp <= t1 * 1.005:
                     exit_reason = "T1_HIT"
-                elif sl and ltp >= sl * 0.995:
+                elif stop and ltp >= stop * 0.995:
                     exit_reason = "SL_HIT"
                 else:
                     exit_reason = "CLOSED_UNKNOWN"
 
+            # CLOSED_UNKNOWN is a real answer when no stop is on the row, but
+            # it is a different statement from "exited away from a known stop".
+            # Say which, so the reason can be judged later.
+            if exit_reason == "CLOSED_UNKNOWN":
+                log.info(
+                    f"{symbol}: exit reason undetermined — "
+                    + (f"LTP Rs{ltp:.2f} vs stop Rs{stop:.2f}, no targets on row"
+                       if stop else "no stop or targets recorded on this row")
+                )
+
             if close_trade(trade, ltp, exit_reason):
                 closed_count += 1
+
+        except Exception as e:
+            log.error(f"Outcome check failed for {symbol}: {type(e).__name__}: {e}")
+            continue
 
     # Update P&L in atlas_state
     if closed_count > 0:
