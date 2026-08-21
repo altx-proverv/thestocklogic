@@ -9,6 +9,9 @@ GATE STACK
                                      shorts only when extreme_bearish
   2. Opening range                -- SHORTS ONLY (intraday directional check)
   3. New entries today            -- MAX_TRADES_PER_DAY
+  3b. Already holding symbol      -- hard skip. No scale-in: the risk and
+                                     notional caps are per-entry, so a second
+                                     fill behind the same stop doubles both.
   4. Entry range                  -- inside zone -> MARKET order now.
                                      Outside -> skip. No resting orders.
   5. Sizing                       -- Rs3k risk / Rs1L notional dual cap
@@ -25,8 +28,9 @@ institutions accumulate and retail stops watching.
 CAPITAL IS NO LONGER TRACKED. The open-position limit and the deployed-capital
 cap are both gone, along with the atlas_trades-derived exposure ledger that fed
 them -- it was a second copy of the broker's balance and nothing reconciled the
-two. The binding constraints are now MAX_TRADES_PER_DAY and whether the broker
-actually has the cash, read live at decision time. See atlas/risk/funds.py.
+two. The binding constraints are now MAX_TRADES_PER_DAY, one-position-per-symbol
+(Gate 3b), and whether the broker actually has the cash, read live at decision
+time. See atlas/risk/funds.py.
 
 REGIME now comes from data/processed/market.parquet (bull / sideways / bear,
 200 DMA with a 3% neutral band) rather than sector_heatmap's
@@ -208,6 +212,41 @@ def get_today_entry_count() -> int:
         return 0
 
 
+def get_open_position(symbol: str) -> tuple:
+    """Committed position in `symbol`, if any. -> (readable, position|None).
+
+    OPEN is a filled position; GTT_PENDING is a resting trigger that has not
+    filled but has cash spoken for behind it. Both are commitments to the same
+    symbol, so both block. CLOSED and CANCELLED do not, and SHADOW rows are
+    never either status so a shadow run cannot block itself -- but a LIVE
+    holding DOES block a shadow evaluation, which is correct: the shadow log is
+    supposed to say what live would have done.
+
+    FAILS CLOSED. `readable` is False when the book cannot be read at all, and
+    the caller must block on that. This is deliberately stricter than Gate 3
+    above, which returns 0 on failure: an unreadable book there costs at most
+    one extra trade against the daily cap, whereas here it costs a second
+    position stacked behind a stop already sized for one.
+    """
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/atlas_trades"
+            f"?symbol=eq.{symbol}&status=in.(OPEN,GTT_PENDING)"
+            f"&select=id,direction,qty,entry_price,stop_price,entry_date,status"
+            f"&order=entry_date.desc&limit=1",
+            headers=_headers(), timeout=10)
+        if r.status_code != 200:
+            log.error(f"open-position check failed for {symbol}: "
+                      f"HTTP {r.status_code} {r.text[:120]}")
+            return False, None
+        rows = r.json()
+        return True, (rows[0] if rows else None)
+    except Exception as e:
+        log.error(f"open-position check failed for {symbol}: "
+                  f"{type(e).__name__}: {e}")
+        return False, None
+
+
 def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float) -> tuple:
     """Enter ONLY if LTP is inside the zone band."""
     if not ENFORCE_ENTRY_RANGE:
@@ -265,6 +304,38 @@ def enter_trade(signal: dict) -> dict:
     if todays >= MAX_TRADES_PER_DAY:
         return {"status": "SKIPPED_LIMIT",
                 "reason": f"entries today {todays}/{MAX_TRADES_PER_DAY}"}
+
+    # GATE 3b -- already holding this symbol. HARD SKIP, never a scale-in.
+    #
+    # A zone that survives two sessions re-publishes, so the same symbol
+    # reappears in consecutive batches -- DELHIVERY was in both the 20 Aug and
+    # 21 Aug batches with an identical setup and an identical stop, and nothing
+    # below would have noticed. Gate 3 counts TODAY's entries only, so a
+    # position opened any earlier day was invisible; kill_switch dropped its
+    # max-open-positions check; and market_open.dedupe() dedupes within a batch,
+    # not against the book.
+    #
+    # Skip rather than scale in because the caps are per-entry: RISK_PER_TRADE
+    # and MAX_NOTIONAL would each be applied a second time, so a second fill
+    # behind the SAME structural stop is one position at double the risk while
+    # the ledger reads it as two independent trades that each respect the cap.
+    # Making a scale-in safe means enforcing risk and notional across the
+    # combined position, which is the BUY/ADD/SELL work parked for a later
+    # phase. Until that exists a hard skip is the correct behaviour -- do not
+    # relax this into an averaging-in rule without that accounting.
+    #
+    # Placed ahead of Gate 4 so a held symbol costs no LTP fetch.
+    readable, held = get_open_position(symbol)
+    if not readable:
+        return {"status": "BLOCKED_NO_POSITION_DATA",
+                "reason": "cannot read open positions -- refusing to risk a duplicate"}
+    if held:
+        return {"status": "SKIPPED_HOLDING",
+                "reason": (f"already holding {held.get('qty')} {symbol} "
+                           f"{held.get('direction')} @ Rs{held.get('entry_price')} "
+                           f"from {held.get('entry_date')} "
+                           f"(stop Rs{held.get('stop_price')}, {held.get('status')})"),
+                "held_trade_id": held.get("id")}
 
     # GATE 4 -- entry range. Enter at MARKET or skip. No resting orders.
     #

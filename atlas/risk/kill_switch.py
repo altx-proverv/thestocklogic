@@ -127,8 +127,14 @@ def check(signal: dict = None) -> KillSwitchResult:
 
     # REMOVED: daily loss cap, weekly drawdown, max open positions, conviction
     # gates. Drawdown is managed by the operator, who also manages every exit;
-    # there is no position limit; and score was shown to be non-predictive.
-    # What is left is structural: can we read our state, and are we halted.
+    # there is no limit on the NUMBER of open positions; and score was shown to
+    # be non-predictive. What is left is structural: can we read our state, and
+    # are we halted.
+    #
+    # Note this is a count limit, not a duplicate check -- removing it left
+    # nothing stopping a second position in a symbol already held. That is now
+    # Gate 3b in atlas_entry.enter_trade, not here, because it needs the symbol
+    # and the kill switch is deliberately symbol-agnostic.
 
     log.info(f"Kill switch PASSED — mode {mode}")
     return KillSwitchResult(True, "All checks passed", details)
