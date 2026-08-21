@@ -74,7 +74,7 @@ def fetch_signals() -> pd.DataFrame:
     on exactly that, so duplicates would upsert over each other."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/signals"
-        f"?select=signal_date,symbol,direction,setup_name,sl,target_1&limit=20000",
+        f"?select=signal_date,symbol,direction,setup_name,entry_ref,sl,target_1&limit=20000",
         headers=_headers(), timeout=60)
     if r.status_code != 200:
         log.error(f"signal fetch failed: HTTP {r.status_code} {r.text[:200]}")
@@ -171,8 +171,39 @@ def resolve_signal(s, closes: dict, all_dates: list) -> dict:
     carry no intraday sequence, so which came first is unknowable; the
     conservative reading is hardcoded rather than guessed.
 
-    Returns {} when it cannot resolve: no price data, no usable sl/target, or
-    the signal is simply too young. Unresolved is a real state, not a zero.
+    ENTRY IS entry_ref, NOT THE SIGNAL-DATE CLOSE. THIS IS DELIBERATE.
+    ================================================================
+    The daily marks in mark_one_date() enter at the signal-date close, and that
+    is also correct -- for what they measure. The two are different questions
+    and they need different entries:
+
+        marks        "what did the market do since we called it"
+                     -> close, because the close is where the call was made
+        resolved P&L "did the trade as designed work"
+                     -> entry_ref, because sl and target_1 are defined
+                        RELATIVE TO entry_ref, and nothing else
+
+    Do not "unify" these. It was tried the other way round first and it silently
+    destroyed the measurement. Every signal is built at exactly 2R -- verified,
+    min = median = max = 2.00 across 344 longs and 77 shorts -- but entering at
+    the close instead threw that away, because the close has already drifted
+    away from entry_ref by the time the signal publishes:
+
+        signals that resolved TARGET had closed +4.0% ABOVE entry_ref, so the
+          target sat only 1.3% away while the stop sat 6.3% away  -> 0.2R
+        signals that resolved STOP had closed -1.4% BELOW entry_ref, so the
+          stop sat 1.4% away while the target sat 7.2% away       -> 5R
+
+    The near-even STOP/TARGET counts then measured how far price had already
+    drifted before the clock started, not whether the design works. Entering at
+    entry_ref restores it: every STOP is -1R, every TARGET is +2R.
+
+    This assumes the entry_ref limit fills. It is a design measurement, not a
+    fill simulation; a signal whose entry is never reached is not modelled here.
+
+    Returns {} when it cannot resolve: no price data, no usable entry_ref or
+    sl, or the signal is simply too young. Unresolved is a real state, not a
+    zero.
     """
     d = closes.get(s.symbol)
     if d is None:
@@ -182,29 +213,39 @@ def resolve_signal(s, closes: dict, all_dates: list) -> dict:
         hit = d.loc[d["date"] == dt]
         return hit.iloc[0] if len(hit) else None
 
-    # SHORT: MIS, one session. Entry is the open of the first trading day after
-    # the signal, exit that day's close -- the same rule its single mark uses.
+    def num(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return None if pd.isna(f) or f <= 0 else f
+
+    # entry_ref for BOTH directions -- see the docstring. The stop and the
+    # target are defined against it, so anything else changes the R of the trade
+    # before it is measured.
+    entry = num(getattr(s, "entry_ref", None))
+    if entry is None:
+        return {}
+
+    # SHORT: MIS, one session. Entered at entry_ref, squared off at the close of
+    # the first trading day after the signal. The EXIT is the same close its
+    # single mark uses; only the entry differs, and deliberately so.
     if s.direction == "SHORT":
         later = [x for x in all_dates if x > s.signal_date]
         if not later:
             return {}
         day1 = later[0]
         b = bar(day1)
-        if b is None or pd.isna(b["open"]) or float(b["open"]) <= 0:
+        if b is None:
             return {}
-        entry, exit_px = float(b["open"]), float(b["close"])
+        exit_px = float(b["close"])
         return {"resolved_pnl_pct": round((entry - exit_px) / entry * 100.0, 4),
                 "resolved_on": day1.date().isoformat(),
                 "resolution": "SAME_DAY"}
 
-    # LONG: entry is the signal-date close, consistent with the daily marks.
-    entry_bar = bar(s.signal_date)
-    if entry_bar is None:
-        return {}
-    entry = float(entry_bar["close"])
-    sl    = float(s.sl)       if s.sl       not in (None, "") and not pd.isna(s.sl)       else None
-    tgt   = float(s.target_1) if s.target_1 not in (None, "") and not pd.isna(s.target_1) else None
-    if entry <= 0 or not sl or sl <= 0:
+    sl  = num(s.sl)
+    tgt = num(s.target_1)
+    if sl is None:
         return {}
 
     horizon = [x for x in all_dates if x > s.signal_date][:WINDOW_DAYS]
@@ -312,6 +353,14 @@ def mark_one_date(signals: pd.DataFrame, closes: dict, all_dates: list,
             ref = prev = entry                        # the entry is the only reference
         else:
             # LONG: CNC, held, marked close-to-close every day it stays live.
+            #
+            # ref_close is the SIGNAL-DATE CLOSE and stays that way. This is the
+            # correct entry for a mark, which asks what the market did after the
+            # call. It is NOT the entry resolve_signal() uses -- that one enters
+            # at entry_ref, because it asks whether the design worked and the
+            # stop and target are defined against entry_ref. Two questions, two
+            # entries, both deliberate. See resolve_signal's docstring before
+            # changing either.
             ref, prev, cur = close_on(s.signal_date), close_on(prev_date), close_on(mark_date)
             if ref is None or prev is None or cur is None or ref <= 0 or prev <= 0:
                 continue
