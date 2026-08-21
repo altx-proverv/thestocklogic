@@ -1,9 +1,23 @@
 """
 BTST Signal Engine — Buy Today Sell Tomorrow
 =============================================
-Runs at 2:30 PM IST (power hour start).
+Runs once, at 2:30 PM IST. There were previously also 11:30 and 13:00 runs;
+they were pointless. push_btst_signals DELETEs the day's rows before inserting,
+so the 14:30 run erased both earlier batches every day -- every row ever
+written to live_signals carries signal_time "14:30". They cost three scans to
+publish one result.
+
 Scans 500 stocks for overnight continuation setups.
-Primary filters: delivery%, RVOL into close, relative strength.
+
+Note which inputs are current and which are not. delivery_pct, rvol and every
+indicator come from data/processed/smc, which is built after the close, so they
+describe the PREVIOUS session -- this engine cannot see today's delivery or
+today's volume expansion. The only live input is ltp, pulled from live_prices,
+which sets entry/SL and the 20 EMA test. The three earlier run times were
+presumably meant to sample intraday behaviour; they could not, because there is
+no intraday data in the parquets to sample.
+
+Primary filters: prior-day delivery%, prior-day RVOL, relative strength.
 Secondary: EMA structure, MACD, RSI, OB proximity.
 Output: top BTST candidates pushed to Supabase + website.
 """
@@ -237,7 +251,14 @@ def score_btst(row: dict, df: pd.DataFrame, live_ltp: float) -> dict:
         "rvol":         round(rvol, 2),
         "rsi":          round(rsi, 1),
         "ema_aligned":  ema20 > ema50 > ema200,
-        "setup_name":   "BTST — Accumulation into close",
+        # Named for what the filters actually measure, not for a narrative.
+        # "Accumulation into close" claimed the engine watched buying build up
+        # through the afternoon. It does not: delivery_pct and rvol are read
+        # from data/processed/smc, which is built EOD, so both describe the
+        # PREVIOUS session. The only current input is ltp (from live_prices),
+        # used for the 20 EMA test and to set entry/SL. Subscribers see this
+        # string on the card, so it has to be true.
+        "setup_name":   "BTST — Prior-day delivery + RVOL, above 20 EMA",
         "signal_type":  "BTST",
         "hold":         "Exit tomorrow 9:15–10:00 AM",
     }
