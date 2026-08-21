@@ -164,10 +164,18 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
     <div id="chart"><div class="loading">loading…</div></div>
   </div>
 
-  <div class="shead"><h2>By setup, today</h2><span class="cnt" id="setupCnt"></span></div>
-  <div class="tbl-wrap"><table id="setupTbl" style="min-width:560px">
-    <thead><tr><th>Setup</th><th class="num">n</th><th class="num">Accuracy</th><th class="num">Mean move</th></tr></thead>
-    <tbody><tr><td colspan="4" class="loading">loading…</td></tr></tbody>
+  <div class="shead"><h2>By setup &mdash; rolling 20 days</h2><span class="cnt" id="setupCnt"></span></div>
+  <div class="tbl-wrap"><table id="setupTbl" style="min-width:880px">
+    <thead><tr><th class="sortable" data-ssort="setup"     tabindex="0" aria-sort="none">Setup<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="signals"  tabindex="0" aria-sort="none">Signals<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="target"   tabindex="0" aria-sort="none">Target<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="stop"     tabindex="0" aria-sort="none">Stop<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="sameday"  tabindex="0" aria-sort="none"
+                   title="Shorts: MIS, resolved on their single session. Never a target or a stop.">Same day<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="hit"      tabindex="0" aria-sort="none">Hit rate<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="pnl"      tabindex="0" aria-sort="none">Resolved P&amp;L<span class="sort-arrow"></span></th>
+               <th class="num sortable" data-ssort="unres"    tabindex="0" aria-sort="none">Unresolved<span class="sort-arrow"></span></th></tr></thead>
+    <tbody><tr><td colspan="8" class="loading">loading…</td></tr></tbody>
   </table></div>
 
   <div class="shead"><h2>Signals Performance &mdash; rolling 20 days</h2><span class="cnt" id="bookCnt"></span></div>
@@ -340,6 +348,89 @@ function renderBook(){
   }).join('') : '<tr><td colspan="8" class="loading">No signals in the window.</td></tr>';
 }
 
+/* ── by-setup table ───────────────────────────────────────────────────
+   Was v_marks_by_setup_today, which filtered to marks dated today: one day of
+   moves split into small groups, and almost no shorts at all, since a short has
+   a single mark on day one and only appeared if it was called yesterday. The
+   header said 20 days and the table said one.
+
+   Now the same 20-day intake population as everything else, on the resolved
+   basis. Default sort is resolved P&L descending. */
+var _setups = [], _setupSort = 'pnl', _setupAsc = false;
+
+var SETUP_SORTS = {
+  /* firstAsc: which way a column opens on its first click. A name reads A-Z;
+     a count or a P&L reads biggest-first. */
+  setup:   {label:'setup',        asc:'A–Z',        desc:'Z–A',  firstAsc:true,
+            cmp:function(a,b){ return String(a.setup_name||'').localeCompare(String(b.setup_name||'')); }},
+  signals: {label:'signals',      asc:'fewest',     desc:'most',    key:'n_resolved'},
+  target:  {label:'targets',      asc:'fewest',     desc:'most',    key:'n_target'},
+  stop:    {label:'stops',        asc:'fewest',     desc:'most',    key:'n_stop'},
+  sameday: {label:'same-day',     asc:'fewest',     desc:'most',    key:'n_same_day'},
+  hit:     {label:'hit rate',     asc:'lowest',     desc:'highest', key:'hit_rate_pct'},
+  pnl:     {label:'resolved P&L', asc:'worst',      desc:'best',    key:'resolved_pnl'},
+  unres:   {label:'unresolved',   asc:'fewest',     desc:'most',    key:'n_unresolved'}
+};
+
+function renderSetups(){
+  var rows = _setups.slice();
+  var spec = SETUP_SORTS[_setupSort];
+  if (spec) {
+    var cmp = spec.cmp || function(a,b){ return (Number(a[spec.key])||0)-(Number(b[spec.key])||0); };
+    rows.sort(function(a,b){ return _setupAsc ? cmp(a,b) : -cmp(a,b); });
+  }
+
+  document.getElementById('setupCnt').textContent =
+    rows.length+' setups · resolved signals in the '+(_setups.length?20:0)+
+    '-day window, not today’s marks · sorted by '+
+    (spec ? spec.label+' ('+(_setupAsc?spec.asc:spec.desc)+')' : 'resolved P&L');
+
+  [].forEach.call(document.querySelectorAll('#setupTbl thead th.sortable'), function(th){
+    var active = th.getAttribute('data-ssort') === _setupSort;
+    th.classList.toggle('sorted', active);
+    th.setAttribute('aria-sort', active ? (_setupAsc?'ascending':'descending') : 'none');
+    th.querySelector('.sort-arrow').textContent = active ? (_setupAsc ? '▲' : '▼') : '';
+  });
+
+  document.querySelector('#setupTbl tbody').innerHTML = rows.length ? rows.map(function(s){
+    /* A setup resolved entirely SAME_DAY can never register a target, so
+       target/resolved is 0% by construction rather than by performance.
+       Printing 0.0% there would read as "this setup never works". Show a dash
+       and let the same-day count carry the explanation. */
+    var scorable = (Number(s.n_target)||0) + (Number(s.n_stop)||0) > 0;
+    return '<tr><td class="sym">'+esc(s.setup_name||'—')+'</td>'+
+           '<td class="num">'+(s.n_resolved||0)+'</td>'+
+           '<td class="num '+((s.n_target||0)?'pnl-pos':'')+'">'+(s.n_target||0)+'</td>'+
+           '<td class="num '+((s.n_stop||0)?'pnl-neg':'')+'">'+(s.n_stop||0)+'</td>'+
+           '<td class="num">'+((s.n_same_day||0) || '—')+'</td>'+
+           '<td class="num '+(scorable ? (Number(s.hit_rate_pct)>=50?'pnl-pos':'pnl-neg') : 'pnl-zero')+'">'+
+             (scorable ? pctTxt(s.hit_rate_pct,1) : '—')+'</td>'+
+           '<td class="num '+(Number(s.resolved_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(s.resolved_pnl)+'</td>'+
+           '<td class="num pnl-zero">'+((s.n_unresolved||0) || '—')+'</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="loading">No setups in the window.</td></tr>';
+}
+
+function sortSetups(key){
+  if (!SETUP_SORTS[key]) return;
+  if (_setupSort === key) _setupAsc = !_setupAsc;
+  else { _setupSort = key; _setupAsc = !!SETUP_SORTS[key].firstAsc; }
+  renderSetups();
+}
+
+(function(){
+  var head = document.querySelector('#setupTbl thead');
+  if (!head) return;
+  head.addEventListener('click', function(e){
+    var th = e.target.closest ? e.target.closest('th.sortable') : null;
+    if (th) sortSetups(th.getAttribute('data-ssort'));
+  });
+  head.addEventListener('keydown', function(e){
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var th = e.target.closest ? e.target.closest('th.sortable') : null;
+    if (th) { e.preventDefault(); sortSetups(th.getAttribute('data-ssort')); }
+  });
+})();
+
 function sortBook(key){
   if (!BOOK_SORTS[key]) return;
   if (_bookSort === key) _bookAsc = !_bookAsc;   // same column: reverse
@@ -453,14 +544,8 @@ async function load(){
 
     drawChart(asc);
 
-    var setups = await jget('/rest/v1/v_marks_by_setup_today?order=n.desc');
-    document.getElementById('setupCnt').textContent = setups.length+' setups · '+t.mark_date;
-    document.querySelector('#setupTbl tbody').innerHTML = setups.length ? setups.map(function(s){
-      return '<tr><td class="sym">'+esc(s.setup_name||'—')+'</td>'+
-             '<td class="num">'+s.n+'</td>'+
-             '<td class="num '+(Number(s.accuracy_pct)>=50?'pnl-pos':'pnl-neg')+'">'+pctTxt(s.accuracy_pct,1)+'</td>'+
-             '<td class="num '+(Number(s.mean_daily_move)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(s.mean_daily_move,3)+'</td></tr>';
-    }).join('') : '<tr><td colspan="4" class="loading">No setups marked today.</td></tr>';
+    _setups = await jget('/rest/v1/v_setup_window');
+    renderSetups();
 
     _book = await jget('/rest/v1/v_signal_window?order=daily_move_pct.desc&limit=500');
     renderBook();
