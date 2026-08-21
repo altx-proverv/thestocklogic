@@ -8,6 +8,9 @@
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="icon" href="/icon-192.png" sizes="192x192">
 <link rel="apple-touch-icon" href="/icon-192.png">
+<!-- For the ATLAS nav unlock only: subscribers is own-row-only since the RLS
+     change, so that check needs a session token the anon key cannot provide. -->
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
     --navy-deep:#0F1F38;--navy:#1B3A6B;--navy-panel:#16294A;
@@ -142,7 +145,7 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   <div class="nav-tabs">
     <a href="/dashboard">EQUITY</a>
     <a href="/tsl-dashboard" class="active">TSL DASHBOARD</a>
-    <span class="lk">ATLAS &#128274;</span>
+    <span class="lk" id="atlasNav">ATLAS &#128274;</span>
     <span class="lk">F&amp;O &#128274;</span>
     <span class="lk">MCX &#128274;</span>
   </div>
@@ -631,7 +634,65 @@ async function load(){
     document.getElementById('chart').innerHTML='<div class="loading">'+esc(e.message)+'</div>';
   }
 }
+/* ── ATLAS nav unlock ─────────────────────────────────────────────────
+   This page had no auth code at all and the padlock was hardcoded markup, so
+   ATLAS showed locked here for everyone including an approved admin, while
+   signals.html unlocked it correctly.
+
+   The check has to carry the SESSION token: subscribers is own-row-only since
+   the RLS change, so the anon key this page otherwise uses returns [] and the
+   padlock would stay on for exactly the operator who should see it.
+
+   PRESENTATIONAL ONLY. /atlas has no gate -- it renders for anyone, and every
+   table it reads (atlas_trades, live_prices, signal_marks) is anon-readable by
+   policy. This changes what the nav shows, not what is reachable. Anything
+   that must actually be restricted has to be restricted in RLS, not here.
+
+   Fails locked: no session, not an admin, or any error and the padlock stays.
+   Mirrors updateNavAuth() in signals.html. */
+var _supa = null;
+
+function _isFresh(sess){
+  if(!sess || !sess.access_token) return false;
+  if(!sess.expires_at) return true;
+  return (sess.expires_at * 1000) - Date.now() > 60000;
+}
+
+async function unlockAtlasNav(){
+  var el = document.getElementById('atlasNav');
+  if(!el) return;
+  try{
+    if(!window.supabase || !window.supabase.createClient) return;
+    if(!_supa) _supa = window.supabase.createClient(SB, AK);
+    var res  = await _supa.auth.getSession();
+    var sess = (res && res.data) ? res.data.session : null;
+    if(!_isFresh(sess)) return;                     // signed out: stays locked
+
+    var r = await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+
+                        encodeURIComponent(sess.user.id)+'&plan=eq.admin&limit=1',
+                        {headers:{apikey:AK, Authorization:'Bearer '+sess.access_token}});
+    if(!r.ok){
+      /* A failed check is not a verdict, but the safe default here is locked. */
+      console.error('atlas nav check: HTTP '+r.status+' '+(await r.text()).slice(0,120));
+      return;
+    }
+    var rows = await r.json();
+    if(!Array.isArray(rows) || !rows.length) return;  // not an admin: stays locked
+
+    el.classList.remove('lk');
+    el.innerHTML = 'ATLAS';
+    el.style.color        = 'var(--sky)';
+    el.style.borderColor  = 'rgba(59,169,238,0.4)';
+    el.style.background   = 'rgba(59,169,238,0.06)';
+    el.style.cursor       = 'pointer';
+    el.onclick = function(){ window.location.href = '/atlas'; };
+  }catch(e){
+    console.error('atlas nav check failed: '+e.message);
+  }
+}
+
 load();
+unlockAtlasNav();
 </script>
 </body>
 </html>
