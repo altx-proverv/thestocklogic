@@ -84,6 +84,12 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   .o-inval{color:var(--muted2);border:1px solid var(--line)}
   .o-ns{color:var(--muted2);border:1px dashed var(--line)}
   .pnl-pos{color:var(--green);font-weight:700}.pnl-neg{color:var(--red);font-weight:700}.pnl-zero{color:var(--muted2)}
+  /* Resolution type sits next to the number: -4.2% STOP and -4.2% EXPIRED are
+     the same figure and completely different outcomes. */
+  .res-stop{color:var(--red);border:1px solid rgba(255,77,109,.35);background:rgba(255,77,109,.07);margin-left:7px}
+  .res-target{color:var(--green);border:1px solid rgba(0,214,143,.35);background:rgba(0,214,143,.07);margin-left:7px}
+  .res-expired{color:var(--muted2);border:1px solid var(--line);margin-left:7px}
+  .res-same_day{color:var(--sky);border:1px solid rgba(59,169,238,.3);background:rgba(59,169,238,.06);margin-left:7px}
   #chipView{margin-top:14px;display:none}
   .chip-day{display:grid;grid-template-columns:110px 1fr 40px;gap:14px;align-items:center;padding:13px 16px;border:1px solid var(--line);border-radius:9px;background:var(--s1);margin-bottom:8px}
   .chip-date{font-family:var(--mono);font-size:12px;color:var(--muted)}
@@ -165,14 +171,15 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   </table></div>
 
   <div class="shead"><h2>Signals Performance &mdash; rolling 20 days</h2><span class="cnt" id="bookCnt"></span></div>
-  <div class="tbl-wrap"><table id="bookTbl" style="min-width:900px">
+  <div class="tbl-wrap"><table id="bookTbl" style="min-width:1020px">
     <thead><tr><th class="sortable" data-sort="symbol"     tabindex="0" aria-sort="none">Symbol<span class="sort-arrow"></span></th>
                <th class="sortable" data-sort="direction"  tabindex="0" aria-sort="none">Direction<span class="sort-arrow"></span></th>
                <th class="num sortable" data-sort="called" tabindex="0" aria-sort="none">Call date<span class="sort-arrow"></span></th>
                <th class="num sortable" data-sort="age"    tabindex="0" aria-sort="none"
                    title="Trading days since the call, not calendar days">Age · trading days<span class="sort-arrow"></span></th>
-               <th class="num">Today</th><th class="num">Since call</th><th>Status</th></tr></thead>
-    <tbody><tr><td colspan="7" class="loading">loading…</td></tr></tbody>
+               <th class="num">Today</th><th class="num">Since call</th>
+               <th class="num">Resolved P&amp;L</th><th>Status</th></tr></thead>
+    <tbody><tr><td colspan="8" class="loading">loading…</td></tr></tbody>
   </table></div>
 
   <div class="note" id="notes"></div>
@@ -318,11 +325,19 @@ function renderBook(){
            '<td class="num">'+b.age_days+'d</td>'+
            '<td class="num '+(Number(b.daily_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.daily_move_pct,2)+'</td>'+
            '<td class="num '+(Number(b.cum_move_pct)>=0?'pnl-pos':'pnl-neg')+'">'+signTxt(b.cum_move_pct,2)+'</td>'+
+           /* Resolved against the signal's OWN stop and target. The type is
+              shown next to the number because a stop and an expiry at the same
+              percentage mean entirely different things. */
+           '<td class="num">'+(b.resolution
+              ? '<span class="'+(Number(b.resolved_pnl_pct)>=0?'pnl-pos':'pnl-neg')+'">'+
+                  signTxt(b.resolved_pnl_pct,2)+'</span>'+
+                '<span class="pill res-'+esc(b.resolution.toLowerCase())+'">'+esc(b.resolution)+'</span>'
+              : '<span class="pnl-zero">unresolved</span>')+'</td>'+
            /* Says why a short has one mark, rather than leaving it to be read
               as missing data. */
            '<td><span class="pill '+(b.closed_same_day?'o-inval':'o-open')+'">'+
              (b.closed_same_day?'closed same day':'held')+'</span></td></tr>';
-  }).join('') : '<tr><td colspan="7" class="loading">No signals in the window.</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="loading">No signals in the window.</td></tr>';
 }
 
 function sortBook(key){
@@ -438,8 +453,15 @@ async function load(){
 
       /* The real one. Longs accrue daily; a short carries its single intraday
          mark and stays in the total for as long as that mark is in the window. */
+      /* RESOLVED, not marked to market: each signal measured against its own
+         stop and target, fixed the moment one is hit. An unresolved signal is
+         excluded rather than counted as zero -- it has no result yet, and
+         zeroing it would be a claim rather than a measurement. */
       card('Indicative P&amp;L', rup(W.indicative_pnl), signCls(W.indicative_pnl),
-           'hypothetical · ₹1L per signal · '+(W.n_long||0)+' long, '+(W.n_short||0)+' short');
+           (Number(W.n_unresolved) >= Number(W.n_signals)
+              ? 'not computed yet — run mark_signals to resolve'
+              : 'resolved '+((W.n_signals||0)-(W.n_unresolved||0))+' of '+(W.n_signals||0)+
+                ' · ₹1L per signal · hypothetical'));
 
     drawChart(asc);
 
@@ -464,6 +486,21 @@ async function load(){
     notes += '<br>Older signals contribute more daily marks than recent ones — a 20-day-old signal has been marked 19 times, yesterday\'s once.';
     notes += '<br>Days where a stock closed exactly unchanged are excluded from accuracy rather than counted as wrong'+
              (t.n_marks>t.n_scored ? ' ('+(t.n_marks-t.n_scored)+' today).' : '.');
+
+    /* The distribution matters more than the total: a book that mostly expires
+       is a different thing from one that mostly stops out, at the same P&L. */
+    notes += '<br><br><b>Resolved P&amp;L</b> measures each signal against its own stop and '+
+             'target rather than marking it to market, so it stops moving once one is hit. '+
+             'Stop and target on the same daily bar resolve as a STOP — daily bars carry no '+
+             'intraday sequence, and the conservative reading is deliberate.';
+    notes += (Number(W.n_unresolved) >= Number(W.n_signals))
+      ? '<br>No signals resolved yet — mark_signals has not run since resolution was added.'
+      : '<br>Of '+(W.n_signals||0)+' signals in the window: '+
+        (W.n_stop||0)+' stopped out, '+(W.n_target||0)+' hit target, '+
+        (W.n_expired||0)+' expired at 20 days, '+(W.n_same_day||0)+' closed same day (shorts)'+
+        ((W.n_unresolved||0) ? ', '+W.n_unresolved+' still open inside the horizon' : '')+
+        '. Mean resolved move '+signTxt(W.mean_resolved_pct,2)+' per signal.';
+
     document.getElementById('notes').innerHTML = notes;
 
     if(t.nifty_move_pct===null){

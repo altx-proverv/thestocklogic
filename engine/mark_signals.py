@@ -74,7 +74,7 @@ def fetch_signals() -> pd.DataFrame:
     on exactly that, so duplicates would upsert over each other."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/signals"
-        f"?select=signal_date,symbol,direction,setup_name&limit=20000",
+        f"?select=signal_date,symbol,direction,setup_name,sl,target_1&limit=20000",
         headers=_headers(), timeout=60)
     if r.status_code != 200:
         log.error(f"signal fetch failed: HTTP {r.status_code} {r.text[:200]}")
@@ -88,22 +88,27 @@ def fetch_signals() -> pd.DataFrame:
 
 
 def load_closes() -> dict:
-    """{symbol: DataFrame[date, open, close]} sorted ascending.
+    """{symbol: DataFrame[date, open, high, low, close]} sorted ascending.
 
-    `open` is here for SHORT marks: a short is MIS, one session, entered at the
-    open and squared off at the close of the same day.
+    `open` is for SHORT marks: a short is MIS, one session, entered at the open
+    and squared off at the close of the same day.
+    `high`/`low` are for resolve_signal(), which needs to know whether a bar
+    touched the stop or the target -- a close-only series cannot tell.
     """
+    want = ["date", "open", "high", "low", "close"]
     out = {}
     for f in STOCKS_DIR.glob("*.parquet"):
         try:
-            d = pd.read_parquet(f, columns=["date", "open", "close"])
+            d = pd.read_parquet(f, columns=want)
         except Exception:
-            # A file without `open` should not cost us the symbol entirely --
-            # longs only need close. Its shorts simply cannot be marked.
+            # A file missing the OHLC columns should not cost us the symbol
+            # entirely -- longs' daily marks only need close. Its shorts cannot
+            # be marked and it cannot resolve, which resolve_signal handles.
             try:
                 d = pd.read_parquet(f, columns=["date", "close"])
-                d["open"] = float("nan")
-                log.warning(f"{f.stem}: no `open` column — SHORT marks unavailable")
+                for c in ("open", "high", "low"):
+                    d[c] = float("nan")
+                log.warning(f"{f.stem}: no OHLC columns — SHORT marks and resolution unavailable")
             except Exception as e:
                 log.warning(f"{f.stem}: unreadable ({e})")
                 continue
@@ -149,6 +154,96 @@ def nifty_from_upstox() -> pd.DataFrame:
               .dropna().sort_values("date").reset_index(drop=True))
 
 
+def resolve_signal(s, closes: dict, all_dates: list) -> dict:
+    """Walk forward from the signal date and record what happened FIRST.
+
+    Mark-to-market answers "where is price now"; this answers "did the trade as
+    designed work" -- entry, stop, target, horizon. A signal resolves once and
+    then stops moving, which is the whole point: the number cannot be flattered
+    by a later rally or punished by a later drift.
+
+        low  <= sl        -> STOP    at sl
+        high >= target_1  -> TARGET  at target_1
+        neither in 20 td  -> EXPIRED at that day's close
+        SHORT             -> SAME_DAY, its single MIS session
+
+    STOP WINS a bar that breaches the stop and reaches the target. Daily bars
+    carry no intraday sequence, so which came first is unknowable; the
+    conservative reading is hardcoded rather than guessed.
+
+    Returns {} when it cannot resolve: no price data, no usable sl/target, or
+    the signal is simply too young. Unresolved is a real state, not a zero.
+    """
+    d = closes.get(s.symbol)
+    if d is None:
+        return {}
+
+    def bar(dt):
+        hit = d.loc[d["date"] == dt]
+        return hit.iloc[0] if len(hit) else None
+
+    # SHORT: MIS, one session. Entry is the open of the first trading day after
+    # the signal, exit that day's close -- the same rule its single mark uses.
+    if s.direction == "SHORT":
+        later = [x for x in all_dates if x > s.signal_date]
+        if not later:
+            return {}
+        day1 = later[0]
+        b = bar(day1)
+        if b is None or pd.isna(b["open"]) or float(b["open"]) <= 0:
+            return {}
+        entry, exit_px = float(b["open"]), float(b["close"])
+        return {"resolved_pnl_pct": round((entry - exit_px) / entry * 100.0, 4),
+                "resolved_on": day1.date().isoformat(),
+                "resolution": "SAME_DAY"}
+
+    # LONG: entry is the signal-date close, consistent with the daily marks.
+    entry_bar = bar(s.signal_date)
+    if entry_bar is None:
+        return {}
+    entry = float(entry_bar["close"])
+    sl    = float(s.sl)       if s.sl       not in (None, "") and not pd.isna(s.sl)       else None
+    tgt   = float(s.target_1) if s.target_1 not in (None, "") and not pd.isna(s.target_1) else None
+    if entry <= 0 or not sl or sl <= 0:
+        return {}
+
+    horizon = [x for x in all_dates if x > s.signal_date][:WINDOW_DAYS]
+    if not horizon:
+        return {}
+
+    for i, dt in enumerate(horizon):
+        b = bar(dt)
+        if b is None:
+            continue
+        lo, hi, cl = b["low"], b["high"], b["close"]
+        if pd.isna(lo) or pd.isna(hi):
+            continue
+        if float(lo) <= sl:                       # stop first, always
+            return {"resolved_pnl_pct": round((sl - entry) / entry * 100.0, 4),
+                    "resolved_on": dt.date().isoformat(), "resolution": "STOP"}
+        if tgt and float(hi) >= tgt:
+            return {"resolved_pnl_pct": round((tgt - entry) / entry * 100.0, 4),
+                    "resolved_on": dt.date().isoformat(), "resolution": "TARGET"}
+        if i == WINDOW_DAYS - 1:                  # full horizon, never touched
+            return {"resolved_pnl_pct": round((float(cl) - entry) / entry * 100.0, 4),
+                    "resolved_on": dt.date().isoformat(), "resolution": "EXPIRED"}
+
+    return {}                                     # still inside the horizon
+
+
+def resolve_all(signals: pd.DataFrame, closes: dict, all_dates: list) -> dict:
+    """{(signal_date, symbol, direction): resolution}. Computed once per signal
+    rather than once per mark -- a long carries the same resolution on all 20 of
+    its rows."""
+    out, counts = {}, {}
+    for s in signals.itertuples():
+        r = resolve_signal(s, closes, all_dates)
+        out[(s.signal_date, s.symbol, s.direction)] = r
+        counts[r.get("resolution") or "UNRESOLVED"] = counts.get(r.get("resolution") or "UNRESOLVED", 0) + 1
+    log.info("resolution: " + " | ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    return out
+
+
 def trading_dates(closes: dict) -> list:
     """Every date on which we hold closes, ascending. This is the real trading
     calendar as observed in the data, which beats a hardcoded holiday list."""
@@ -159,7 +254,7 @@ def trading_dates(closes: dict) -> list:
 
 
 def mark_one_date(signals: pd.DataFrame, closes: dict, all_dates: list,
-                  mark_date: pd.Timestamp) -> list:
+                  mark_date: pd.Timestamp, resolutions: dict = None) -> list:
     """Rows for every live signal on one mark date."""
     idx = all_dates.index(mark_date)
     if idx == 0:
@@ -225,7 +320,12 @@ def mark_one_date(signals: pd.DataFrame, closes: dict, all_dates: list,
             # Exactly flat: neither correct nor incorrect. NULL, not False.
             correct = None if cur == prev else bool(daily > 0)
 
+        res = (resolutions or {}).get((s.signal_date, s.symbol, s.direction)) or {}
+
         rows.append({
+            "resolved_pnl_pct": res.get("resolved_pnl_pct"),
+            "resolved_on":      res.get("resolved_on"),
+            "resolution":       res.get("resolution"),
             "signal_date":    s.signal_date.date().isoformat(),
             "symbol":         s.symbol,
             "direction":      s.direction,
@@ -288,9 +388,13 @@ def main() -> int:
     else:
         want = all_dates[-args.backfill:]
 
+    # Resolution is a property of the SIGNAL, not of a mark date, so it is
+    # computed once here rather than re-walked for every mark.
+    resolutions = resolve_all(signals, closes, all_dates)
+
     total = 0
     for md in want:
-        rows = mark_one_date(signals, closes, all_dates, md)
+        rows = mark_one_date(signals, closes, all_dates, md, resolutions)
         if not rows:
             log.info(f"{md.date()}: nothing live")
             continue
