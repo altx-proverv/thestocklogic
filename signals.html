@@ -172,10 +172,6 @@ nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-f
 .gate-btn.secondary{background:transparent;border-color:var(--line);color:var(--muted)}
 .gate-btn.secondary:hover{color:var(--white);border-color:rgba(255,255,255,.2)}
 .blurred{filter:blur(6px);pointer-events:none;user-select:none;opacity:.4}
-.user-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 0;font-size:10px;color:var(--muted);border-bottom:1px solid var(--line2);margin-bottom:4px}
-.user-email{color:var(--sky)}
-.logout-btn{cursor:pointer;color:var(--muted);background:none;border:none;font-family:var(--font);font-size:10px;letter-spacing:1px}
-.logout-btn:hover{color:var(--orange)}
 .user-dropdown{position:relative;display:inline-block}
 .user-dropdown-btn{font-size:10px;color:var(--muted);background:none;border:1px solid var(--line);padding:4px 10px;cursor:pointer;font-family:var(--font);letter-spacing:1px;display:flex;align-items:center;gap:6px}
 .user-dropdown-btn:hover{border-color:rgba(255,255,255,.2);color:var(--white)}
@@ -302,10 +298,6 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
   </div>
 </div>
 <div class="main">
-  <div id="userBar" style="display:none" class="user-bar">
-    <span>Signed in as <span class="user-email" id="userEmailLabel"></span></span>
-    <button class="logout-btn" onclick="signOut()">SIGN OUT</button>
-  </div>
   <div class="filter-tabs">
   <button class="ftab active" id="ftAll" onclick="filterCards('all')">ALL</button>
   <button class="ftab long" id="ftLong" onclick="filterCards('long')">↑ LONG</button>
@@ -1041,19 +1033,23 @@ function updateNavAuth() {
 
 function renderGate() {
   var container = document.getElementById('signalContainer');
-  var userBar   = document.getElementById('userBar');
+  /* The email and sign-out live in the nav dropdown (updateNavAuth). There was
+     also a "Signed in as ... SIGN OUT" bar above the list saying the same two
+     things a second time; removed. */
   updateNavAuth();
 
   if (_user) {
-    // Logged in + approved — show user bar, full access
-    if (userBar) {
-      userBar.style.display = 'flex';
-      document.getElementById('userEmailLabel').textContent = _user.email;
-    }
+    // Logged in + approved — full access.
+    /* Sign-in happens without a reload, so a gate drawn on an earlier pass has
+       to be taken down here. It never was: an approved subscriber who signed in
+       through the modal was left looking at blurred signals behind an ACCESS
+       RESTRICTED banner until they reloaded. */
+    container.classList.remove('blurred');
+    var gate = document.getElementById('gateBanner');
+    if (gate) gate.remove();
     render().catch(function(e){console.error(e);container.innerHTML='<div class="loading">Could not load signals.</div>';});
   } else {
     // Not logged in — show blurred gate
-    if (userBar) userBar.style.display = 'none';
     render().catch(function(e){console.error(e);});
     setTimeout(function(){
       // Blur entire signal container
