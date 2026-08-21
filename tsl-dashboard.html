@@ -170,12 +170,20 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
     <div id="chart"><div class="loading">loading…</div></div>
   </div>
 
+  <div class="shead"><h2>Capital &amp; return &mdash; rolling 20 days</h2><span class="cnt" id="capCnt"></span></div>
+  <div class="srow" id="rowCap"></div>
+  <div class="cs" id="capNote"></div>
+
   <div class="shead"><h2>By direction &mdash; rolling 20 days</h2><span class="cnt" id="dirCnt"></span></div>
-  <div class="tbl-wrap"><table id="dirTbl" style="min-width:620px">
+  <div class="tbl-wrap"><table id="dirTbl" style="min-width:940px">
     <thead><tr><th>Direction</th><th class="num">Signals</th><th class="num">Total profit</th>
-               <th class="num">Total loss</th><th class="num">Net P&amp;L</th></tr></thead>
-    <tbody><tr><td colspan="5" class="loading">loading…</td></tr></tbody>
+               <th class="num">Total loss</th><th class="num">Net P&amp;L</th>
+               <th class="num" title="Most capital this direction had committed on any single session in the window.">Peak capital</th>
+               <th class="num" title="Trading days from entry to resolution.">Median hold</th>
+               <th class="num" title="Net P&amp;L divided by this direction's own peak capital.">Return</th></tr></thead>
+    <tbody><tr><td colspan="8" class="loading">loading…</td></tr></tbody>
   </table></div>
+  <div class="cs" id="dirFoot"></div>
 
   <div class="shead"><h2>By setup &mdash; rolling 20 days</h2><span class="cnt" id="setupCnt"></span></div>
   <div class="tbl-wrap"><table id="setupTbl" style="min-width:820px">
@@ -377,7 +385,71 @@ function renderBook(){
    TOTAL comes from a ROLLUP inside the view, so it cannot drift from the two
    rows above it, and it reconciles with the Indicative P&L card by
    construction -- both sum resolved_pnl_pct over the same rows. */
-var _dirs = [];
+var _dirs = [], _cap = [];
+
+/* v_capital_window keyed by direction, so the by-direction rows can pick up
+   their own peak and hold without a second basis or a second query shape. */
+function capOf(dir){
+  for(var i=0;i<_cap.length;i++) if(_cap[i].direction===dir) return _cap[i];
+  return null;
+}
+
+/* ── Capital & return ──────────────────────────────────────────────────
+   Summed P&L says nothing about the capital behind it. The same figure is a
+   different statement over Rs1.77Cr of gross turnover than over the cash the
+   book actually had to hold at once, and only the second is a rate of return.
+   Peak concurrency is the honest denominator: the most positions open on any
+   single session, each sized at the Rs1L notional cap. */
+function renderCapital(){
+  var T = capOf('TOTAL');
+  document.getElementById('capCnt').textContent =
+    'resolved positions only · one position per symbol · each sized at the ₹1L notional cap';
+
+  if(!T){
+    document.getElementById('rowCap').innerHTML =
+      '<div class="scard"><div class="k">Capital</div><div class="v">—</div></div>';
+    return;
+  }
+
+  document.getElementById('rowCap').innerHTML =
+    /* Neutral: gross turnover is a volume, not a verdict. */
+    card('Total deployed', rup(T.total_deployed), '',
+         (T.n_resolved||0)+' positions × ₹1L') +
+
+    /* Neutral for the same reason, and the date matters -- a peak is a single
+       session, not a level the book sat at. */
+    card('Peak concurrent', rup(T.peak_capital), '',
+         (T.peak_concurrent||0)+' open on '+esc(T.peak_date||'—')) +
+
+    /* The one that means something. Green or red by sign. */
+    card('Return on peak', pctTxt(T.return_on_peak_pct,2), signCls(T.return_on_peak_pct),
+         'net P&L ÷ peak capital') +
+
+    /* Neutral: a holding period is neither good nor bad on its own. */
+    card('Median hold', n2(T.median_hold_days,1)+' d', '',
+         'entry to resolution');
+
+  /* Both denominators, side by side. Return on turnover is always the
+     flatterer for a book that turns over quickly, and quoting only the
+     favourable one is how a 1% book gets described as a 3% book. */
+  document.getElementById('capNote').innerHTML =
+    'Against gross turnover of '+rup(T.total_deployed)+' the same net P&amp;L is '+
+    pctTxt(T.return_on_deployed_pct,2)+'; against peak committed capital of '+
+    rup(T.peak_capital)+' it is '+pctTxt(T.return_on_peak_pct,2)+'. '+
+    'The second is the rate the book earned on the cash it actually tied up.'+
+    '<br>Unresolved positions are excluded, matching the P&amp;L they would be '+
+    'divided into — they are still open and do tie up capital, so the true peak '+
+    'is higher than shown.'+
+    /* A median of one day under a swing heading invites the wrong reading, so
+       say where it comes from. Stops and targets sit 1–2% from entry_ref and a
+       single daily range usually spans that, so most positions resolve on the
+       first bar. It measures the resolution model, not an operator who exits
+       by hand. */
+    '<br>Hold is measured to <i>resolution</i> — the first bar touching the stop '+
+    'or target — not to a discretionary exit. With stops and targets 1–2% from '+
+    'entry, one day’s range usually covers the distance, which is why the median '+
+    'is short even for positions framed as multi-week.';
+}
 
 function renderDirections(){
   document.getElementById('dirCnt').textContent =
@@ -385,14 +457,39 @@ function renderDirections(){
 
   document.querySelector('#dirTbl tbody').innerHTML = _dirs.length ? _dirs.map(function(d){
     var isTotal = d.direction === 'TOTAL';
+    var c = capOf(d.direction) || {};
     return '<tr'+(isTotal ? ' class="dir-total"' : '')+'>'+
            '<td class="sym">'+esc(dirLabel(d.direction))+'</td>'+
            /* Counts stay neutral: a signal count is not good or bad. */
            '<td class="num">'+(d.n_signals||0)+'</td>'+
            '<td class="num pnl-pos">'+rup(d.gross_profit)+'</td>'+
            '<td class="num pnl-neg">'+rup(d.gross_loss)+'</td>'+
-           '<td class="num '+(Number(d.net_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(d.net_pnl)+'</td></tr>';
-  }).join('') : '<tr><td colspan="5" class="loading">No resolved signals in the window.</td></tr>';
+           '<td class="num '+(Number(d.net_pnl)>=0?'pnl-pos':'pnl-neg')+'">'+rup(d.net_pnl)+'</td>'+
+           /* Capital and hold stay neutral -- they are magnitudes, not results.
+              Only the return carries a sign worth colouring. */
+           '<td class="num" title="'+(c.peak_concurrent||0)+' open on '+esc(c.peak_date||'—')+'">'+
+             rup(c.peak_capital)+'</td>'+
+           '<td class="num">'+(c.median_hold_days!==undefined?n2(c.median_hold_days,1)+' d':'—')+'</td>'+
+           '<td class="num '+(Number(c.return_on_peak_pct)>=0?'pnl-pos':'pnl-neg')+'">'+
+             pctTxt(c.return_on_peak_pct,2)+'</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="loading">No resolved signals in the window.</td></tr>';
+
+  /* Without this the table reads as an arithmetic error. */
+  var L=capOf('LONG'), S=capOf('SHORT'), T=capOf('TOTAL');
+  var foot = '';
+  if(L&&S&&T){
+    foot = '<b>Peak capital does not sum.</b> Each row peaks on its own busiest '+
+           'session and those are different dates — '+
+           esc(dirLabel('LONG'))+' peaked on '+esc(L.peak_date)+', '+
+           esc(dirLabel('SHORT'))+' on '+esc(S.peak_date)+', the book as a whole on '+
+           esc(T.peak_date)+'. The total is the most positions open at once across '+
+           'both directions, not '+rup(L.peak_capital)+' + '+rup(S.peak_capital)+'.';
+    foot += '<br>Return is measured against each direction’s own peak, so the two are '+
+            'comparable per rupee tied up. '+esc(dirLabel('SHORT'))+' positions close the '+
+            'session they open and tie up little capital, which is why a small loss '+
+            'reads as a large negative return. That is the intended reading.';
+  }
+  document.getElementById('dirFoot').innerHTML = foot;
 }
 
 /* ── by-setup table ───────────────────────────────────────────────────
@@ -596,6 +693,12 @@ async function load(){
       card('Indicative P&amp;L', rup(W.indicative_pnl), signCls(W.indicative_pnl), '');
 
     drawChart(asc);
+
+    /* Capital first: renderDirections reads _cap for its peak/hold/return
+       columns, so fetching it after would render those three as em-dashes on
+       the first paint. */
+    _cap  = await jget('/rest/v1/v_capital_window?order=sort_ord.asc');
+    renderCapital();
 
     _dirs = await jget('/rest/v1/v_direction_window?order=sort_ord.asc');
     renderDirections();
