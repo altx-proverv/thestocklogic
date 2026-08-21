@@ -172,20 +172,17 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
 
   <div class="shead"><h2>Capital &amp; return &mdash; rolling 20 days</h2><span class="cnt" id="capCnt"></span></div>
   <div class="srow" id="rowCap"></div>
-  <div class="cs" id="capNote"></div>
 
   <div class="shead"><h2>By direction &mdash; rolling 20 days</h2><span class="cnt" id="dirCnt"></span></div>
-  <div class="tbl-wrap"><table id="dirTbl" style="min-width:1180px">
+  <div class="tbl-wrap"><table id="dirTbl" style="min-width:1060px">
     <thead><tr><th>Direction</th><th class="num">Signals</th><th class="num">Total profit</th>
                <th class="num">Total loss</th><th class="num">Net P&amp;L</th>
                <th class="num" title="Most capital this direction had committed on any single session — what you would need to never be blocked.">Peak capital</th>
                <th class="num" title="Mean capital committed across all 20 window sessions, idle ones counted as zero — what was actually working.">Avg capital</th>
-               <th class="num" title="Trading days from entry to resolution.">Median hold</th>
                <th class="num" title="Net P&amp;L ÷ peak capital. The conservative read.">Return on peak</th>
                <th class="num" title="Net P&amp;L ÷ average capital. The optimistic read.">Return on avg</th></tr></thead>
-    <tbody><tr><td colspan="10" class="loading">loading…</td></tr></tbody>
+    <tbody><tr><td colspan="9" class="loading">loading…</td></tr></tbody>
   </table></div>
-  <div class="cs" id="dirFoot"></div>
 
   <div class="shead"><h2>By setup &mdash; rolling 20 days</h2><span class="cnt" id="setupCnt"></span></div>
   <div class="tbl-wrap"><table id="setupTbl" style="min-width:820px">
@@ -430,46 +427,14 @@ function renderCapital(){
     card('Return on peak', pctTxt(T.return_on_peak_pct,2), signCls(T.return_on_peak_pct),
          'conservative') +
 
+    /* Median hold was here and was dropped: it reads 1.0d and stays 1.0d.
+       Stops and targets sit 1-2% from entry_ref, so a single day's range
+       usually spans the distance and half of all positions resolve on the
+       first bar. A figure that cannot move is not a metric.
+       v_capital_window still exposes median_hold_days for anyone querying it
+       directly. */
     card('Return on avg', pctTxt(T.return_on_avg_pct,2), signCls(T.return_on_avg_pct),
-         'optimistic') +
-
-    /* Neutral: a holding period is neither good nor bad on its own. */
-    card('Median hold', n2(T.median_hold_days,1)+' d', '',
-         'entry to resolution');
-
-  /* Both denominators, side by side. Return on turnover is always the
-     flatterer for a book that turns over quickly, and quoting only the
-     favourable one is how a 1% book gets described as a 3% book. */
-  document.getElementById('capNote').innerHTML =
-    '<b>Peak or average — neither alone is honest.</b> '+
-    '<b>Peak</b> ('+rup(T.peak_capital)+') is what you would need on hand to never '+
-    'have an entry blocked; dividing by it gives the conservative '+
-    pctTxt(T.return_on_peak_pct,2)+'. <b>Average</b> ('+rup(T.avg_capital)+
-    ', across all '+(T.sessions_total||0)+' sessions in the window, idle ones '+
-    'counted as zero) is what was actually working; dividing by it gives the '+
-    'optimistic '+pctTxt(T.return_on_avg_pct,2)+'. '+
-    'The true figure sits between them, nearer the conservative end the lumpier '+
-    'the book — and this book is lumpy: peak is '+
-    n2(Number(T.peak_capital)/Math.max(1,Number(T.avg_capital)),1)+'× the average, '+
-    'so most of that capital sits idle most of the time.'+
-    '<br>Against gross turnover of '+rup(T.total_deployed)+' the same net P&amp;L is '+
-    pctTxt(T.return_on_deployed_pct,2)+', which flatters a fast-turnover book and '+
-    'is shown only so the difference is visible.'+
-    '<br>Positions are sized at their own stored notional (averaging ~₹78k, not a '+
-    'flat ₹1L), and '+esc(dirLabel('SHORT'))+' positions are charged 20% MIS '+
-    'margin rather than full cash, matching how the sizer actually commits capital.'+
-    '<br>Unresolved positions are excluded, matching the P&amp;L they would be '+
-    'divided into — they are still open and do tie up capital, so the true peak '+
-    'is higher than shown.'+
-    /* A median of one day under a swing heading invites the wrong reading, so
-       say where it comes from. Stops and targets sit 1–2% from entry_ref and a
-       single daily range usually spans that, so most positions resolve on the
-       first bar. It measures the resolution model, not an operator who exits
-       by hand. */
-    '<br>Hold is measured to <i>resolution</i> — the first bar touching the stop '+
-    'or target — not to a discretionary exit. With stops and targets 1–2% from '+
-    'entry, one day’s range usually covers the distance, which is why the median '+
-    'is short even for positions framed as multi-week.';
+         'optimistic');
 }
 
 function renderDirections(){
@@ -491,32 +456,13 @@ function renderDirections(){
            '<td class="num" title="peak session '+esc(c.peak_date||'—')+'">'+rup(c.peak_capital)+'</td>'+
            '<td class="num" title="active on '+(c.sessions_active||0)+' of '+(c.sessions_total||0)+' sessions">'+
              rup(c.avg_capital)+'</td>'+
-           '<td class="num">'+(c.median_hold_days!==undefined?n2(c.median_hold_days,1)+' d':'—')+'</td>'+
            '<td class="num '+(Number(c.return_on_peak_pct)>=0?'pnl-pos':'pnl-neg')+'">'+
              pctTxt(c.return_on_peak_pct,2)+'</td>'+
            '<td class="num '+(Number(c.return_on_avg_pct)>=0?'pnl-pos':'pnl-neg')+'">'+
              pctTxt(c.return_on_avg_pct,2)+'</td></tr>';
-  }).join('') : '<tr><td colspan="10" class="loading">No resolved signals in the window.</td></tr>';
+  }).join('') : '<tr><td colspan="9" class="loading">No resolved signals in the window.</td></tr>';
 
-  /* Without this the table reads as an arithmetic error. */
-  var L=capOf('LONG'), S=capOf('SHORT'), T=capOf('TOTAL');
-  var foot = '';
-  if(L&&S&&T){
-    foot = '<b>Peak capital does not sum.</b> Each row peaks on its own busiest '+
-           'session and those are different dates — '+
-           esc(dirLabel('LONG'))+' peaked on '+esc(L.peak_date)+', '+
-           esc(dirLabel('SHORT'))+' on '+esc(S.peak_date)+', the book as a whole on '+
-           esc(T.peak_date)+'. The total is the most positions open at once across '+
-           'both directions, not '+rup(L.peak_capital)+' + '+rup(S.peak_capital)+'.';
-    foot += '<br>Both returns are measured against each direction’s own capital, so the '+
-            'two directions are comparable per rupee tied up. '+esc(dirLabel('SHORT'))+
-            ' positions close the session they open and are charged 20% MIS margin, so '+
-            'they tie up very little — which is why a '+rup(Math.abs(Number(S.net_pnl)))+
-            ' loss reads as '+pctTxt(S.return_on_peak_pct,2)+' on peak and '+
-            pctTxt(S.return_on_avg_pct,2)+' on average. Small base, large rate. That is '+
-            'the intended reading, and it is the reason the split exists.';
-  }
-  document.getElementById('dirFoot').innerHTML = foot;
+
 }
 
 /* ── by-setup table ───────────────────────────────────────────────────
