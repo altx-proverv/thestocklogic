@@ -14,10 +14,13 @@ Flow:
   6. kite.generate_session()                  — access_token
   7. store in broker_tokens (atlas.execution.zerodha_login.store_token)
 
-This is the primary path. It is deliberately NOT the only one: if it
-fails it exits non-zero and leaves no token, so the 08:30 IST
+This is the primary path. It is deliberately NOT the only one: any
+failure — including a rejected broker_tokens write — exits non-zero,
+skips the success line, and reports to Telegram, so the 08:30 IST
 zerodha_morning.py run finds nothing valid and falls back to asking for a
 request_token over Telegram. Failing loudly is what arms that fallback.
+A generated token that was not stored counts as a failure: nothing
+downstream reads it from anywhere but broker_tokens, so it is lost.
 
 Cron: 55 2 * * 1-5 (8:25 AM IST = 2:55 UTC) Mon-Fri — 5 minutes ahead of
       the 03:00 UTC zerodha_morning check.
@@ -39,6 +42,7 @@ from atlas.config import (
     ZERODHA_USER_ID, ZERODHA_PASSWORD, ZERODHA_TOTP,
 )
 from atlas.execution.zerodha_login import store_token, verify_token
+from atlas.reporting.telegram import send
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s")
@@ -220,6 +224,29 @@ def check_config():
         sys.exit(1)
 
 
+def fail(reason: str):
+    """
+    Exit non-zero without printing the success line, and say so on Telegram.
+
+    The log alone is not enough. zerodha_morning will ask the operator for a
+    manual login 5 minutes later, and if atlas.log claims this run succeeded
+    that request looks spurious and gets ignored — which is how a stale
+    broker_tokens row turns into a silent no-trade day. This message is what
+    makes the fallback visibly armed rather than merely armed.
+    """
+    log.error(f"AUTO LOGIN FAILED — {reason}")
+    sent = send(
+        "❌ <b>ZERODHA AUTO-LOGIN FAILED</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"{reason}\n\n"
+        "No usable token was stored. The 08:30 check will ask you to log in "
+        "manually — that request is real, please action it."
+    )
+    if not sent:
+        log.error("Telegram notification did not send — failure is log-only")
+    sys.exit(1)
+
+
 def main():
     log.info("=" * 50)
     log.info("ZERODHA AUTO LOGIN")
@@ -231,19 +258,24 @@ def main():
     try:
         access_token, user_id = get_access_token()
     except Exception as e:
-        # Loud on purpose. No token stored means the 08:30 zerodha_morning
-        # check finds nothing valid and falls back to Telegram.
-        log.error(f"AUTO LOGIN FAILED — {type(e).__name__}: {e}")
-        sys.exit(1)
+        fail(f"{type(e).__name__}: {e}")
 
-    # 7 — same broker_tokens write the Telegram path uses
-    store_token(access_token, user_id or ZERODHA_USER_ID)
+    # 7 — same broker_tokens write the Telegram path uses. Storage is NOT
+    # best-effort: a token that was generated but not stored is simply lost,
+    # because nothing downstream reads it from anywhere else.
+    try:
+        stored = store_token(access_token, user_id or ZERODHA_USER_ID)
+    except Exception as e:
+        fail(f"broker_tokens write raised {type(e).__name__}: {e}")
 
-    if verify_token(access_token):
-        log.info("AUTO LOGIN COMPLETE ✓")
-    else:
-        log.error("Token stored but verification failed")
-        sys.exit(1)
+    if not stored:
+        fail("broker_tokens write was rejected by Supabase (status logged "
+             "above). A token was generated but not saved.")
+
+    if not verify_token(access_token):
+        fail("token stored but it failed verification against Kite")
+
+    log.info("AUTO LOGIN COMPLETE ✓")
 
 
 if __name__ == "__main__":

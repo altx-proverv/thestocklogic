@@ -79,8 +79,16 @@ def complete_login(request_token: str) -> str:
         data = kite.generate_session(request_token, api_secret=ZERODHA_API_SECRET)
         access_token = data["access_token"]
 
-        # Store in Supabase
-        store_token(access_token, data.get("user_id", ZERODHA_USER_ID))
+        # Store in Supabase. An unstored token is a FAILED login, not a
+        # partial success — broker_tokens is the only place anything
+        # downstream reads it from, so a token that did not land is lost.
+        # Returning it anyway makes bot_listener announce "ATLAS ready to
+        # trade" over a stale row.
+        if not store_token(access_token, data.get("user_id", ZERODHA_USER_ID)):
+            log.error("Session generated but the broker_tokens write failed — "
+                      "reporting this login as failed")
+            return ""
+
         log.info(f"Zerodha login complete. User: {data.get('user_name', '')}")
         return access_token
 
@@ -89,8 +97,12 @@ def complete_login(request_token: str) -> str:
         return ""
 
 
-def store_token(access_token: str, user_id: str = ""):
-    """Store Zerodha access token in Supabase."""
+def store_token(access_token: str, user_id: str = "") -> bool:
+    """
+    Store Zerodha access token in Supabase. Returns True only if Supabase
+    accepted the write — a caller that treats storage as best-effort will
+    report success while broker_tokens stays stale.
+    """
     record = {
         "broker":       "zerodha",
         "access_token": access_token,
@@ -104,8 +116,9 @@ def store_token(access_token: str, user_id: str = ""):
     )
     if r.status_code in (200, 201, 204):
         log.info("Zerodha token stored in Supabase")
-    else:
-        log.error(f"Token storage failed: {r.status_code} {r.text[:100]}")
+        return True
+    log.error(f"Token storage failed: {r.status_code} {r.text[:100]}")
+    return False
 
 
 def get_stored_token() -> str:
