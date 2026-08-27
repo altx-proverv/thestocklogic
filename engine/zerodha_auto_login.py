@@ -38,6 +38,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from atlas.config import (
+    SUPABASE_KEY,
     ZERODHA_API_KEY, ZERODHA_API_SECRET,
     ZERODHA_USER_ID, ZERODHA_PASSWORD, ZERODHA_TOTP,
 )
@@ -211,13 +212,22 @@ def get_access_token() -> tuple:
 
 
 def check_config():
-    """Every credential must be present — a blank one fails deep and vague."""
+    """
+    Every credential must be present — a blank one fails deep and vague.
+
+    SUPABASE_SERVICE_KEY is checked here with the rest even though it is not
+    a login credential, because it is only needed at the very last step. Left
+    unchecked, a blank one lets the whole login succeed and then 401s the
+    broker_tokens write. It lives in the crontab header and NOT in an
+    interactive shell, so that is the normal outcome of a hand-run.
+    """
     missing = [name for name, value in (
-        ("ZERODHA_API_KEY",     ZERODHA_API_KEY),
-        ("ZERODHA_API_SECRET",  ZERODHA_API_SECRET),
-        ("ZERODHA_USER_ID",     ZERODHA_USER_ID),
-        ("ZERODHA_PASSWORD",    ZERODHA_PASSWORD),
-        ("ZERODHA_TOTP_SECRET", ZERODHA_TOTP),
+        ("ZERODHA_API_KEY",      ZERODHA_API_KEY),
+        ("ZERODHA_API_SECRET",   ZERODHA_API_SECRET),
+        ("ZERODHA_USER_ID",      ZERODHA_USER_ID),
+        ("ZERODHA_PASSWORD",     ZERODHA_PASSWORD),
+        ("ZERODHA_TOTP_SECRET",  ZERODHA_TOTP),
+        ("SUPABASE_SERVICE_KEY", SUPABASE_KEY),
     ) if not value]
     if missing:
         log.error(f"Missing credentials: {', '.join(missing)}")
