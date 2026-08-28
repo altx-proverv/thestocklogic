@@ -47,12 +47,26 @@ engine.active_zones.add_active_zones(), and last_swing_low / last_swing_high
 which 02b already forward-fills.
 """
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-RISK_PER_TRADE = 3000.0
-MAX_NOTIONAL   = 100000.0
-QTY_MULTIPLE   = 5
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Rules 1, 2, 3 from config. This module held a THIRD copy of them -- config.py
+# and atlas/risk/position_sizing.py were the other two -- and sized every
+# published signal off its own. A rule change in config reached neither sizer,
+# which is the same failure that let the kill switch enforce Rs4,500 against a
+# documented Rs9,000.
+from atlas.config import (
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
+)
+
+# Local to this module and NOT trading rules. Note the band here is wider than
+# position_sizing's (7.0 vs 6.0): a signal with a 6-7% stop is published by this
+# module and then rejected at entry by that one. Left as found -- see the note
+# to the operator; which bound is intended is not this change's call.
 MIN_STOP_PCT   = 1.5     # percent
 MAX_STOP_PCT   = 7.0     # percent
 STOP_BUFFER    = 0.002   # push stop just outside the zone edge
@@ -77,7 +91,7 @@ STOP_BUFFER    = 0.002   # push stop just outside the zone edge
 MAX_ENTRY_DIST_PCT = 0.30
 
 
-def _floor_to_multiple(n: float, m: int = QTY_MULTIPLE) -> int:
+def _floor_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
     if not np.isfinite(n) or n <= 0:
         return 0
     return int(np.floor(n / m) * m)
@@ -169,9 +183,10 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         risk_per_share = abs(e - s)
-        q = _floor_to_multiple(min(RISK_PER_TRADE / risk_per_share, MAX_NOTIONAL / e))
-        if q < QTY_MULTIPLE:
-            reason[i] = f"qty {q} below min {QTY_MULTIPLE} -- too expensive for Rs{RISK_PER_TRADE:,.0f}"
+        q = _floor_to_multiple(min(MAX_RISK_PER_TRADE / risk_per_share,
+                                  MAX_NOTIONAL_PER_TRADE / e))
+        if q < QUANTITY_MULTIPLE:
+            reason[i] = f"qty {q} below min {QUANTITY_MULTIPLE} -- too expensive for Rs{MAX_RISK_PER_TRADE:,.0f}"
             continue
 
         qty[i]      = q

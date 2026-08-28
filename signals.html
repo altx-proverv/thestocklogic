@@ -313,7 +313,13 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
       <div class="how-card"><div class="how-name">Daily NSE Data</div><div class="how-desc">Bhavcopy downloaded every evening after 6:30 PM. Real OHLCV data for 500 Nifty stocks.</div></div>
       <div class="how-card"><div class="how-name">Sector Heatmap</div><div class="how-desc">11 NSE sectors ranked by momentum. Signals only from top and bottom sectors. Updates 4x daily.</div></div>
       <div class="how-card"><div class="how-name">SMC Engine</div><div class="how-desc">Order blocks, FVGs, liquidity sweeps, BOS and CHOCH detection on real daily price structure.</div></div>
-      <div class="how-card"><div class="how-name">Risk Defined</div><div class="how-desc">Max &#8377;5,000 risk per trade. SL at structure. Targets at 2:1 and 3:1. You decide and place manually.</div></div>
+      <!-- Rs3,000 is MAX_RISK_PER_TRADE in atlas/config.py (Rule 1) -- the
+           budget engine/zone_entry.py sizes every published signal against,
+           and what risk_inr on the signals feed is derived from. This page is
+           static and nothing serves config to the browser, so the figure is a
+           hand-maintained literal: if Rule 1 changes in config.py, change it
+           here too. It read Rs5,000 until 28 Aug 2026 and matched nothing. -->
+      <div class="how-card"><div class="how-name">Risk Defined</div><div class="how-desc">Max &#8377;3,000 risk per trade. SL at structure. Targets at 2:1 and 3:1. You decide and place manually.</div></div>
     </div>
   </div>
 </div>

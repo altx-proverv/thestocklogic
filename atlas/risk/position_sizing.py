@@ -6,8 +6,8 @@ correct again now that structural stops exist (it was archived 4 Aug only
 because the no-SL rule made it meaningless).
 
     risk_per_share = |entry - stop|
-    qty_risk       = RISK_PER_TRADE / risk_per_share
-    qty_notional   = MAX_NOTIONAL / entry
+    qty_risk       = MAX_RISK_PER_TRADE / risk_per_share
+    qty_notional   = MAX_NOTIONAL_PER_TRADE / entry
     qty            = floor_to_5( min(qty_risk, qty_notional) )
 
 BOTH caps apply, lower wins. Without the notional cap a tight stop produces
@@ -23,19 +23,32 @@ PRODUCT: longs CNC (delivery, hold winners, GTT-eligible).
          shorts MIS (intraday only, bearish regime, morning session).
 """
 
-import logging
+import sys, logging
 from math import floor
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# Rules 1, 2, 3 and 16 come from config. This module used to restate them as
+# RISK_PER_TRADE / MAX_NOTIONAL / QTY_MULTIPLE and a bare 0.20, which made
+# config.py's documented rules decorative: editing MAX_RISK_PER_TRADE there
+# changed the operator-facing text and nothing about how a position was
+# actually sized. Two copies of one number with nothing reconciling them is
+# exactly what let the kill switch enforce Rs4,500 against a documented
+# Rs9,000 -- see the capital note in config.py.
+from atlas.config import (
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
+    SHORT_MARGIN_PCT_ESTIMATE,
+)
 
 log = logging.getLogger("ATLAS-SIZE")
 
-RISK_PER_TRADE = 3000.0     # rupees at risk if stop is hit
-MAX_NOTIONAL   = 100000.0   # ₹1L per trade
-QTY_MULTIPLE   = 5
-MIN_STOP_PCT   = 0.015      # 1.5%
-MAX_STOP_PCT   = 0.060      # 6.0%
+# Local to sizing and deliberately NOT in config: the stop-distance band is a
+# signal-quality filter belonging to this module, not one of the trading rules.
+MIN_STOP_PCT = 0.015      # 1.5%
+MAX_STOP_PCT = 0.060      # 6.0%
 
 
-def _floor_to_multiple(n: float, m: int = QTY_MULTIPLE) -> int:
+def _floor_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
     return int(floor(n / m) * m)
 
 
@@ -66,8 +79,8 @@ def validate_stop(entry_price: float, stop_price: float, direction: str) -> tupl
 
 
 def size_by_risk(entry_price: float, stop_price: float, direction: str,
-                 risk_per_trade: float = RISK_PER_TRADE,
-                 max_notional: float = MAX_NOTIONAL,
+                 risk_per_trade: float = MAX_RISK_PER_TRADE,
+                 max_notional: float = MAX_NOTIONAL_PER_TRADE,
                  available_funds: float = None) -> dict:
     """
     Returns dict with qty / notional / risk_actual / product, or qty=0 + error.
@@ -87,9 +100,9 @@ def size_by_risk(entry_price: float, stop_price: float, direction: str,
 
     qty = _floor_to_multiple(min(qty_risk, qty_notional))
 
-    if qty < QTY_MULTIPLE:
+    if qty < QUANTITY_MULTIPLE:
         return {"qty": 0,
-                "error": (f"qty {qty} below minimum {QTY_MULTIPLE} -- "
+                "error": (f"qty {qty} below minimum {QUANTITY_MULTIPLE} -- "
                           f"stock too expensive for ₹{risk_per_trade:,.0f} risk "
                           f"at a {stop_pct*100:.2f}% stop"),
                 "stop_pct": stop_pct}
@@ -99,12 +112,14 @@ def size_by_risk(entry_price: float, stop_price: float, direction: str,
     product     = "CNC" if d == "LONG" else "MIS"
 
     # Longs are delivery: full value blocked. Shorts intraday: ~20% margin.
-    capital_required = notional if d == "LONG" else notional * 0.20
+    capital_required = (notional if d == "LONG"
+                        else notional * SHORT_MARGIN_PCT_ESTIMATE)
 
     if available_funds is not None and capital_required > available_funds:
         reduced = _floor_to_multiple(
-            available_funds / (entry_price if d == "LONG" else entry_price * 0.20))
-        if reduced < QTY_MULTIPLE:
+            available_funds / (entry_price if d == "LONG"
+                               else entry_price * SHORT_MARGIN_PCT_ESTIMATE))
+        if reduced < QUANTITY_MULTIPLE:
             return {"qty": 0,
                     "error": f"insufficient funds: need ₹{capital_required:,.0f}, have ₹{available_funds:,.0f}",
                     "stop_pct": stop_pct}
@@ -112,7 +127,8 @@ def size_by_risk(entry_price: float, stop_price: float, direction: str,
         qty              = reduced
         notional         = qty * entry_price
         risk_actual      = qty * risk_per_share
-        capital_required = notional if d == "LONG" else notional * 0.20
+        capital_required = (notional if d == "LONG"
+                            else notional * SHORT_MARGIN_PCT_ESTIMATE)
         binding          = "funds"
 
     return {
