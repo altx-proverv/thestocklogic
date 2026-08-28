@@ -76,6 +76,50 @@ def verify_seam() -> bool:
     return ok
 
 
+def verify_asof(symbols=None, dates=None) -> bool:
+    """
+    The as-of assertion. Separate from the seam and asserting a different
+    property: generation for D must not read any bar after D.
+
+    Destructive rather than declarative -- every bar after D is replaced with
+    absurd prices and the candidate set must not move. It does not care how a
+    leak would happen, only whether the answer changes.
+    """
+    from backtest import asof, replay, testb
+
+    # Dates and symbols are chosen so candidates actually exist. An empty
+    # candidate set compares equal to an empty candidate set, so a guard run on
+    # quiet days passes for a leaky generator too and proves nothing. These are
+    # taken from what was actually published, which guarantees the comparison
+    # has something in it.
+    if symbols is None or dates is None:
+        live = testb.published_signals("2026-08-13", "2026-08-27")
+        by_day = live.groupby("signal_date").size().sort_values(ascending=False)
+        dates = dates or [d.date().isoformat() for d in by_day.head(3).index]
+        symbols = symbols or sorted(
+            live[live["signal_date"].isin(pd.to_datetime(dates))]["symbol"].unique())
+
+    frames = replay.load_frames(symbols)
+    market = replay.load_market()
+    log.info(f"as-of guard over {len(frames)} symbols x {len(dates)} dates "
+             f"(chosen for non-empty candidate sets)")
+
+    result = asof.assert_asof(replay.generate_for_date, frames, market,
+                              [pd.Timestamp(d) for d in dates],
+                              label=f"({len(frames)} symbols)")
+    asof.report(result)
+
+    # A pass built entirely on empty comparisons is not a pass.
+    substantive = [p for p in result["per_date"] if "identical" in str(p[2])]
+    if result["passed"] and not substantive:
+        print("\n  *** WEAK: every date compared empty against empty. "
+              "This proves nothing — choose dates with candidates. ***")
+        return False
+    print(f"\n  {len(substantive)}/{len(result['per_date'])} dates carried "
+          f"candidates, so the comparison was substantive on those.")
+    return result["passed"]
+
+
 def run_baseline(persist: bool = True) -> bool:
     """Test A, persisted per-signal."""
     cfg = BASELINE
@@ -133,11 +177,29 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", action="store_true", help="run Test A")
     ap.add_argument("--verify-seam", action="store_true")
+    ap.add_argument("--verify-asof", action="store_true")
+    ap.add_argument("--testb", action="store_true", help="run Test B (generator parity)")
     ap.add_argument("--no-persist", action="store_true")
     a = ap.parse_args()
 
     if a.verify_seam:
         return 0 if verify_seam() else 1
+
+    if a.verify_asof:
+        return 0 if verify_asof() else 1
+
+    if a.testb:
+        # The as-of guard gates Test B. A replay that can see past D would
+        # "match" or "miss" for reasons that have nothing to do with the
+        # generator, so parity would mean nothing.
+        if not verify_asof():
+            print("\nas-of guard failed — refusing to run Test B")
+            return 1
+        from backtest import testb
+        print()
+        r = testb.run()
+        testb.report(r)
+        return 0 if r["passed"] else 1
 
     if a.baseline:
         # The seam is checked before every persisting run, not once at build
