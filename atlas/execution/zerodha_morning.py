@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
     ZERODHA_API_KEY, ZERODHA_API_SECRET, ZERODHA_USER_ID,
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, MAX_TRADES_PER_DAY,
 )
 from atlas.reporting.telegram import send
 from atlas.execution.zerodha_login import (
@@ -102,11 +103,24 @@ def run():
     token = get_stored_token()
     if token and verify_token(token):
         log.info("Existing token valid — no login needed")
+        # State the limits that actually gate an entry, read from config so
+        # this cannot drift from them again. The line here used to read
+        # "Capital at risk: Rs2,000 daily cap" -- a hardcoded literal, not a
+        # constant, describing a daily loss cap that was removed along with
+        # capital tracking. DAILY_LOSS_CAP_INR and DAILY_LOSS_CAP_PCT are gone
+        # from config and kill_switch's P&L checks went with them, so nothing
+        # enforced it. Telling the operator a cap is watching their downside
+        # when none is is worse than saying nothing: drawdown and exits are
+        # theirs to manage. See the same fix in telegram.py, which dropped
+        # send_startup() for hardcoding "capital * 0.02".
         send(
             f"✅ <b>ATLAS ONLINE</b>\n"
             f"Zerodha connected · Token valid\n"
             f"Time: {now}\n"
-            f"Capital at risk: ₹2,000 daily cap\n"
+            f"Risk/trade ₹{MAX_RISK_PER_TRADE:,.0f} · "
+            f"Max notional ₹{MAX_NOTIONAL_PER_TRADE:,.0f}\n"
+            f"Max {MAX_TRADES_PER_DAY} new entries/day · "
+            f"funds read live from the broker\n"
             f"Market opens in 45 minutes."
         )
         return True
