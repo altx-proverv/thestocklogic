@@ -71,11 +71,18 @@ def get_zerodha_positions() -> Optional[dict]:
         BPCL  quantity=0  t1_quantity=215  opening_quantity=215  product=CNC
 
     Counting quantity alone read that as flat and closed a live 215-share
-    position as CLOSED_UNKNOWN -- BPCL on 28 Aug, COROMANDEL on 24 Aug, each
-    exactly one session after entry. The bug only surfaced when ATLAS's lot was
-    the whole holding; a pre-existing settled lot in the same symbol kept
-    quantity above zero and masked it, which is why three other open positions
-    were never touched.
+    position as CLOSED_UNKNOWN on 28 Aug, one session after entry. BPCL is the
+    only known instance. COROMANDEL, closed the same way on 24 Aug, was a
+    genuine exit on a manually placed GTT -- CLOSED_UNKNOWN there means only
+    that the row carried no stop or target to attribute the exit to, which is
+    what that reason is for. Do not read CLOSED_UNKNOWN as a symptom of this
+    bug.
+
+    The bug surfaced only when ATLAS's lot was the whole holding: a
+    pre-existing settled lot in the same symbol keeps quantity above zero and
+    masks the unsettled leg, which is why ULTRACEMCO, HDFCAMC and MARUTI were
+    never touched. ABSLAMC and IOB were unmasked and merely lucky -- the
+    checker was still dying on the sl-null TypeError through their T+1 window.
 
     Summing both fields is correct independent of settlement timing -- together
     they are simply what is held. Quantities accumulate across books rather than
