@@ -10,6 +10,7 @@ Releases capital back to available pool.
 import sys, requests, logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import SUPABASE_URL, SUPABASE_KEY
@@ -54,7 +55,7 @@ def get_open_trades() -> list:
     return []
 
 
-def get_zerodha_positions() -> dict:
+def get_zerodha_positions() -> Optional[dict]:
     """
     Everything currently held, as {symbol: qty}, read from BOTH broker books.
 
@@ -81,20 +82,39 @@ def get_zerodha_positions() -> dict:
     overwrite, so a symbol appearing in both is the net of the two. Gate 3b
     permits only one position per symbol, so the pathological case of equal and
     opposite legs netting to a false zero cannot arise from ATLAS itself.
+
+    RETURNS None IF THE BOOKS COULD NOT BE READ. An empty dict is a real
+    answer -- the account genuinely holds nothing -- and run() acts on it by
+    closing every open trade. Returning {} on an API error therefore said
+    "everything you hold is gone" whenever Zerodha rate-limited, the token had
+    expired, or the network blipped, and one pass would have closed all six
+    open positions at the prevailing LTP with invented P&L. A failure must not
+    be indistinguishable from a clean result, so the two are now different
+    return values and the caller must handle both.
     """
     kite = get_kite()
     if not kite:
-        return {}
+        log.error("Broker unavailable (no token or init failed) — "
+                  "positions unreadable")
+        return None
+
+    try:
+        net      = kite.positions().get("net", [])
+        holdings = kite.holdings()
+    except Exception as e:
+        log.error(f"Failed to fetch Zerodha positions: {type(e).__name__}: {e}")
+        return None
+
     try:
         pos_map = {}
 
-        for p in kite.positions().get("net", []):
+        for p in net:
             sym = p.get("tradingsymbol", "")
             qty = int(p.get("quantity", 0) or 0)
             if sym and qty != 0:
                 pos_map[sym] = pos_map.get(sym, 0) + qty
 
-        for h in kite.holdings():
+        for h in holdings:
             sym = h.get("tradingsymbol", "")
             # Both fields, always. t1_quantity is the unsettled leg.
             qty = int(h.get("quantity", 0) or 0) + int(h.get("t1_quantity", 0) or 0)
@@ -103,8 +123,9 @@ def get_zerodha_positions() -> dict:
 
         return pos_map
     except Exception as e:
-        log.error(f"Failed to fetch Zerodha positions: {e}")
-        return {}
+        # A malformed book is no more trustworthy than an unreachable one.
+        log.error(f"Failed to parse Zerodha positions: {type(e).__name__}: {e}")
+        return None
 
 
 def close_trade(trade: dict, exit_price: float, exit_reason: str) -> bool:
@@ -199,8 +220,25 @@ def run():
 
     log.info(f"Checking {len(open_trades)} open trades...")
 
-    # Get current Zerodha positions
+    # Get current Zerodha positions. None means the books could not be read --
+    # NOT that they are empty. Closing on an unreadable book would mark every
+    # open trade CLOSED at the prevailing LTP with a P&L that never happened,
+    # and nothing reopens a closed row. Skipping costs one day of outcome
+    # tracking; the alternative corrupts the book. Fail closed.
     zerodha_positions = get_zerodha_positions()
+    if zerodha_positions is None:
+        log.error("Broker books unreadable — skipping the outcome check. "
+                  "No trade closed. Retries on the next scheduled run.")
+        send(
+            "⚠️ <b>ATLAS OUTCOME CHECK SKIPPED</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Could not read Zerodha positions/holdings.\n"
+            f"{len(open_trades)} open trade(s) left untouched — nothing was "
+            "closed on an unreadable book.\n"
+            f"Time: {now.strftime('%H:%M IST')}"
+        )
+        return
+
     log.info(f"Zerodha positions: {zerodha_positions}")
 
     closed_count = 0
