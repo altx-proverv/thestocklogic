@@ -61,15 +61,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # documented Rs9,000.
 from atlas.config import (
     MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
+    MIN_STOP_PCT, MAX_STOP_PCT,          # PERCENT; compared as percent below
 )
 
-# Local to this module and NOT trading rules. Note the band here is wider than
-# position_sizing's (7.0 vs 6.0): a signal with a 6-7% stop is published by this
-# module and then rejected at entry by that one. Left as found -- see the note
-# to the operator; which bound is intended is not this change's call.
-MIN_STOP_PCT   = 1.5     # percent
-MAX_STOP_PCT   = 7.0     # percent
-STOP_BUFFER    = 0.002   # push stop just outside the zone edge
+STOP_BUFFER = 0.002   # push stop just outside the zone edge
 
 # THE publishing gate. A signal is only worth publishing if price is effectively
 # AT the zone right now.

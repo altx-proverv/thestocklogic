@@ -98,6 +98,25 @@ MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 # the only things that stop further entries.
 MAX_TRADES_PER_DAY = 3
 
+# STOP-DISTANCE BAND — a quality filter on the structural stop. Not one of the
+# numbered rules, but shared by two modules, so it belongs here rather than in
+# each of them: engine/zone_entry.py applies it when PUBLISHING a signal and
+# atlas/risk/position_sizing.py applies it again at ENTRY. They held separate
+# copies, drifted to 7.0 and 6.0, and the gap was live — a signal with a 6-7%
+# stop was published and then refused at entry by the stricter sizer.
+#
+# 7.0 is the measured value and the correct one. Live swing-low distances across
+# 40 symbols cluster 2-9%; the 6.0 ceiling was set by reasoning rather than
+# measurement and was rejecting genuine setups at 6.19-6.93%.
+#
+# UNITS: PERCENT, not a fraction. zone_entry compares in percent directly.
+# position_sizing compares against abs(entry-stop)/entry, a fraction, and
+# divides by 100 once at import. Feeding 7.0 to a fraction comparison is a 700%
+# ceiling that rejects nothing; feeding 0.07 to a percent one rejects
+# everything. Neither fails loudly, so keep the unit explicit at every use.
+MIN_STOP_PCT = 1.5
+MAX_STOP_PCT = 7.0
+
 # Rules 1, 2 — agent must NOT place SL or target orders
 ALLOW_AUTOMATED_STOP_LOSS = False
 ALLOW_AUTOMATED_TARGET     = False
@@ -182,6 +201,7 @@ if __name__ == "__main__":
     print(f"  Risk per trade    INR {MAX_RISK_PER_TRADE:,.0f}")
     print(f"  Max notional      INR {MAX_NOTIONAL_PER_TRADE:,.0f}")
     print(f"  Qty multiple      {QUANTITY_MULTIPLE}")
+    print(f"  Stop band         {MIN_STOP_PCT}% - {MAX_STOP_PCT}%")
     print(f"  Max trades/day    {MAX_TRADES_PER_DAY}")
     print(f"  Funds buffer      {FUNDS_SAFETY_BUFFER_PCT*100:.0f}%")
     print(f"  Live trading      {LIVE_TRADING_ENABLED}")

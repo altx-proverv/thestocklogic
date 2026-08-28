@@ -13,10 +13,14 @@ because the no-SL rule made it meaningless).
 BOTH caps apply, lower wins. Without the notional cap a tight stop produces
 absurd size: entry 2000, stop 1990 -> 300 sh -> ₹6L notional on a ₹3k budget.
 
-STOP-DISTANCE FILTER (quality gate, not just a guard):
+STOP-DISTANCE FILTER (quality gate, not just a guard). Band comes from
+config.MIN_STOP_PCT / MAX_STOP_PCT, shared with engine/zone_entry.py:
   < 1.5%  -> reject. Inside normal noise; also forces the notional cap to
              bind, which breaks the ₹3k standardisation.
-  > 6.0%  -> reject. Position too small for costs to be worth it.
+  > 7.0%  -> reject. Position too small for costs to be worth it. Was 6.0
+             here while zone_entry published against 7.0, so setups with a
+             6-7% stop were published and then refused at entry. 7.0 is the
+             measured ceiling -- swing-low distances cluster 2-9%.
 Signals with clean, appropriately-distant structure are better signals.
 
 PRODUCT: longs CNC (delivery, hold winners, GTT-eligible).
@@ -37,15 +41,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 # Rs9,000 -- see the capital note in config.py.
 from atlas.config import (
     MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
-    SHORT_MARGIN_PCT_ESTIMATE,
+    SHORT_MARGIN_PCT_ESTIMATE, MIN_STOP_PCT, MAX_STOP_PCT,
 )
 
 log = logging.getLogger("ATLAS-SIZE")
 
-# Local to sizing and deliberately NOT in config: the stop-distance band is a
-# signal-quality filter belonging to this module, not one of the trading rules.
-MIN_STOP_PCT = 0.015      # 1.5%
-MAX_STOP_PCT = 0.060      # 6.0%
+# config states the band in PERCENT. This module compares against a FRACTION,
+# abs(entry-stop)/entry. Convert once here and compare only against the _FRAC
+# names: comparing a fraction to 7.0 is a 700% ceiling that rejects nothing,
+# and neither mistake raises. The band was 0.060 here against zone_entry's 7.0,
+# which is how a 6-7% stop got published and then refused at entry.
+MIN_STOP_FRAC = MIN_STOP_PCT / 100.0
+MAX_STOP_FRAC = MAX_STOP_PCT / 100.0
 
 
 def _floor_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
@@ -68,12 +75,12 @@ def validate_stop(entry_price: float, stop_price: float, direction: str) -> tupl
 
     stop_pct = abs(entry_price - stop_price) / entry_price
 
-    if stop_pct < MIN_STOP_PCT:
+    if stop_pct < MIN_STOP_FRAC:
         return False, stop_pct, (f"stop {stop_pct*100:.2f}% too tight "
-                                 f"(min {MIN_STOP_PCT*100:.1f}%) -- inside noise")
-    if stop_pct > MAX_STOP_PCT:
+                                 f"(min {MIN_STOP_PCT:.1f}%) -- inside noise")
+    if stop_pct > MAX_STOP_FRAC:
         return False, stop_pct, (f"stop {stop_pct*100:.2f}% too wide "
-                                 f"(max {MAX_STOP_PCT*100:.1f}%) -- size too small to justify costs")
+                                 f"(max {MAX_STOP_PCT:.1f}%) -- size too small to justify costs")
 
     return True, stop_pct, f"stop {stop_pct*100:.2f}% within band"
 
@@ -153,6 +160,9 @@ if __name__ == "__main__":
         ("normal long",      2008.0, 1960.0, "LONG"),
         ("tight stop",       2008.0, 1998.0, "LONG"),   # rejected: 0.5%
         ("wide stop",        2008.0, 1850.0, "LONG"),   # rejected: 7.9%
+        ("6-7% stop",        1000.0,  935.0, "LONG"),   # accepted: 6.5% -- was
+                                                        # rejected here while
+                                                        # zone_entry published it
         ("expensive stock",  5720.0, 5490.0, "LONG"),   # notional cap binds
         ("short intraday",   1078.0, 1105.0, "SHORT"),
         ("inverted stop",    2008.0, 2050.0, "LONG"),   # rejected: wrong side
