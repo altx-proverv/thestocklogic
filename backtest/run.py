@@ -196,6 +196,16 @@ def main() -> int:
             print("\nas-of guard failed — refusing to run Test B")
             return 1
         from backtest import testb
+        # FULL UNIVERSE, deliberately -- NOT the 100-symbol sample.
+        #
+        # Test B compares against what was actually published, and publication
+        # is a top-5-long / top-2-short cut across every symbol (TOP_N_LONG /
+        # TOP_N_SHORT in 03b). Replaying 100 symbols would report the other
+        # 439's signals as "missing" and would take its top 5 from a fifth of
+        # the pool, so the comparison could not succeed however correct the
+        # generator was. The sample exists for repeated CONFIG runs, where
+        # every config sees the same population; the validation gate is a
+        # one-off and pays the full ~2.8 h.
         print()
         r = testb.run()
         testb.report(r)

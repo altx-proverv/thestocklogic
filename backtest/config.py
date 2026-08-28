@@ -81,6 +81,21 @@ class Config:
     # symbols plus liquidity, circuit-band and spread filters.
     universe: str = "current"
 
+    # --- the fixed sample --------------------------------------------
+    # A correct as-of replay is 1875 ms/symbol/date, so the full universe over
+    # 17 months is ~97 h per config. Symbols are cut rather than sessions:
+    # zone detection is per-symbol structure and behaves the same on 100
+    # stocks as on 539, whereas cutting sessions thins the held-out month,
+    # which is the part keeping the comparison honest.
+    #
+    # seed + size + fingerprint all live in the config, so backtest_runs.config
+    # records the exact population a run used. Two configs are only comparable
+    # when their fingerprints match.
+    sample_seed: int = 20260829
+    sample_size: int = 100
+    sample_fingerprint: str = ""      # filled by resolve_sample()
+    full_universe: bool = False       # True for a confirmation re-run
+
     # --- gates, defaulted from the live config -----------------------
     max_entry_dist_pct: float = 0.30
     min_stop_pct: float = MIN_STOP_PCT
@@ -113,6 +128,30 @@ class Config:
 
     def is_baseline(self) -> bool:
         return self.hash() == Config().hash()
+
+    def symbols(self) -> list:
+        """
+        The population this run replays over.
+
+        full_universe=True is the CONFIRMATION run: a config that looks
+        promising on the sample is re-run once over every symbol before it is
+        acted on, because the sample answers rates and not counts.
+        """
+        from backtest import sample
+        if self.full_universe:
+            return sample.available_symbols()
+        return sample.draw(self.sample_seed, self.sample_size)
+
+    def resolved(self):
+        """Config with sample_fingerprint filled in from the actual draw.
+
+        Stored rather than recomputed at read time: the seed reproduces the
+        draw only against the same universe, and the universe grows. The
+        fingerprint records who was actually in the run.
+        """
+        from dataclasses import replace
+        from backtest import sample
+        return replace(self, sample_fingerprint=sample.fingerprint(self.symbols()))
 
 
 BASELINE = Config()

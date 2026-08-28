@@ -42,7 +42,7 @@ except ImportError:
     from universe import SYMBOL_SECTOR_MAP, SECTORS, get_sector_stocks
 
 
-def compute_sector_momentum(target_date: pd.Timestamp = None) -> pd.DataFrame:
+def compute_sector_momentum(target_date: pd.Timestamp = None) -> tuple:
     """
     Computes sector momentum for a given date.
     Returns DataFrame with one row per sector, ranked by momentum.
@@ -91,7 +91,13 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> pd.DataFrame:
             continue
 
     if not all_rows:
-        return pd.DataFrame()
+        # (sector_df, stocks_df), same shape as the success path below. This
+        # returned a bare pd.DataFrame(), so the function had two return
+        # shapes and `a, b = compute_sector_momentum()` raised on empty input.
+        # main() defended with an isinstance check and so was never broken, but
+        # the next caller would have been -- the backtest replay hit exactly
+        # this. One shape, always.
+        return pd.DataFrame(), pd.DataFrame()
 
     stocks_df = pd.DataFrame(all_rows)
 
@@ -261,13 +267,8 @@ def print_heatmap(sector_df: pd.DataFrame):
 def main():
     log.info("THE STOCK LOGIC — Phase 2: Sector Momentum Engine")
 
-    result = compute_sector_momentum()
-
-    if isinstance(result, tuple):
-        sector_df, stocks_df = result
-    else:
-        log.error("No data computed")
-        return
+    # One return shape now, so the isinstance guard this used to need is gone.
+    sector_df, stocks_df = compute_sector_momentum()
 
     if sector_df.empty:
         log.error("No sector data. Run 01b_download_bhavcopy.py first.")
