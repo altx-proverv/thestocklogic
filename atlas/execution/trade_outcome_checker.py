@@ -55,24 +55,52 @@ def get_open_trades() -> list:
 
 
 def get_zerodha_positions() -> dict:
-    """Get current Zerodha positions as {symbol: qty}."""
+    """
+    Everything currently held, as {symbol: qty}, read from BOTH broker books.
+
+    They are different books and a position is only in one of them at a time:
+    positions() is the intraday book, where MIS lives and where a CNC buy also
+    appears on the day it fills; holdings() is the delivery book, which a CNC
+    buy moves into the following day.
+
+    holdings() must sum quantity AND t1_quantity. Under T+1 settlement shares
+    bought the previous session have not reached the demat account yet, so the
+    holding reports quantity=0 with the entire position in t1_quantity:
+
+        BPCL  quantity=0  t1_quantity=215  opening_quantity=215  product=CNC
+
+    Counting quantity alone read that as flat and closed a live 215-share
+    position as CLOSED_UNKNOWN -- BPCL on 28 Aug, COROMANDEL on 24 Aug, each
+    exactly one session after entry. The bug only surfaced when ATLAS's lot was
+    the whole holding; a pre-existing settled lot in the same symbol kept
+    quantity above zero and masked it, which is why three other open positions
+    were never touched.
+
+    Summing both fields is correct independent of settlement timing -- together
+    they are simply what is held. Quantities accumulate across books rather than
+    overwrite, so a symbol appearing in both is the net of the two. Gate 3b
+    permits only one position per symbol, so the pathological case of equal and
+    opposite legs netting to a false zero cannot arise from ATLAS itself.
+    """
     kite = get_kite()
     if not kite:
         return {}
     try:
-        positions = kite.positions().get("net", [])
-        holdings  = kite.holdings()
-        pos_map   = {}
-        for p in positions:
+        pos_map = {}
+
+        for p in kite.positions().get("net", []):
             sym = p.get("tradingsymbol", "")
-            qty = int(p.get("quantity", 0))
-            if qty != 0:
-                pos_map[sym] = qty
-        for h in holdings:
-            sym = h.get("tradingsymbol", "")
-            qty = int(h.get("quantity", 0))
-            if qty > 0:
+            qty = int(p.get("quantity", 0) or 0)
+            if sym and qty != 0:
                 pos_map[sym] = pos_map.get(sym, 0) + qty
+
+        for h in kite.holdings():
+            sym = h.get("tradingsymbol", "")
+            # Both fields, always. t1_quantity is the unsettled leg.
+            qty = int(h.get("quantity", 0) or 0) + int(h.get("t1_quantity", 0) or 0)
+            if sym and qty > 0:
+                pos_map[sym] = pos_map.get(sym, 0) + qty
+
         return pos_map
     except Exception as e:
         log.error(f"Failed to fetch Zerodha positions: {e}")
