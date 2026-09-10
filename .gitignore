@@ -1,6 +1,10 @@
 venv/
 data/raw/
 data/processed/
+# Pre-rebuild archives of data/processed/stocks. Tens of MB each and kept 5
+# deep, so they must never be staged; the sibling data/ paths above are
+# already ignored and this one was simply newer than the list.
+data/snapshots/
 reports/
 __pycache__/
 *.pyc

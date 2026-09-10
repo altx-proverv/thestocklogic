@@ -227,6 +227,102 @@ def download_delivery_data(d: date) -> dict:
 
 # ── STEP 2: BUILD PARQUETS ────────────────────────────────────────
 
+# Columns whose value on a SETTLED bar must never change. date and symbol are
+# the key, not values, and are excluded.
+VALUE_COLS = ("open", "high", "low", "close", "prev_close",
+              "volume", "delivery_qty", "delivery_pct", "trades")
+
+# A settled bar is immutable by default.
+#
+# THIS MODULE HAS NO MERGE, AND THAT IS THE PROBLEM
+# -------------------------------------------------
+# build_parquets never read the file it was about to write. It re-parsed every
+# cached CSV from START_DATE forward, concatenated, and overwrote each symbol's
+# parquet whole. So there was no merge to contain a bug -- and equally, nothing
+# that could notice a bar changing. Every run silently re-derived all history
+# from whatever the CSVs happened to say at that moment, and any difference
+# became the new truth with no record that it had ever been otherwise.
+#
+# That is why a nine-paise move on one field is hard to attribute after the
+# fact: the evidence of the previous value was overwritten by the thing that
+# changed it. It also means the answer to "does this recur" was yes by
+# construction, independent of what caused any single instance.
+#
+# Now: overlapping dates are taken from the EXISTING file, new dates are
+# appended, and any disagreement is reported per field. Set
+# TSL_ACCEPT_REVISIONS=1 to take the incoming values instead -- for a genuine
+# NSE correction, which does happen and should then be applied deliberately and
+# logged, not absorbed silently.
+ACCEPT_REVISIONS = _os.environ.get("TSL_ACCEPT_REVISIONS", "") == "1"
+
+
+def _diff_settled(old: pd.DataFrame, new: pd.DataFrame) -> list:
+    """
+    Fields that changed on a date present in BOTH frames.
+
+    Returns [(date, column, old_value, new_value)]. NaN equals NaN: delivery_pct
+    is absent for most history and a NaN-to-NaN comparison is not a revision.
+    """
+    if old is None or old.empty or new is None or new.empty:
+        return []
+    o = old.set_index("date")
+    n = new.set_index("date")
+    shared = o.index.intersection(n.index)
+    if not len(shared):
+        return []
+
+    out = []
+    for c in VALUE_COLS:
+        if c not in o.columns or c not in n.columns:
+            continue
+        ov, nv = o.loc[shared, c], n.loc[shared, c]
+        both_nan = ov.isna() & nv.isna()
+        differs = ~both_nan & ~np.isclose(
+            pd.to_numeric(ov, errors="coerce").astype(float),
+            pd.to_numeric(nv, errors="coerce").astype(float),
+            rtol=0, atol=1e-9, equal_nan=True)
+        for d in shared[differs]:
+            out.append((pd.Timestamp(d).date().isoformat(), c,
+                        ov.loc[d], nv.loc[d]))
+    return out
+
+
+def _reconcile(new: pd.DataFrame, out_path: Path, symbol: str) -> tuple:
+    """
+    (frame_to_write, conflicts). Settled bars win over incoming ones.
+
+    Also guards TRUNCATION, which is the same failure in a louder form: if a
+    CSV goes missing from data/raw the rebuild simply omits those dates, and
+    the old code wrote the shorter frame over the longer one. Dates present in
+    the existing file and absent from the incoming one are carried forward.
+    """
+    if not out_path.exists():
+        return new, []
+
+    try:
+        old = pd.read_parquet(out_path)
+        old["date"] = pd.to_datetime(old["date"])
+    except Exception as e:
+        log.warning(f"{symbol}: existing parquet unreadable ({e}) — writing fresh")
+        return new, []
+
+    conflicts = _diff_settled(old, new)
+
+    if ACCEPT_REVISIONS:
+        keep_old = old[~old["date"].isin(set(new["date"]))]
+        merged = pd.concat([new, keep_old], ignore_index=True)
+    else:
+        # Settled bars come from the existing file; only genuinely new dates
+        # are taken from the incoming frame.
+        add = new[~new["date"].isin(set(old["date"]))]
+        merged = pd.concat([old, add], ignore_index=True)
+
+    merged = (merged.sort_values("date")
+                    .drop_duplicates("date")
+                    .reset_index(drop=True))
+    return merged, conflicts
+
+
 def build_parquets(trading_days: list):
     """Loads all CSVs, filters to Nifty 100, saves per-stock parquets."""
     log.info("Loading and parsing all Bhavcopy CSVs...")
@@ -258,8 +354,23 @@ def build_parquets(trading_days: list):
         delivery_map = download_delivery_data(latest_day)
         log.info(f"Delivery map loaded: {len(delivery_map)} stocks")
 
+    # Snapshot BEFORE the first write, not after the last. The guard below
+    # keeps settled bars, but a guard only covers the writes it runs against
+    # -- an accepted revision, a manual delete, a bug elsewhere all land on
+    # the only copy there is. This is the copy that is not the only one.
+    try:
+        from engine.stocks_snapshot import take as take_snapshot
+    except ModuleNotFoundError:
+        from stocks_snapshot import take as take_snapshot
+    try:
+        take_snapshot(label="pre-01b rebuild")
+    except Exception as e:
+        log.error(f"SNAPSHOT FAILED ({e}) — continuing, but today's parquets "
+                  f"are not recoverable if this run goes wrong")
+
     log.info("Building per-stock parquets...")
-    ok, skipped = 0, 0
+    ok, skipped, misdated = 0, 0, 0
+    all_conflicts = {}
 
     for symbol in tqdm(sorted(NIFTY100_SYMBOLS), desc="Building stocks"):
         df = combined[combined["symbol"] == symbol].copy()
@@ -270,16 +381,64 @@ def build_parquets(trading_days: list):
             continue
 
         df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
-        # Inject latest delivery_pct from sec_bhavdata_full
-        if delivery_map and symbol in delivery_map:
+
+        # Delivery % is fetched for latest_day only, so it may only be written
+        # onto latest_day's bar. This wrote to df.index[-1] unconditionally: a
+        # symbol that did not trade on latest_day has an OLDER bar in that
+        # position, and that settled bar was given another session's delivery
+        # figure -- silently, on every run, for as long as the symbol stayed
+        # untraded. A mutation of history with no record that it happened.
+        if delivery_map and symbol in delivery_map and latest_day is not None:
             del_pct = delivery_map[symbol]
             if not pd.isna(del_pct):
-                df.loc[df.index[-1], "delivery_pct"] = float(del_pct)
+                if df["date"].iloc[-1] == pd.Timestamp(latest_day):
+                    df.loc[df.index[-1], "delivery_pct"] = float(del_pct)
+                else:
+                    misdated += 1
+
         out = STOCKS_DIR / f"{symbol}.parquet"
+        df, conflicts = _reconcile(df, out, symbol)
+        if conflicts:
+            all_conflicts[symbol] = conflicts
         df.to_parquet(out, index=False)
         ok += 1
 
     log.info(f"Parquets saved: {ok} OK, {skipped} skipped")
+    if misdated:
+        log.info(f"Delivery %% withheld from {misdated} symbol(s) whose last bar "
+                 f"predates {latest_day} — they did not trade that session")
+
+    # A settled bar changed. Loud by design: this is the class of fault that
+    # invalidates every backtest run against the affected symbol, and it used
+    # to be invisible.
+    if all_conflicts:
+        n = sum(len(v) for v in all_conflicts.values())
+        verb = "APPLIED" if ACCEPT_REVISIONS else "REJECTED"
+
+        # A rejected revision that is only logged is forgotten by the next
+        # log rotation. The dates matter beyond this run: they are the bars
+        # upstream now disagrees with, and every backtest still reads them.
+        try:
+            from engine.data_manifest import record_revisions
+        except ModuleNotFoundError:
+            from data_manifest import record_revisions
+        try:
+            record_revisions(all_conflicts, accepted=ACCEPT_REVISIONS)
+        except Exception as e:
+            log.error(f"could not write revisions ledger: {e}")
+
+        log.error(f"{'='*66}")
+        log.error(f"HISTORY CHANGED — {n} field(s) across {len(all_conflicts)} "
+                  f"symbol(s). Incoming values {verb}.")
+        if not ACCEPT_REVISIONS:
+            log.error("The existing bars were kept. Re-run with "
+                      "TSL_ACCEPT_REVISIONS=1 to take the new values.")
+        for sym, rows in sorted(all_conflicts.items())[:20]:
+            for d, c, ov, nv in rows[:6]:
+                log.error(f"  {sym:<14} {d}  {c:<13} {ov!r} -> {nv!r}")
+        if len(all_conflicts) > 20:
+            log.error(f"  ... and {len(all_conflicts)-20} more symbols")
+        log.error(f"{'='*66}")
 
 
 # ── STEP 3: VALIDATE ──────────────────────────────────────────────
@@ -336,6 +495,18 @@ def main():
     # Step 3: Validate
     log.info("\n── Step 3: Validating ──")
     validate()
+
+    # Step 4: Re-fingerprint. Written AFTER the build, so the manifest always
+    # describes the state a subsequent run will be checked against. The
+    # immutability guard in _reconcile is what prevents drift; this is the
+    # independent record that it held, and the thing a future run compares to
+    # instead of finding out from a parity test weeks later.
+    log.info("\n── Step 4: Manifest ──")
+    try:
+        from engine.data_manifest import write as write_manifest
+    except ModuleNotFoundError:
+        from data_manifest import write as write_manifest
+    write_manifest()
 
     log.info("\nDone. Next: python3 engine/02_indicators.py")
 
