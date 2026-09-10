@@ -279,6 +279,35 @@ def report(r: dict) -> None:
 REVISIONS = ROOT / "data/processed/revisions.jsonl"
 
 
+# THREE KINDS OF EVENT, KEPT APART
+# --------------------------------
+#   revision  upstream now disagrees with a bar we already hold. Rejected by
+#             default: the signals were generated from what was there at the
+#             time, and rewriting the inputs afterwards makes the published
+#             history unreproducible a second time, in the other direction.
+#   repair    a date we never had, now obtained. Not a revision -- nothing is
+#             being overwritten, a hole is being filled -- but it still changes
+#             history under anything already measured against that month, so it
+#             is recorded just as loudly.
+#   gap       a session that is genuinely unavailable. The most important of
+#             the three, because nothing downstream can infer it: every signal
+#             computed on the following session was computed with a hole, and
+#             that has to be discoverable years later.
+KIND_REVISION = "revision"
+KIND_REPAIR   = "repair"
+KIND_GAP      = "gap"
+
+
+def _append(rows: list, path: Path = REVISIONS) -> int:
+    if not rows:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    return len(rows)
+
+
 def record_revisions(conflicts: dict, accepted: bool,
                      path: Path = REVISIONS) -> int:
     """
@@ -289,23 +318,54 @@ def record_revisions(conflicts: dict, accepted: bool,
     """
     if not conflicts:
         return 0
-    path.parent.mkdir(parents=True, exist_ok=True)
     seen_at = pd.Timestamp.now().isoformat(timespec="seconds")
-    n = 0
-    with path.open("a") as fh:
-        for sym, rows in sorted(conflicts.items()):
-            for d, col, ov, nv in rows:
-                fh.write(json.dumps({
-                    "seen_at":  seen_at,
-                    "symbol":   sym,
-                    "date":     d,
-                    "column":   col,
-                    "kept":     None if pd.isna(ov) else float(ov),
-                    "upstream": None if pd.isna(nv) else float(nv),
-                    "applied":  bool(accepted),
-                }) + "\n")
-                n += 1
-    log.info(f"revisions ledger: +{n} row(s) -> {path}")
+    rows = []
+    for sym, items in sorted(conflicts.items()):
+        for d, col, ov, nv in items:
+            rows.append({
+                "kind":     KIND_REVISION,
+                "seen_at":  seen_at,
+                "symbol":   sym,
+                "date":     d,
+                "column":   col,
+                "kept":     None if pd.isna(ov) else float(ov),
+                "upstream": None if pd.isna(nv) else float(nv),
+                "applied":  bool(accepted),
+            })
+    n = _append(rows, path)
+    log.info(f"revisions ledger: +{n} revision(s) -> {path}")
+    return n
+
+
+def record_repair(session: str, note: str, n_symbols: int = None,
+                  path: Path = REVISIONS) -> int:
+    """A session that was missing and has now been obtained."""
+    n = _append([{
+        "kind":       KIND_REPAIR,
+        "seen_at":    pd.Timestamp.now().isoformat(timespec="seconds"),
+        "date":       session,
+        "n_symbols":  n_symbols,
+        "note":       note,
+    }], path)
+    log.info(f"revisions ledger: recorded REPAIR of {session} -> {path}")
+    return n
+
+
+def record_gap(session: str, note: str, path: Path = REVISIONS) -> int:
+    """
+    A trading session with no data, and no way to get it.
+
+    Recorded so that anyone measuring the sessions either side of it can find
+    out. Indicators are recursive and structure is confirmed by later bars, so
+    a hole does not stay local to its own date.
+    """
+    n = _append([{
+        "kind":    KIND_GAP,
+        "seen_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "date":    session,
+        "note":    note,
+    }], path)
+    log.warning(f"revisions ledger: recorded GAP at {session} — {note}")
     return n
 
 
@@ -321,28 +381,53 @@ def revisions_report(path: Path = REVISIONS) -> None:
         return
 
     df = pd.DataFrame(rows)
-    kept = df[~df["applied"]]
+    if "kind" not in df.columns:
+        df["kind"] = KIND_REVISION          # ledgers written before kinds existed
 
     print("=" * 74)
-    print("REVISIONS — upstream disagrees with these bars; the bars were kept")
+    print("DATA EVENTS — what has moved under the backtester, and what is absent")
     print("=" * 74)
-    print(f"  {len(df)} record(s), {len(kept)} rejected, "
-          f"{len(df) - len(kept)} applied")
-    print(f"  {df['symbol'].nunique()} symbol(s) over "
-          f"{df['date'].nunique()} session(s)")
 
-    print(f"\n  BY SESSION — these dates are the ones to distrust if a")
-    print(f"  measurement ever disagrees with a source outside this repo:")
-    for d, g in sorted(kept.groupby("date")):
-        syms = sorted(g["symbol"].unique())
-        print(f"    {d}   {len(g):>3} field(s), {len(syms):>3} symbol(s)"
-              f"   {', '.join(syms[:6])}{' ...' if len(syms) > 6 else ''}")
+    gaps = df[df["kind"] == KIND_GAP]
+    if len(gaps):
+        print(f"\n  GAPS — {gaps['date'].nunique()} session(s) with NO DATA.")
+        print( "  Signals on the following session were computed with a hole,")
+        print( "  and indicators are recursive, so the effect is not local to")
+        print( "  the missing date:")
+        for _, r in gaps.sort_values("date").iterrows():
+            print(f"    {r['date']}   {r.get('note','')}")
 
-    print(f"\n  DETAIL (most recent 30):")
-    for r in rows[-30:]:
-        mark = "applied " if r["applied"] else "kept    "
-        print(f"    {mark} {r['symbol']:<14} {r['date']}  {r['column']:<13}"
-              f" {r['kept']} | upstream {r['upstream']}")
+    reps = df[df["kind"] == KIND_REPAIR]
+    if len(reps):
+        print(f"\n  REPAIRS — {len(reps)} session(s) recovered after being absent.")
+        print( "  Nothing was overwritten, but any measurement made BEFORE the")
+        print( "  repair saw a different history than one made after:")
+        for _, r in reps.sort_values("date").iterrows():
+            n = r.get("n_symbols")
+            print(f"    {r['date']}   {'' if pd.isna(n) else f'{int(n)} symbols  '}"
+                  f"{r.get('note','')}")
+
+    revs = df[df["kind"] == KIND_REVISION]
+    if len(revs):
+        kept = revs[~revs["applied"].fillna(False)]
+        print(f"\n  REVISIONS — {len(revs)} field(s), {len(kept)} rejected, "
+              f"{len(revs) - len(kept)} applied")
+        print(f"  {revs['symbol'].nunique()} symbol(s) over "
+              f"{revs['date'].nunique()} session(s)")
+        print(f"\n  BY SESSION — the dates to distrust if a measurement ever")
+        print(f"  disagrees with a source outside this repo:")
+        for d, g in sorted(kept.groupby("date")):
+            syms = sorted(g["symbol"].unique())
+            print(f"    {d}   {len(g):>3} field(s), {len(syms):>3} symbol(s)"
+                  f"   {', '.join(syms[:6])}{' ...' if len(syms) > 6 else ''}")
+        print(f"\n  DETAIL (most recent 30):")
+        for _, r in revs.tail(30).iterrows():
+            mark = "applied " if r.get("applied") else "kept    "
+            print(f"    {mark} {r['symbol']:<14} {r['date']}  {r['column']:<13}"
+                  f" {r['kept']} | upstream {r['upstream']}")
+
+    if not len(gaps) and not len(reps) and not len(revs):
+        print("  ledger exists but holds no recognised events")
     print()
 
 

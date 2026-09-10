@@ -610,6 +610,58 @@ def compute_smc_signals(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFra
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 
+# A symbol whose newest bar predates the session is not tradeable today, and
+# must not produce a signal row.
+#
+# THE FAULT THIS CLOSES
+# ---------------------
+# Nothing deletes a stock parquet, and 01b only rebuilds symbols that are in
+# universe.py, so a symbol dropped from the universe -- renamed, delisted,
+# reclassified -- keeps its last file forever. 02b globbed the directory, so it
+# kept computing structure from that frozen frame and writing an SMC parquet
+# whose newest row was weeks or years old. 539 files against a 500-symbol
+# universe: 39 of them, stale by up to three years.
+#
+# 06_push is normally protected: it takes d = qualifying["date"].max() and then
+# filters df["date"] == d, so an old row sits at an old date and is left out.
+# The exposure is a session where NOTHING FRESH QUALIFIES. Then d falls back to
+# the newest stale qualifying row and that batch publishes as if it were
+# current -- exactly the failure 06_push's own comment describes, where
+# market_open takes max(signal_date) and trades an older batch. ATLAS's
+# MAX_BATCH_AGE_DAYS = 5 is the last line of defence, so a symbol that went
+# stale within five days clears it.
+#
+# Skipping here removes the row at the source, so it can never become
+# max(date), and a delisting becomes a logged event instead of a silent one.
+#
+# THE SESSION IS THE MODAL LAST BAR, NOT THE MAXIMUM. Almost every symbol
+# trades every session, so the most common last-bar date IS the session. Using
+# max() would let a single bogus future-dated bar declare the whole universe
+# stale.
+MAX_STALE_FRACTION = 0.20   # above this, distrust the detection, not the data
+
+
+def _session_and_stale(files: list) -> tuple:
+    """(session, [(symbol, last_bar, days_behind)]) — reads only the date column."""
+    last = {}
+    for f in files:
+        try:
+            d = pd.read_parquet(f, columns=["date"])
+        except Exception as e:
+            log.warning(f"{f.stem}: cannot read dates ({e})")
+            continue
+        if len(d):
+            last[f.stem] = pd.to_datetime(d["date"]).max()
+
+    if not last:
+        return None, []
+
+    session = pd.Series(list(last.values())).mode().iloc[0]
+    stale = sorted(((s, v, (session - v).days) for s, v in last.items() if v < session),
+                   key=lambda r: r[2], reverse=True)
+    return session, stale
+
+
 def main():
     log.info("THE STOCK LOGIC — Stage 2b: SMC Signal Engine")
     SMC_DIR.mkdir(parents=True, exist_ok=True)
@@ -624,11 +676,51 @@ def main():
     files = sorted(STOCKS_DIR.glob("*.parquet"))
     log.info(f"Processing {len(files)} stocks...")
 
-    ok, failed, skipped = [], [], []
+    session, stale = _session_and_stale(files)
+    stale_syms = {s for s, _, _ in stale}
+    if session is None:
+        log.error("no readable dates in any stock parquet — nothing to do")
+        return
+    log.info(f"Session (modal last bar): {session.date()}")
+
+    # A fifth of the universe cannot go stale at once. If it looks that way the
+    # session was detected wrongly, and acting on it would delete most of the
+    # SMC output. Fail closed: process everything and say so.
+    if stale and len(stale) > MAX_STALE_FRACTION * len(files):
+        log.error(f"{len(stale)}/{len(files)} symbols look stale against "
+                  f"{session.date()} — that is too many to believe. Session "
+                  f"detection is suspect; processing ALL symbols unchanged and "
+                  f"skipping the stale-symbol logic entirely.")
+        stale, stale_syms = [], set()
+
+    if stale:
+        log.warning("=" * 66)
+        log.warning(f"STALE — {len(stale)} symbol(s) have no bar for {session.date()} "
+                    f"and will not produce signals:")
+        for sym, last_bar, behind in stale:
+            log.warning(f"  {sym:<14} last bar {last_bar.date()}  ({behind} days behind)")
+        log.warning("A symbol here is delisted, renamed, suspended, or dropped "
+                    "from universe.py while its parquet stayed on disk.")
+        log.warning("=" * 66)
+
+    ok, failed, skipped, dropped = [], [], [], []
 
     for f in tqdm(files, desc="SMC signals"):
         sym = f.stem
         try:
+            if sym in stale_syms:
+                # Its previous SMC output is still on disk and 03b globs that
+                # directory, so skipping the computation alone would leave the
+                # stale rows feeding scoring exactly as before. The SMC parquet
+                # is derived data, regenerable from stocks/ the moment the
+                # symbol trades again, so removing it is safe in a way that
+                # touching stocks/ would not be.
+                out = SMC_DIR / f"{sym}.parquet"
+                if out.exists():
+                    out.unlink()
+                    dropped.append(sym)
+                continue
+
             df = pd.read_parquet(f)
             df["date"] = pd.to_datetime(df["date"])
             if len(df) < 50:
@@ -641,7 +733,12 @@ def main():
             log.error(f"{sym}: {e}")
             failed.append(sym)
 
-    log.info(f"\nCOMPLETE  OK:{len(ok)}  Failed:{len(failed)}  Skipped:{len(skipped)}")
+    log.info(f"\nCOMPLETE  OK:{len(ok)}  Failed:{len(failed)}  "
+             f"Skipped:{len(skipped)}  Stale:{len(stale_syms)}")
+    if dropped:
+        log.warning(f"Removed {len(dropped)} stale SMC parquet(s) so they cannot "
+                    f"reach 03b: {', '.join(sorted(dropped)[:10])}"
+                    f"{' ...' if len(dropped) > 10 else ''}")
 
     # Spot check
     rel = SMC_DIR / "RELIANCE.parquet"
