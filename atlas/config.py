@@ -51,6 +51,21 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 # spoken for the moment the trigger rests at the broker, before it fills.
 OPEN_STATUSES        = ("OPEN", "GTT_PENDING")
 
+# What BLOCKS a new entry, which is a wider set than what the book HOLDS.
+#
+# PENDING is written before the order is placed and cleared once the outcome is
+# known, so it means "an order for this symbol may exist at the broker right
+# now". Gate 3b must treat that as a holding: the whole point of writing the row
+# first is that a death between the insert and the fill still leaves something
+# the next evaluation can see.
+#
+# Deliberately NOT folded into OPEN_STATUSES. That tuple answers "what is the
+# book?" and feeds the daily report and the funds view, where a two-second
+# PENDING row is noise. This one answers "may I enter?" and is used only by
+# Gate 3b. The two questions differ and a single tuple for both would silently
+# change the report.
+BLOCKING_STATUSES    = ("PENDING",) + OPEN_STATUSES
+
 # ACCUMULATION SCREEN -- institutional footprint is QUIET tape, not loud.
 # MIN_RVOL = 1.5 previously demanded above-average volume, which is the
 # opposite of what accumulation looks like.

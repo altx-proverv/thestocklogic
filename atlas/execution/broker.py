@@ -218,11 +218,15 @@ def place_order(
         # kill_switch_check may return a plain bool; do not assume .reason
         _reason = getattr(ks, "reason", "kill switch active")
         log.warning(f"Order BLOCKED by kill switch: {_reason}")
-        return {"success": False, "reason": _reason, "blocked_by": "kill_switch"}
+        # Blocked before anything was sent. Determinate.
+        return {"success": False, "reason": _reason, "blocked_by": "kill_switch",
+                "error_type": "KillSwitch", "determinate": True}
 
     kite = get_kite()
     if not kite:
-        return {"success": False, "reason": "Kite not initialized"}
+        # No client, so nothing was sent. Determinate.
+        return {"success": False, "reason": "Kite not initialized",
+                "error_type": "NoClient", "determinate": True}
 
     try:
         from kiteconnect import KiteConnect
@@ -275,7 +279,40 @@ def place_order(
     except Exception as e:
         log.error(f"Order placement failed for {symbol}: {e}")
         _note_broker_error(e)
-        return {"success": False, "reason": str(e)}
+        # WHETHER THE ORDER EXISTS IS A DIFFERENT QUESTION FROM WHETHER THE CALL
+        # SUCCEEDED, and the caller cannot tell them apart from `reason` alone.
+        #
+        # A margin rejection and a socket timeout both arrive here as
+        # success=False. The first means Kite processed the request and refused
+        # it, so no order exists. The second means we never heard back, and the
+        # order may be live. A caller that rolls back its own record on
+        # success=False would, on a timeout, erase the only trace of a real
+        # position -- which is the duplicate-entry bug the two-phase write in
+        # atlas_entry exists to prevent.
+        return {"success": False, "reason": str(e),
+                "error_type": type(e).__name__,
+                "determinate": _is_determinate(e)}
+
+
+# An exception type here means Kite ANSWERED and the answer was a refusal, so
+# no order was created. Anything else -- a network error, a timeout, something
+# unrecognised -- means the request's fate is unknown.
+#
+# Matched on class NAME so kiteconnect.exceptions stays an optional import, the
+# same approach _note_broker_error already uses.
+_DETERMINATE_ERRORS = (
+    "InputException",       # malformed request; rejected on content
+    "TokenException",       # auth refused; never reached the OMS
+    "PermissionException",  # not allowed to trade this
+    "MarginException",      # insufficient funds; refused
+    "OrderException",       # OMS refused the order
+    "GeneralException",     # unclassified, but the API did respond
+)
+
+
+def _is_determinate(e: Exception) -> bool:
+    """True only when we KNOW no order was created. Unknown defaults to False."""
+    return type(e).__name__ in _DETERMINATE_ERRORS
 
 
 def place_sl_order(

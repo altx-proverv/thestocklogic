@@ -45,7 +45,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    MAX_TRADES_PER_DAY,
+    MAX_TRADES_PER_DAY, BLOCKING_STATUSES,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
     ALLOW_LONG_IN_BULLISH, ALLOW_LONG_IN_SIDEWAYS,
     ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
@@ -53,6 +53,7 @@ from atlas.config import (
 )
 from atlas.risk.position_sizing import size_by_risk
 from atlas.risk.kill_switch import check as kill_switch_check
+from atlas.risk import breaker
 from atlas.risk.funds import can_afford
 from atlas.execution.broker import place_order, get_ltp
 
@@ -231,7 +232,7 @@ def get_open_position(symbol: str) -> tuple:
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/atlas_trades"
-            f"?symbol=eq.{symbol}&status=in.(OPEN,GTT_PENDING)"
+            f"?symbol=eq.{symbol}&status=in.({','.join(BLOCKING_STATUSES)})"
             f"&select=id,direction,qty,entry_price,stop_price,entry_date,status"
             f"&order=entry_date.desc&limit=1",
             headers=_headers(), timeout=10)
@@ -273,6 +274,17 @@ def enter_trade(signal: dict) -> dict:
     mode = "LIVE" if LIVE_TRADING_ENABLED else "SHADOW"
 
     log.info(f"[{mode}] Evaluating {symbol} {direction}")
+
+    # GATE -1 -- self-halt. Ahead of everything because a halted ATLAS should
+    # cost nothing per evaluation, and because the condition that halted it is
+    # usually the condition that would make the gates below lie.
+    #
+    # Local sentinel only; the atlas_state side is Gate 7's kill switch, which
+    # already fails closed. Reading it twice would double the request count for
+    # no extra safety.
+    halted, why = breaker.is_halted()
+    if halted:
+        return {"status": "BLOCKED_HALTED", "reason": why}
 
     # GATE 0 -- structural stop mandatory
     if stop_price <= 0:
@@ -377,15 +389,66 @@ def enter_trade(signal: dict) -> dict:
         _log_intent(intent, shadow=True)
         return {"status": "SHADOW_INTENT", **intent}
 
-    order = place_order(symbol=symbol, direction=direction, qty=sizing["qty"],
-                        order_type="MARKET", tag="ATLAS", product=sizing["product"])
-    if not order.get("success"):
-        return {"status": "ORDER_FAILED", "reason": order.get("reason", "order failed")}
+    # ── TWO-PHASE WRITE ───────────────────────────────────────────
+    #
+    # This used to be place_order() then _log_intent(), so the position existed
+    # before anything recorded it. A death in between left a holding at the
+    # broker with no atlas_trades row -- and Gate 3b reads atlas_trades, so the
+    # next evaluation could not see it. Once per day that was a bad morning;
+    # at one cycle a minute it is a symbol re-entered until something stops it.
+    #
+    # Inverted, the row is committed BEFORE the order can exist, and PENDING is
+    # in BLOCKING_STATUSES, so every possible death leaves a state the next
+    # evaluation can see:
+    #
+    #   before reserve      nothing happened
+    #   reserve, no order   PENDING row, no position -- over-blocks the symbol
+    #                       until reconcile clears it. Wrong in the safe
+    #                       direction.
+    #   order, no complete  PENDING row + position -- blocked, correct
+    #   complete            OPEN row + position
+    #
+    # There is no ordering that yields a position with no row. Even a lost
+    # INSERT response resolves safely: we treat it as failed and place nothing,
+    # leaving a stray PENDING row for reconcile.
+    row_id, failed_code, failed_detail = _reserve_intent(intent)
+    if row_id is None:
+        breaker.record_ledger_write(False, failed_code, failed_detail,
+                                    phase="reserve")
+        return {"status": "BLOCKED_NO_LEDGER",
+                "reason": f"could not reserve a trade row: {failed_detail}"}
+    breaker.record_ledger_write(True, phase="reserve")
+    intent["trade_id"] = row_id
 
+    # atlas_trades.id is a bigint, so ATLAS:<id> fits Kite's 20-character tag
+    # and reconcile can join broker orders to rows exactly rather than guessing
+    # from symbol and timestamp.
+    order = place_order(symbol=symbol, direction=direction, qty=sizing["qty"],
+                        order_type="MARKET", tag=f"ATLAS:{row_id}",
+                        product=sizing["product"])
+
+    if not order.get("success"):
+        reason = order.get("reason", "order failed")
+        # ONLY release the reservation when we KNOW no order exists. place_order
+        # returns success=False for a margin refusal and for a socket timeout
+        # alike; releasing on the latter would erase the only record of a live
+        # position and hand the next cycle a clean slate to re-enter from.
+        if order.get("determinate"):
+            _release_intent(row_id, reason)
+            breaker.record_order_reject(symbol, reason)
+            return {"status": "ORDER_FAILED", "reason": reason}
+
+        log.error(f"{symbol}: order outcome UNKNOWN ({order.get('error_type')}: "
+                  f"{reason}) — leaving trade {row_id} PENDING for reconcile")
+        _mark_indeterminate(row_id, reason)
+        return {"status": "ORDER_INDETERMINATE", "trade_id": row_id,
+                "reason": f"outcome unknown, left PENDING: {reason}"}
+
+    breaker.record_order_ok()
     intent["order_id"] = order.get("order_id")
-    recorded = _log_intent(intent, shadow=False)
+    recorded = _complete_intent(row_id, intent)
     # The order IS placed -- that is the truth, so the status stays ENTERED.
-    # `recorded` tells the caller whether a database row backs it.
+    # `recorded` tells the caller whether the row was promoted out of PENDING.
     return {"status": "ENTERED", "recorded": recorded, **intent}
 
 
@@ -412,6 +475,127 @@ def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
 # helpers -- funds.pending_gtt_commitment() must still see any GTT resting at
 # the broker, including ones the operator placed by hand, because they commit
 # cash regardless of origin.
+
+
+def _reserve_intent(intent: dict) -> tuple:
+    """
+    Commit a PENDING row BEFORE any order exists. -> (row_id, status_code, detail)
+
+    row_id is None on failure, and then no order may be placed: the whole
+    guarantee is that `place_order` is unreachable without a committed row.
+    status_code is carried out so the breaker can tell a deterministic 4xx from
+    a transient 5xx -- the difference between halting now and retrying.
+
+    A LOST RESPONSE IS TREATED AS FAILURE. If the insert actually landed we
+    leave a stray PENDING row, which over-blocks one symbol until reconcile
+    clears it. The opposite mistake -- assuming it landed and placing an order
+    against a row that does not exist -- is the one this function exists to
+    make impossible.
+    """
+    rec = {
+        "symbol": intent["symbol"], "direction": intent["direction"],
+        "entry_price": intent["entry_price"], "qty": intent["qty"],
+        "stop_price": intent.get("stop_price"),
+        "status": "PENDING",
+        "entry_date": datetime.now(IST).date().isoformat(),
+        "agent_mode": "LIVE",
+        "setup_name": intent.get("setup_name", ""),
+        "session": intent.get("session", ""),
+        "score": intent.get("score", 0),
+        "grade": intent.get("grade", ""),
+        "sector": intent.get("sector", ""),
+        "zone_source": intent.get("zone_source", ""),
+        "notes": (f"RESERVED before order placement — stop Rs"
+                  f"{intent.get('stop_price', 0)} | risk Rs"
+                  f"{intent.get('risk_actual', 0):,.0f}"),
+    }
+    try:
+        r = requests.post(f"{SUPABASE_URL}/rest/v1/atlas_trades",
+                          headers=_headers(), json=rec, timeout=10)
+    except Exception as e:
+        log.error(f"RESERVE FAILED ({rec['symbol']}): {type(e).__name__}: {e}")
+        return None, None, f"{type(e).__name__}: {e}"
+
+    if r.status_code not in (200, 201):
+        log.error(f"RESERVE REJECTED ({rec['symbol']}): HTTP {r.status_code} "
+                  f"{r.text[:200]}")
+        log.error(f"  payload: {rec}")
+        return None, r.status_code, f"HTTP {r.status_code} {r.text[:150]}"
+
+    try:
+        row_id = r.json()[0]["id"]
+    except Exception as e:
+        # Written, but we cannot name it -- so we cannot join an order to it
+        # and must not place one. Reconcile will find the orphan row.
+        log.error(f"RESERVE returned no id ({rec['symbol']}): {e} {r.text[:200]}")
+        return None, r.status_code, f"insert returned no id: {r.text[:120]}"
+
+    log.info(f"reserved trade {row_id} for {rec['symbol']} {rec['direction']} "
+             f"(PENDING — blocks Gate 3b until resolved)")
+    return row_id, None, ""
+
+
+def _patch_trade(row_id, patch: dict, what: str) -> bool:
+    try:
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/atlas_trades?id=eq.{row_id}",
+            headers=_headers(), json=patch, timeout=10)
+    except Exception as e:
+        log.error(f"{what} failed for trade {row_id}: {type(e).__name__}: {e}")
+        return False
+    if r.status_code not in (200, 204):
+        log.error(f"{what} rejected for trade {row_id}: HTTP {r.status_code} "
+                  f"{r.text[:200]}")
+        return False
+    return True
+
+
+def _complete_intent(row_id, intent: dict) -> bool:
+    """PENDING -> OPEN, once the order is confirmed placed."""
+    ok = _patch_trade(row_id, {
+        "status": "OPEN",
+        "order_id": intent.get("order_id"),
+        "entry_price": intent.get("entry_price"),
+        "notes": (f"MANUAL RISK REQUIRED - place SL at Rs"
+                  f"{intent.get('stop_price', 0)} | Order "
+                  f"{intent.get('order_id', '')} | risk Rs"
+                  f"{intent.get('risk_actual', 0):,.0f} | notional Rs"
+                  f"{intent.get('notional', 0):,.0f}"),
+    }, "complete")
+    if not ok:
+        # The order is live and the row still says PENDING. It keeps blocking
+        # the symbol, so this is not a duplicate risk -- but the ledger is
+        # knowingly wrong, and the breaker halts on it.
+        _alert_unrecorded(
+            {"symbol": intent.get("symbol"), "status": "PENDING",
+             "qty": intent.get("qty"), "entry_price": intent.get("entry_price"),
+             "stop_price": intent.get("stop_price"), "agent_mode": "LIVE"},
+            f"order placed but trade {row_id} could not be promoted to OPEN",
+            intent.get("order_id"))
+        breaker.record_ledger_write(False, None, f"trade {row_id}",
+                                    phase="complete")
+    return ok
+
+
+def _release_intent(row_id, reason: str) -> bool:
+    """No order exists. Free the symbol rather than blocking it all session."""
+    ok = _patch_trade(row_id, {
+        "status": "CANCELLED",
+        "notes": f"released — order refused before placement: {reason[:200]}",
+    }, "release")
+    if not ok:
+        log.error(f"trade {row_id} could not be released and will keep "
+                  f"blocking its symbol until reconcile runs")
+    return ok
+
+
+def _mark_indeterminate(row_id, reason: str) -> bool:
+    """Order outcome unknown. Stay PENDING; only the broker can settle it."""
+    return _patch_trade(row_id, {
+        "notes": (f"ORDER OUTCOME UNKNOWN — left PENDING deliberately. "
+                  f"reconcile must check the broker for tag ATLAS:{row_id}. "
+                  f"{reason[:200]}"),
+    }, "mark-indeterminate")
 
 
 def _log_intent(intent: dict, shadow: bool, gtt: bool = False) -> bool:
