@@ -3,8 +3,24 @@ Universe filter — the mechanical tiers, with the funnel shown at every step.
 ===========================================================================
 
     python3 tools/universe_filter.py                  # report the funnel
-    python3 tools/universe_filter.py --emit-exclusions
     python3 tools/universe_filter.py --additions      # what is being held back
+    python3 tools/universe_filter.py --emit-exclusions   # print the block
+
+APPLYING THE RESULT TAKES TWO MACHINES
+--------------------------------------
+The box has the current bhavcopy and sec_list, so the list can only be COMPUTED
+there. The box is also a read-only mirror -- `git reset --hard origin/main` every
+five minutes -- so engine/universe.py can only be EDITED somewhere that pushes.
+An edit made on the box survives for minutes and then silently is not there.
+
+    on the box   python3 tools/universe_filter.py --write-artifact
+                 -> data/artifacts/universe_exclusions.json, gitignored and
+                    untracked, so the deploy cannot touch it
+
+    scp that file to a checkout that can push, then
+
+    there       python3 tools/universe_filter.py --apply-artifact <path>
+                 -> edits engine/universe.py, offline, then commit and push
 
 WHAT THIS DECIDES, AND WHAT IT DOES NOT
 ---------------------------------------
@@ -71,6 +87,7 @@ The correct answer is 796.
 import io
 import os
 import re
+import json
 import sys
 import csv
 import glob
@@ -377,6 +394,35 @@ def explain_drops(drop: list, sl: pd.DataFrame, stats: pd.DataFrame) -> dict:
 
 
 UNIVERSE_PY = ROOT / "engine/universe.py"
+ARTIFACT = ROOT / "data/artifacts/universe_exclusions.json"
+
+# ══════════════════════════════════════════════════════════════════
+# WHY THERE IS NO MODE THAT EDITS universe.py ON THE BOX
+# ══════════════════════════════════════════════════════════════════
+# There was one. It worked, and then the deploy wiped it.
+#
+# The box is a READ-ONLY MIRROR of origin/main: it runs
+# `git reset --hard origin/main` every five minutes. Any edit to a TRACKED file
+# there survives for at most five minutes and then vanishes, with no error and
+# nothing in a log -- the edit simply is not there any more. So a tool that
+# writes engine/universe.py on the box cannot work, however correct the write
+# is. That is structural, not a bug to be fixed.
+#
+# The other half of the problem is that the box is the only machine with current
+# bhavcopy and a current sec_list, so the list can only be COMPUTED there and
+# can only be COMMITTED from a checkout that pushes.
+#
+# Hence two modes and an untracked artifact between them:
+#
+#   on the box    --write-artifact   computes the list, writes JSON under
+#                                    data/artifacts/, which is gitignored and
+#                                    untracked. `git reset --hard` resets
+#                                    tracked files only, so it survives.
+#   on the Mac    --apply-artifact   reads that JSON and edits universe.py in a
+#                                    checkout that can commit and push.
+#
+# DO NOT ADD A MODE THAT EDITS A TRACKED FILE ON THE BOX. It will appear to
+# work, and the next deploy will silently undo it.
 
 
 def build_exclusion_block(reasons: dict, held_drops: list, last_session) -> tuple:
@@ -540,19 +586,163 @@ def _probe(path: Path):
         return None
 
 
+def write_artifact(block: str, n_excluded: int, reasons: dict,
+                   held_drops: list, res: dict, cmp: dict,
+                   path: Path = ARTIFACT) -> int:
+    """
+    Hand the computed list to another machine, on the box, surviving the deploy.
+
+    Everything needed to apply it later travels with it -- the block text, the
+    per-reason breakdown, what was held, the data window it was computed from --
+    so --apply-artifact needs no network, no service key and no bhavcopy.
+    """
+    payload = {
+        "schema": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "window": [str(res["window"][0]), str(res["window"][1])],
+        "lookback_sessions": LOOKBACK_SESSIONS,
+        "thresholds": {"band_pct": MIN_BAND_PCT,
+                       "turnover_lacs": MIN_TURNOVER_LACS,
+                       "price": MIN_PRICE, "sessions": MIN_SESSIONS},
+        "tradeable": len(cmp["pass"]),
+        "current_universe": len(cmp["current"]),
+        "keep": len(cmp["keep"]),
+        "additions_held_back": sorted(cmp["add"]),
+        "drops_by_reason": {r: sorted(v) for r, v in reasons.items()},
+        "held_not_excluded": sorted(held_drops),
+        "holdings_readable": True,
+        "n_excluded": n_excluded,
+        "block": block,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=1))
+    except Exception as e:
+        log.error(f"could not write {path}: {e}")
+        return 1
+    log.info(f"wrote {path}")
+    log.info(f"  {n_excluded} symbol(s) to exclude, "
+             f"{len(held_drops)} withheld as held, "
+             f"{len(cmp['add'])} additions held back")
+    print()
+    print(f"ARTIFACT WRITTEN: {path}")
+    print("  gitignored and untracked, so the 5-minute deploy cannot wipe it.")
+    print("  Fetch it to a checkout that can push, then:")
+    print(f"    python3 tools/universe_filter.py --apply-artifact <path>")
+    return 0
+
+
+def apply_artifact(path: Path, universe: Path = UNIVERSE_PY) -> int:
+    """
+    Read an artifact written on the box and edit universe.py here.
+
+    Offline by construction: no NSE call, no Supabase, no bhavcopy. The
+    judgement was made where the data is current; this only carries it into a
+    checkout that can commit.
+
+    It validates rather than trusting: schema version, that holdings were
+    actually readable when it was computed, that nothing held is in the block,
+    and that every symbol named is a member of SYMBOL_SECTOR_MAP. A stale
+    artifact is reported with its age rather than refused, because "stale" is
+    the operator's call and a week-old list of surveillance-category stocks is
+    usually still right.
+    """
+    if not path.exists():
+        log.error(f"no artifact at {path}")
+        return 1
+    try:
+        p = json.loads(path.read_text())
+    except Exception as e:
+        log.error(f"{path} is not readable JSON: {e}")
+        return 1
+
+    if p.get("schema") != 1:
+        log.error(f"unknown artifact schema {p.get('schema')!r} — refusing")
+        return 1
+    if not p.get("holdings_readable"):
+        log.error("the artifact was computed without a readable atlas_trades, so "
+                  "whether any symbol is held is unknown — refusing")
+        return 1
+
+    block = p.get("block") or ""
+    n = int(p.get("n_excluded") or 0)
+    if "EXCLUDED = {" not in block:
+        log.error("artifact carries no EXCLUDED block — refusing")
+        return 1
+
+    held = set(p.get("held_not_excluded") or [])
+    leaked = sorted(s for s in held if f'"{s}",' in block)
+    if leaked:
+        log.error(f"held symbol(s) present in the block: {leaked} — refusing")
+        return 1
+
+    import importlib.util as _il
+    try:
+        spec = _il.spec_from_file_location("_u", universe)
+        mod = _il.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        members = set(mod.SYMBOL_SECTOR_MAP)
+    except Exception as e:
+        log.error(f"cannot read {universe}: {e}")
+        return 1
+    named = set(re.findall(r'^\s+"([A-Z0-9&\-]+)",$', block, re.M))
+    orphans = sorted(named - members)
+    if orphans:
+        log.warning(f"{len(orphans)} symbol(s) in the block are not in "
+                    f"SYMBOL_SECTOR_MAP and exclude nothing: "
+                    f"{', '.join(orphans[:8])}")
+
+    age_days = None
+    try:
+        gen = datetime.fromisoformat(p["generated_at"])
+        age_days = (datetime.now(timezone.utc) - gen).days
+    except Exception:
+        pass
+
+    print(f"ARTIFACT  {path}")
+    print(f"  computed  {p.get('generated_at')}"
+          + (f"   ({age_days} day(s) ago)" if age_days is not None else ""))
+    print(f"  window    {p['window'][0]} to {p['window'][1]}, "
+          f"{p.get('lookback_sessions')} sessions")
+    print(f"  tradeable {p.get('tradeable')}   current {p.get('current_universe')}"
+          f"   keep {p.get('keep')}")
+    print(f"  excluding {n}   held/withheld {len(held)}"
+          f"   additions held back {len(p.get('additions_held_back') or [])}")
+    for r, syms in sorted((p.get("drops_by_reason") or {}).items(),
+                          key=lambda kv: -len(kv[1])):
+        print(f"    {r:<40}{len(syms):>4}")
+    if age_days is not None and age_days > 14:
+        print(f"  NOTE: {age_days} days old. Bands and liquidity move; re-run on "
+              f"the box if that matters for this list.")
+    print()
+    return write_exclusions(block, n, path=universe)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--emit-exclusions", action="store_true",
                     help="print the EXCLUDED block for engine/universe.py")
-    ap.add_argument("--write-exclusions", action="store_true",
-                    help="write that block INTO engine/universe.py, in place")
+    ap.add_argument("--write-artifact", action="store_true",
+                    help="compute the list and write it to data/artifacts/ "
+                         "(run this ON THE BOX -- editing a tracked file there "
+                         "is undone by the next deploy)")
+    ap.add_argument("--apply-artifact", metavar="PATH",
+                    help="read an artifact and edit engine/universe.py "
+                         "(run this where you can commit and push)")
+    ap.add_argument("--artifact", metavar="PATH", default=str(ARTIFACT),
+                    help=f"where --write-artifact writes (default {ARTIFACT})")
     ap.add_argument("--additions", action="store_true",
                     help="list the passing symbols being held back")
     ap.add_argument("--time-smc", type=float, default=0.0, metavar="MS",
                     help="override the 02b ms/symbol figure in the runtime table")
     a = ap.parse_args()
 
-    emitting = a.emit_exclusions or a.write_exclusions
+    # --apply-artifact needs nothing this tool computes: no NSE, no bhavcopy,
+    # no key. Handle it before any of that runs.
+    if a.apply_artifact:
+        return apply_artifact(Path(a.apply_artifact))
+
+    emitting = a.emit_exclusions or a.write_artifact
     res = funnel(verbose=not a.emit_exclusions)
     surv = res["survivors"]
     sl = fetch_sec_list()
@@ -577,7 +767,8 @@ def main() -> int:
         if a.emit_exclusions:
             print(block)
             return 0
-        return write_exclusions(block, n)
+        return write_artifact(block, n, reasons, held_drops, res, cmp,
+                              path=Path(a.artifact))
 
     print()
     print("AGAINST THE CURRENT UNIVERSE")

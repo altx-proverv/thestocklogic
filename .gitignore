@@ -5,6 +5,10 @@ data/processed/
 # deep, so they must never be staged; the sibling data/ paths above are
 # already ignored and this one was simply newer than the list.
 data/snapshots/
+# Artifacts handed between machines: the box computes them from current data and
+# the Mac reads them in. Ignored so the box cannot stage one, and untracked so
+# the 5-minute `git reset --hard origin/main` cannot wipe one.
+data/artifacts/
 reports/
 __pycache__/
 *.pyc

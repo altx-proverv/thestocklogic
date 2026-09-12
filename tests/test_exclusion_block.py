@@ -19,8 +19,10 @@ writer with invented arguments: no network, no key, no atlas_trades.
     python3 tests/test_exclusion_block.py
 """
 
+import io
 import sys
 import shutil
+import contextlib
 import logging
 import tempfile
 import importlib.util
@@ -175,6 +177,57 @@ def main() -> int:
     finally:
         (uf.funnel, uf.fetch_sec_list, uf.bhavcopy_stats,
          uf.compare_to_current, uf.explain_drops, uf.open_positions) = saved
+
+    print()
+    print("THE BOX -> MAC HANDOFF, AND ITS REFUSALS")
+    print("-" * 78)
+    # engine/universe.py is a TRACKED file and the box resets to origin/main
+    # every five minutes, so an in-place edit there lasts minutes. The list can
+    # only be computed on the box and only committed from a checkout that
+    # pushes, so it travels as an untracked artifact under data/artifacts/.
+    import json as _json
+    blk, n_blk = uf.build_exclusion_block({"price < Rs50": real[:4]}, [],
+                                          "2026-09-13")
+    base = {"schema": 1, "generated_at": "2026-09-13T10:00:00+00:00",
+            "window": ["a", "b"], "lookback_sessions": 300, "thresholds": {},
+            "tradeable": 843, "current_universe": 495, "keep": 460,
+            "additions_held_back": [], "drops_by_reason": {"price < Rs50": real[:4]},
+            "held_not_excluded": [], "holdings_readable": True,
+            "n_excluded": n_blk, "block": blk}
+
+    def handoff(label, mutate, expect):
+        nonlocal ok
+        payload = dict(base)
+        mutate(payload)
+        art = Path(tempfile.mkdtemp()) / "a.json"
+        art.write_text(_json.dumps(payload))
+        tgt = Path(tempfile.mkdtemp()) / "universe.py"
+        shutil.copy(ROOT / "engine/universe.py", tgt)
+        before = tgt.read_text()
+        b = io.StringIO()
+        with contextlib.redirect_stdout(b):
+            rc = uf.apply_artifact(art, universe=tgt)
+        untouched = tgt.read_text() == before
+        good = rc == expect and (untouched if expect == 1 else not untouched)
+        ok &= good
+        print(f"  {label:<46}rc={rc}  {'ok' if good else '** want ' + str(expect) + ' **'}")
+
+    handoff("a valid artifact applies", lambda p: None, 0)
+    handoff("unknown schema refuses", lambda p: p.update(schema=99), 1)
+    handoff("holdings unreadable when computed refuses",
+            lambda p: p.update(holdings_readable=False), 1)
+    handoff("no EXCLUDED block refuses", lambda p: p.update(block="# nothing"), 1)
+    handoff("a held symbol inside the block refuses",
+            lambda p: p.update(held_not_excluded=[real[0]]), 1)
+    handoff("count mismatch refuses and restores",
+            lambda p: p.update(n_excluded=99), 1)
+
+    b = io.StringIO()
+    with contextlib.redirect_stdout(b):
+        rc = uf.apply_artifact(Path("/nonexistent/a.json"))
+    ok &= rc == 1
+    print(f"  {'a missing artifact refuses':<46}rc={rc}  "
+          f"{'ok' if rc == 1 else '** WRONG **'}")
 
     print("-" * 78)
     print("EXCLUSION BLOCK:", "correct" if ok else "*** DEFECTIVE ***")
