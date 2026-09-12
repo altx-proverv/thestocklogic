@@ -25,6 +25,11 @@ SUITES = [
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),
     ("unit files",     [sys.executable, "tests/test_unit_files.py"]),
+    # A subset here: the reference implementation is the slow one, so the full
+    # sweep costs ~270 ms/symbol. Run it unlimited on the box, where the data
+    # has shapes this checkout does not -- recent listings, gappy series.
+    ("smc equivalence", [sys.executable, "tests/test_smc_equivalence.py",
+                         "--limit", "40"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
