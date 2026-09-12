@@ -23,6 +23,7 @@ SUITES = [
     ("entry ordering", [sys.executable, "tests/test_entry_ordering.py"]),
     ("reconcile",      [sys.executable, "tests/test_reconcile.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
+    ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

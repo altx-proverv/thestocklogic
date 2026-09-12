@@ -179,8 +179,10 @@ def handle_directive(text: str) -> str:
         # which logged "Polling error" and slept 5s -- after the offset had
         # already advanced, so every other update in the same batch was lost.
         return ("Manual trade commands are not available in this phase.\n"
-                "ATLAS enters autonomously at 09:37 via market_open.\n"
-                "Use /positions to see open trades, /pause to stop trading.")
+                "ATLAS enters autonomously through market hours — market_open "
+                "polls every 60s from 09:20 to 15:20 IST.\n"
+                "Use /positions to see open trades, /pause to stop trading. "
+                "/pause takes effect on the next cycle, within a minute.")
 
     elif text in ["/positions", "positions"]:
         import requests as _req, os

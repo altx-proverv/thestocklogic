@@ -299,12 +299,21 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
         return True, f"bull regime; {sent_why}", None
 
     if d == "SHORT":
-        # NOTE: with REGIME required to be bull, and extreme_bearish requiring
-        # close < 200DMA - 3%, these two can never hold at once -- so a hedge
-        # short is unreachable under this gate. That follows from "ATLAS trades
-        # only when BOTH hold" applied to every entry, and is left as specified
-        # rather than quietly carved out. Exempting shorts is a one-line change
-        # here if that is not what was meant.
+        # SHORTS ARE UNREACHABLE HERE, AND THAT IS THE INTENT.
+        #
+        # REGIME requires bull; extreme_bearish requires close < 200DMA - 3%.
+        # The two cannot hold at once, so no short can pass this gate. That is
+        # a decision, not an oversight:
+        #
+        #   the mandate is long-term wealth building, and a hedge short is not
+        #   that;
+        #   shorts lose money on the measured record;
+        #   regime has blocked them throughout the live history anyway, so
+        #   nothing is being given up that was ever taken.
+        #
+        # The branch is kept rather than deleted so the reason survives with
+        # it, and so a future regime change makes the consequence visible
+        # instead of silently re-enabling a side nobody decided to re-enable.
         if regime != "bull":
             return (False, f"regime {regime} -- entries require bull", "REGIME")
         if REQUIRE_EXTREME_BEARISH_FOR_SHORTS and not ctx.get("extreme_bearish"):
@@ -493,7 +502,12 @@ def enter_trade(signal: dict) -> dict:
     # MAX_ENTRY_DIST_PCT (0.30%) of the zone, i.e. already there, so waiting for
     # a retest is not the trade -- taking it now is. Resting triggers also
     # committed cash for days against a fill that mostly never came.
-    ltp = get_ltp(symbol) or entry_ref
+    # Price comes from the caller when it has one. The market-hours loop polls
+    # every symbol from Upstox in a single batched request per cycle, so asking
+    # Zerodha again here would be one broker call per candidate per cycle for a
+    # number we already have. Zerodha stays the execution broker; Upstox is the
+    # price feed. get_ltp remains the fallback for a one-shot caller.
+    ltp = float(signal.get("ltp") or 0) or get_ltp(symbol) or entry_ref
     in_range, range_reason = check_entry_range(direction, ltp, entry_low, entry_high)
     if not in_range:
         return {"status": "SKIPPED_RANGE", "reason": range_reason}

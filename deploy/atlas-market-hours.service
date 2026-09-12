@@ -1,0 +1,64 @@
+# ATLAS market-hours entry engine.
+#
+#   sudo cp deploy/atlas-market-hours.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now atlas-market-hours
+#   journalctl -u atlas-market-hours -f
+#
+# This REPLACES the 09:37 market_open cron entry. Remove that line from the
+# crontab when enabling this, or both will evaluate the same batch and the
+# only thing standing between them is Gate 3b.
+#
+# SHADOW vs LIVE is atlas/config.py's LIVE_TRADING_ENABLED, not a unit setting.
+# Nothing here turns on live trading.
+#
+# Restart=always is safe because the halt is durable. A breaker trip writes
+# both atlas_state.mode=PAUSED and a sentinel file, so a restarted process
+# reads the halt and refuses to trade rather than resuming into the failure
+# that caused it. An in-memory-only breaker would be erased here and grind.
+#
+# The process exits 0 on its own at 15:20 IST. RestartSec is 60 so the restart
+# that follows costs one cycle rather than spinning: outside the window the new
+# process finds in_window() false and exits again immediately, which is cheap
+# and keeps the unit enabled for the next session without a timer.
+
+[Unit]
+Description=ATLAS market-hours entry engine (09:20-15:20 IST, 60s cycle)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/thestocklogic
+Environment=PYTHONUNBUFFERED=1
+
+# The service key lives in the crontab header today. systemd does not read
+# that, so keep it in a root-owned file with mode 600:
+#   SUPABASE_SERVICE_KEY=...
+EnvironmentFile=/etc/atlas.env
+
+# Outside the repo: the box deploys with `git reset --hard`, and the halt must
+# outlive a deploy as well as a restart.
+Environment=ATLAS_HALT_FILE=/var/lib/atlas/halt
+Environment=ATLAS_LOCK_FILE=/var/lib/atlas/market_hours.lock
+RuntimeDirectory=atlas
+StateDirectory=atlas
+
+ExecStart=/home/ubuntu/thestocklogic/venv/bin/python -m atlas.signal.market_open
+
+Restart=always
+RestartSec=60
+
+# A kill must not land between the order and the row it is recorded in. SIGTERM
+# lets the current cycle finish; the two-phase write means even a SIGKILL here
+# leaves a PENDING row that the next startup reconciles rather than a position
+# nothing knows about.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
