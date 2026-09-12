@@ -22,8 +22,12 @@ WHAT THIS WRITES
 ----------------
     date, nifty_open, nifty_high, nifty_low, nifty_close,
     vix_close, advance_count, decline_count, ad_ratio,
-    nifty_50dma, nifty_200dma, market_regime, extreme_bearish,
+    nifty_20dma, nifty_50dma, nifty_200dma, market_regime, extreme_bearish,
     allow_accumulation
+
+nifty_20dma, advance_count and decline_count are the SENTIMENT half of the
+ATLAS entry gate (atlas_entry.regime_allows_side). They are facts here; the
+policy that reads them lives there.
 
 REGIME (matching 02b's expected vocabulary -- bull/sideways/bear, NOT the
 bullish/bearish/mixed vocabulary ATLAS uses for sector_heatmap):
@@ -163,6 +167,10 @@ def _compute_breadth() -> pd.DataFrame:
 def _classify(df: pd.DataFrame) -> pd.DataFrame:
     """200/50 DMA regime + the extreme-bearish hedge gate."""
     df = df.sort_values("date").reset_index(drop=True)
+    # 20DMA feeds the SENTIMENT half of the entry gate in atlas_entry. It is
+    # written here rather than computed there because the gate sees one row and
+    # a 20-day mean needs the series.
+    df["nifty_20dma"]  = df["nifty_close"].rolling(20,  min_periods=20).mean().round(2)
     df["nifty_50dma"]  = df["nifty_close"].rolling(50,  min_periods=50).mean().round(2)
     df["nifty_200dma"] = df["nifty_close"].rolling(200, min_periods=200).mean().round(2)
 

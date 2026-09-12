@@ -152,7 +152,17 @@ ALLOW_SHORT_IN_BEARISH  = True
 # Accumulation runs in SIDEWAYS as well as BULL. A quiet, directionless market
 # is when institutions accumulate and retail stops watching -- it is the setup,
 # not a reason to stay in cash. Only a genuine bear (200DMA -3%) blocks longs.
-ALLOW_LONG_IN_SIDEWAYS  = True
+# REMOVED: ALLOW_LONG_IN_SIDEWAYS.
+#
+# Accumulation used to run in bull AND sideways, on the argument that a quiet
+# market is the setup rather than a reason to stand aside. The entry gate now
+# requires a bull regime (close>200DMA and 50DMA>200DMA) AND positive sentiment
+# (advances>declines and Nifty>20DMA), so sideways does not qualify and a flag
+# permitting it would have no effect. Left as a note rather than deleted
+# silently, because its absence is the change.
+#
+# The regime has been sideways throughout the live history: on this rule ATLAS
+# takes zero trades over that period. That is the intent, not a regression.
 ALLOW_SHORT_IN_SIDEWAYS = False
 
 # Hedge shorts require the extreme_bearish flag from market.parquet:

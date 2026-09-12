@@ -5,8 +5,12 @@ Agent IDENTIFIES and ENTERS. No SL, no target, no exit orders. Exits manual.
 
 GATE STACK
   0. Structural stop present      -- required for risk-based sizing
-  1. Regime -> side               -- accumulation in bull+sideways;
-                                     shorts only when extreme_bearish
+  1. Regime AND sentiment         -- both must hold or ATLAS stays in cash.
+                                     REGIME:    close>200DMA and 50DMA>200DMA
+                                     SENTIMENT: advances>declines today and
+                                                Nifty>20DMA
+                                     Blocked side is reported as
+                                     SKIPPED_REGIME or SKIPPED_SENTIMENT.
   2. Opening range                -- SHORTS ONLY (intraday directional check)
   3. New entries today            -- MAX_TRADES_PER_DAY
   3b. Already holding symbol      -- hard skip. No scale-in: the risk and
@@ -37,6 +41,24 @@ REGIME now comes from data/processed/market.parquet (bull / sideways / bear,
 bullish/bearish/mixed vocabulary. build_market.py writes it nightly in the EOD
 chain, ahead of 02b. Falls back to sector_heatmap if the parquet is absent or
 STALE; if both sources are stale the regime is 'unknown', which means no trade.
+
+SIDEWAYS NO LONGER QUALIFIES. Accumulation ran in bull AND sideways on the
+argument that a quiet market is the setup rather than a reason to stand aside.
+Gate 1 now requires bull AND positive same-day sentiment. The regime has been
+sideways throughout the live history, so on this rule ATLAS takes zero trades
+over that period -- long stretches in cash are what this gate is for, not a
+fault in it.
+
+A consequence worth knowing: with REGIME pinned to bull and extreme_bearish
+requiring close < 200DMA - 3%, the two cannot hold together, so a hedge SHORT
+is unreachable while this gate stands. That follows from applying "both must
+hold" to every entry and is left explicit in regime_allows_side rather than
+carved out.
+
+The sector_heatmap fallback can no longer permit anything either: it carries a
+direction string with no Nifty series and no breadth, so SENTIMENT is
+unevaluable from it and unevaluable means no. It is kept so the log can say why
+rather than going quiet.
 """
 import sys, requests, logging
 from datetime import datetime, timezone, timedelta, date
@@ -47,7 +69,7 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
     MAX_TRADES_PER_DAY, BLOCKING_STATUSES,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
-    ALLOW_LONG_IN_BULLISH, ALLOW_LONG_IN_SIDEWAYS,
+    ALLOW_LONG_IN_BULLISH,
     ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
@@ -119,10 +141,24 @@ def get_market_context() -> dict:
                 # Do NOT trust iloc[-1] on date alone -- build_market.py is the
                 # only writer, and if it stops the last row sits there forever.
                 if not _stale(as_of, "market.parquet"):
+                    def _num(col):
+                        v = last.get(col)
+                        try:
+                            f = float(v)
+                        except (TypeError, ValueError):
+                            return None
+                        return None if f != f else f          # NaN -> None
                     return {
                         "regime":             str(last.get("market_regime", "unknown")),
                         "allow_accumulation": bool(last.get("allow_accumulation", False)),
                         "extreme_bearish":    bool(last.get("extreme_bearish", False)),
+                        # SENTIMENT primitives. Carried as raw facts so the gate
+                        # can name which one failed rather than reporting a
+                        # precomputed boolean whose reason is already lost.
+                        "nifty_close":        _num("nifty_close"),
+                        "nifty_20dma":        _num("nifty_20dma"),
+                        "advance_count":      _num("advance_count"),
+                        "decline_count":      _num("decline_count"),
                         "as_of":              as_of,
                         "source":             "market.parquet",
                     }
@@ -150,6 +186,17 @@ def get_market_context() -> dict:
                     # Fallback cannot establish extreme_bearish -- it needs the
                     # 200DMA and VIX. Deny shorts rather than guess.
                     "extreme_bearish":    False,
+                    # NOR CAN IT ESTABLISH SENTIMENT. sector_heatmap carries a
+                    # direction string and nothing else -- no Nifty series for a
+                    # 20DMA, no advance/decline counts. Left as None, which the
+                    # gate reports as unevaluable and refuses on. Since the two
+                    # conditions are ANDed, this source can no longer permit an
+                    # entry at all; it survives so the log can say WHY rather
+                    # than going silent when market.parquet is stale.
+                    "nifty_close":        None,
+                    "nifty_20dma":        None,
+                    "advance_count":      None,
+                    "decline_count":      None,
                     "as_of":              as_of,
                     "source":             "sector_heatmap (fallback)",
                 }
@@ -159,35 +206,117 @@ def get_market_context() -> dict:
     log.error("No usable regime source -- both market.parquet and sector_heatmap "
               "are absent or stale. Refusing to trade.")
     return {"regime": "unknown", "allow_accumulation": False,
-            "extreme_bearish": False, "as_of": "", "source": "none"}
+            "extreme_bearish": False, "nifty_close": None, "nifty_20dma": None,
+            "advance_count": None, "decline_count": None,
+            "as_of": "", "source": "none"}
+
+
+def sentiment_ok(ctx: dict) -> tuple:
+    """
+    The SENTIMENT half of the entry gate. -> (ok, reason)
+
+        advancing > declining on the day   AND   Nifty above its 20DMA
+
+    Both are same-day facts about participation, which is what separates a
+    market that is merely ABOVE its long averages from one that is being bought
+    today. The regime half is structural and slow; this half is not, and a bull
+    structure on a day of negative breadth is the case this exists to stop.
+
+    Missing inputs are NOT a pass. build_market writes nifty_20dma as NaN for
+    the first 20 rows of any series, and the sector_heatmap fallback cannot
+    supply these at all, so "unknown" has to mean no -- otherwise the gate opens
+    precisely when it knows least.
+    """
+    adv, dec = ctx.get("advance_count"), ctx.get("decline_count")
+    close, ma20 = ctx.get("nifty_close"), ctx.get("nifty_20dma")
+
+    missing = [n for n, v in (("advance_count", adv), ("decline_count", dec),
+                              ("nifty_close", close), ("nifty_20dma", ma20))
+               if v is None]
+    if missing:
+        return False, (f"sentiment unevaluable from {ctx.get('source', '?')} "
+                       f"-- missing {', '.join(missing)}")
+
+    breadth_ok = adv > dec
+    above_20   = close > ma20
+    if not breadth_ok and not above_20:
+        return False, (f"breadth negative ({adv:.0f} adv / {dec:.0f} dec) "
+                       f"AND Nifty {close:.0f} below 20DMA {ma20:.0f}")
+    if not breadth_ok:
+        return False, f"breadth negative ({adv:.0f} adv / {dec:.0f} dec)"
+    if not above_20:
+        return False, f"Nifty {close:.0f} below 20DMA {ma20:.0f}"
+    return True, (f"breadth {adv:.0f}/{dec:.0f}, Nifty {close:.0f} "
+                  f"above 20DMA {ma20:.0f}")
 
 
 def regime_allows_side(ctx: dict, direction: str) -> tuple:
-    """Accumulation in bull+sideways. Shorts only when genuinely bearish."""
+    """
+    ATLAS trades only when BOTH hold. -> (ok, reason, blocked_by)
+
+        REGIME     close above 200DMA AND 50DMA above 200DMA
+        SENTIMENT  advancing > declining today AND Nifty above its 20DMA
+
+    Either fails, stay in cash.
+
+    REGIME IS market_regime == "bull" BY DEFINITION. build_market._classify
+    sets bull on exactly `above200 & stacked`, which is the same pair of
+    conditions, so this reads the classification rather than recomputing it
+    from the DMAs -- one definition, in the module that owns the series.
+
+    SIDEWAYS NO LONGER QUALIFIES, and that is the substance of this change.
+    Accumulation used to run in bull AND sideways on the argument that a quiet
+    market is the setup rather than a reason to stand aside. The regime has
+    been sideways throughout the live history, so on this rule ATLAS takes no
+    trades over that period. Long stretches with no entries are the intended
+    behaviour of this gate, not a fault in it.
+
+    `blocked_by` is returned separately from the prose so the caller can put it
+    in atlas_entry_log.status and the REGIME / SENTIMENT split stays countable
+    rather than needing the reason text parsed.
+    """
     d = direction.upper()
     regime = ctx.get("regime", "unknown")
 
     if regime == "unknown":
-        return False, f"regime unknown/stale -> {DEFAULT_ON_UNKNOWN_REGIME}"
+        return (False, f"regime unknown/stale ({ctx.get('source','?')}) "
+                       f"-> {DEFAULT_ON_UNKNOWN_REGIME}", "REGIME")
+
+    # ── SENTIMENT ────────────────────────────────────────────────
+    # Checked for both sides and before the per-side logic: it is a statement
+    # about whether the market is being bought today, and it does not become
+    # truer for one direction than the other.
+    sent_ok, sent_why = sentiment_ok(ctx)
 
     if d == "LONG":
-        if not ctx.get("allow_accumulation"):
-            return False, f"{regime} regime -- accumulation blocked"
-        if regime == "bull" and not ALLOW_LONG_IN_BULLISH:
-            return False, "longs disabled in bull"
-        if regime == "sideways" and not ALLOW_LONG_IN_SIDEWAYS:
-            return False, "longs disabled in sideways"
-        return True, f"{regime} -> accumulation permitted"
+        if regime != "bull":
+            return (False, f"regime {regime} -- long needs bull "
+                           f"(close>200DMA and 50DMA>200DMA)", "REGIME")
+        if not ALLOW_LONG_IN_BULLISH:
+            return False, "longs disabled", "CONFIG"
+        if not sent_ok:
+            return False, sent_why, "SENTIMENT"
+        return True, f"bull regime; {sent_why}", None
 
     if d == "SHORT":
+        # NOTE: with REGIME required to be bull, and extreme_bearish requiring
+        # close < 200DMA - 3%, these two can never hold at once -- so a hedge
+        # short is unreachable under this gate. That follows from "ATLAS trades
+        # only when BOTH hold" applied to every entry, and is left as specified
+        # rather than quietly carved out. Exempting shorts is a one-line change
+        # here if that is not what was meant.
+        if regime != "bull":
+            return (False, f"regime {regime} -- entries require bull", "REGIME")
         if REQUIRE_EXTREME_BEARISH_FOR_SHORTS and not ctx.get("extreme_bearish"):
-            return False, ("hedge shorts require extreme_bearish "
-                           "(200DMA-3%, 50<200DMA, VIX>18)")
+            return (False, "hedge shorts require extreme_bearish "
+                           "(200DMA-3%, 50<200DMA, VIX>18)", "REGIME")
         if not ALLOW_SHORT_IN_BEARISH:
-            return False, "shorts disabled"
-        return True, "extreme bearish -> hedge short permitted"
+            return False, "shorts disabled", "CONFIG"
+        if not sent_ok:
+            return False, sent_why, "SENTIMENT"
+        return True, f"extreme bearish; {sent_why}", None
 
-    return False, f"unknown direction {d}"
+    return False, f"unknown direction {d}", "CONFIG"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -291,11 +420,19 @@ def enter_trade(signal: dict) -> dict:
         return {"status": "REJECTED_NO_STOP",
                 "reason": "no structural stop -- cannot size by risk"}
 
-    # GATE 1 -- regime -> side
+    # GATE 1 -- regime AND sentiment. Both must hold or ATLAS stays in cash.
+    #
+    # The status carries the split so it is countable in atlas_entry_log
+    # without parsing prose: SKIPPED_REGIME means the market structure is not
+    # bull, SKIPPED_SENTIMENT means it is but today's participation is not.
+    # Knowing which one holds the agent out, over a long flat stretch, is the
+    # difference between "the trend is not there" and "the trend is there and
+    # nobody is buying it".
     ctx = get_market_context()
-    ok, reason = regime_allows_side(ctx, direction)
+    ok, reason, blocked_by = regime_allows_side(ctx, direction)
     if not ok:
-        return {"status": "SKIPPED_REGIME", "reason": reason,
+        return {"status": f"SKIPPED_{blocked_by or 'REGIME'}", "reason": reason,
+                "blocked_by": blocked_by,
                 "regime": ctx.get("regime"), "regime_source": ctx.get("source")}
 
     # GATE 2 -- opening range. SHORTS ONLY.

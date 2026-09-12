@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITES = [
     ("entry ordering", [sys.executable, "tests/test_entry_ordering.py"]),
     ("reconcile",      [sys.executable, "tests/test_reconcile.py"]),
+    ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
