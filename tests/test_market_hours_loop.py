@@ -210,6 +210,45 @@ def main() -> int:
           f"{'ok' if good else '** SUPPRESSED TOO MUCH **'}")
 
     print()
+    print("THE WINDOW IS A TRADING DAY, NOT JUST A TIME OF DAY")
+    print("-" * 78)
+    # A holiday is the WORST day to run: the batch is one day old, which
+    # MAX_BATCH_AGE_DAYS=5 does not call stale, and Upstox returns the previous
+    # close -- prices sitting exactly where the zones were computed, which is
+    # what near_zone looks for. It would find the most candidates it ever finds
+    # and send them into a closed market. Mon-Fri on the timer cannot see this;
+    # Diwali is a Thursday.
+    sys.path.insert(0, str(ROOT / "engine"))
+    from trading_calendar import is_trading_day, NSE_HOLIDAYS   # noqa: E402
+
+    midday = lambda d: datetime(d.year, d.month, d.day, 12, 0, tzinfo=IST)
+    from datetime import date as _date
+    holidays = sorted(h for h in NSE_HOLIDAYS
+                      if _date.fromisoformat(h).weekday() < 5)
+    weekday_holiday = _date.fromisoformat(holidays[len(holidays) // 2])
+    good = not mo.in_window(midday(weekday_holiday))
+    ok &= good
+    print(f"  {'NSE holiday on a weekday, 12:00 IST':<46}"
+          f"{'out' if good else 'IN':<6}"
+          f"{'ok (' + weekday_holiday.isoformat() + ')' if good else '** WOULD TRADE A CLOSED MARKET **'}")
+
+    sat = _date(2026, 9, 12)
+    while sat.weekday() != 5:
+        sat = _date(sat.year, sat.month, sat.day + 1)
+    good = not mo.in_window(midday(sat))
+    ok &= good
+    print(f"  {'Saturday, 12:00 IST':<46}{'out' if good else 'IN':<6}"
+          f"{'ok' if good else '** WRONG **'}")
+
+    open_day = _date(2026, 9, 14)
+    while not is_trading_day(open_day):
+        open_day = _date(open_day.year, open_day.month, open_day.day + 1)
+    good = mo.in_window(midday(open_day))
+    ok &= good
+    print(f"  {'a real trading day, 12:00 IST':<46}{'in' if good else 'OUT':<6}"
+          f"{'ok (' + open_day.isoformat() + ')' if good else '** WOULD SIT OUT **'}")
+
+    print()
     print("THE SERVICE REFUSES TO START DEAF")
     print("-" * 78)
     # telegram.send() logs "not configured" and returns, so a missing token

@@ -8,11 +8,12 @@
 # Three steps:
 #   1. /etc/atlas.env from the crontab header, root-owned, 600
 #   2. the 09:37 market_open cron line commented out (crontab backed up first)
-#   3. the unit installed and ENABLED, deliberately NOT started
+#   3. the unit and its timer installed; neither started, timer NOT enabled
 #
-# It does not start the service. `systemctl enable` without --now means it comes
-# up on the next boot but not today, which is what "start it Monday and watch
-# the first session" needs.
+# Nothing is started and nothing will start on its own. The service is
+# timer-activated, and the timer is left disabled until the first session has
+# been watched -- which is what "start it Monday and watch it" needs. Enabling
+# the timer is one command, printed at the end.
 #
 # Dry run is the default because two of these three steps touch production
 # state that is awkward to reverse -- a crontab you have already overwritten and
@@ -30,6 +31,8 @@ REPO="${ATLAS_REPO:-/home/ubuntu/thestocklogic}"
 ENV_FILE=/etc/atlas.env
 UNIT_SRC="$REPO/deploy/atlas-market-hours.service"
 UNIT_DST=/etc/systemd/system/atlas-market-hours.service
+TIMER_SRC="$REPO/deploy/atlas-market-hours.timer"
+TIMER_DST=/etc/systemd/system/atlas-market-hours.timer
 STAMP="$(date -u +%Y%m%d%H%M%S)"
 BACKUP_DIR="/var/backups/atlas"
 CRON_USER="${ATLAS_CRON_USER:-ubuntu}"
@@ -48,8 +51,8 @@ fi
 if [[ ! -d "$REPO" ]]; then
   say "repo not found at $REPO — set ATLAS_REPO"; exit 1
 fi
-if [[ ! -f "$UNIT_SRC" ]]; then
-  say "unit file missing: $UNIT_SRC"; exit 1
+if [[ ! -f "$UNIT_SRC" || ! -f "$TIMER_SRC" ]]; then
+  say "unit or timer file missing under $REPO/deploy"; exit 1
 fi
 
 (( APPLY )) || say "DRY RUN — nothing will be changed. Re-run with --apply."
@@ -149,27 +152,47 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════
-step "3. install and enable the unit (NOT started)"
+step "3. install the unit and timer (NOT started, timer NOT enabled)"
 # ══════════════════════════════════════════════════════════════════
 if (( APPLY )); then
   [[ -f "$UNIT_DST" ]] && cp -a "$UNIT_DST" "$BACKUP_DIR/atlas-market-hours.service.$STAMP"
   install -o root -g root -m 644 "$UNIT_SRC" "$UNIT_DST"
+  install -o root -g root -m 644 "$TIMER_SRC" "$TIMER_DST"
   systemctl daemon-reload
-  systemctl enable atlas-market-hours >/dev/null
-  say "   installed $UNIT_DST, daemon-reloaded, enabled"
-  say "   enabled : $(systemctl is-enabled atlas-market-hours 2>&1)"
-  say "   active  : $(systemctl is-active  atlas-market-hours 2>&1)  <- inactive is correct"
+
+  # The service used to carry WantedBy=multi-user.target, so an earlier run of
+  # this script enabled it and every reboot started a session at whatever hour
+  # the box came up. It is timer-activated now; drop that symlink if it is
+  # there. Harmless when it is not.
+  if systemctl is-enabled atlas-market-hours.service &>/dev/null; then
+    systemctl disable atlas-market-hours.service >/dev/null 2>&1 || true
+    say "   removed the boot-time enable on the service (the timer owns starting it)"
+  fi
+
+  say "   installed $UNIT_DST"
+  say "   installed $TIMER_DST"
+  say "   service : $(systemctl is-active atlas-market-hours.service 2>&1) / $(systemctl is-enabled atlas-market-hours.service 2>&1 || echo 'timer-activated')"
+  say "   timer   : $(systemctl is-enabled atlas-market-hours.timer 2>&1 || echo disabled)  <- disabled is correct until the first session is watched"
 else
-  would "install $UNIT_DST, daemon-reload, systemctl enable (without --now)"
+  would "install $UNIT_DST and $TIMER_DST, daemon-reload"
+  would "drop any boot-time enable on the service; leave the timer DISABLED"
 fi
 
 step "done"
 if (( APPLY )); then
   cat <<EOF
-   Nothing is running. To start it Monday:
+   Nothing is running and nothing will start by itself.
+
+   Monday, to start and watch:
 
      sudo systemctl start atlas-market-hours
      journalctl -u atlas-market-hours -f
+
+   After that session looks right, hand it to the timer for every
+   weekday after:
+
+     sudo systemctl enable --now atlas-market-hours.timer
+     systemctl list-timers atlas-market-hours.timer
 
    To stop it mid-session:
 
@@ -178,7 +201,8 @@ if (( APPLY )); then
 
    To roll back:
 
-     sudo systemctl disable --now atlas-market-hours
+     sudo systemctl disable --now atlas-market-hours.timer
+     sudo systemctl stop atlas-market-hours.service
      sudo crontab -u $CRON_USER $CRON_BACKUP
 EOF
 else

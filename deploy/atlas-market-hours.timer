@@ -1,0 +1,48 @@
+# Starts the ATLAS market-hours engine once each weekday morning.
+#
+#   sudo systemctl enable --now atlas-market-hours.timer
+#   systemctl list-timers atlas-market-hours.timer
+#
+# WHY A TIMER AND NOT Restart=always
+# ----------------------------------
+# The service exits 0 when the window closes -- done for the day, not crashed.
+# Restart=always read that as a reason to start it again, so outside market
+# hours it span around the clock: start, window closed, exit, restart. The
+# churn was harmless on its own and corrosive in aggregate, because a journal
+# full of routine restarts is one where a real restart loop is invisible.
+#
+# So the service restarts only on failure, and this decides when a session
+# begins. Systemd is still the only scheduler; this is not the cron coming
+# back.
+#
+# 03:50 UTC IS 09:20 IST, AND THAT IS WRITTEN IN UTC ON PURPOSE.
+# The box runs Etc/UTC. India does not observe daylight saving, so IST is
+# UTC+5:30 year-round and this conversion never drifts. systemd 252+ would
+# accept `OnCalendar=Mon-Fri 09:20 Asia/Kolkata` directly, which is clearer;
+# check `systemctl --version` before switching, because on an older systemd the
+# timezone suffix is a parse error and the timer silently never fires.
+#
+# Ten minutes before the window opens, deliberately. The service checks
+# in_window() itself and exits immediately if it is early, so firing a little
+# before costs one start and guarantees nothing is missed at the open.
+# in_window() also refuses on NSE holidays, which Mon-Fri cannot see: Diwali is
+# a Thursday.
+
+[Unit]
+Description=Start the ATLAS market-hours engine at 09:20 IST on trading days
+Requires=atlas-market-hours.service
+
+[Timer]
+OnCalendar=Mon-Fri 03:50 UTC
+AccuracySec=30s
+
+# If the box was down when the timer should have fired, run it on boot. Safe
+# because the service re-checks the window and the calendar itself: a late fire
+# outside hours exits 0 immediately, and a late fire inside hours picks up the
+# rest of the session, which is what you would want.
+Persistent=true
+
+Unit=atlas-market-hours.service
+
+[Install]
+WantedBy=timers.target

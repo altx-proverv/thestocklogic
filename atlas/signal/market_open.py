@@ -518,7 +518,31 @@ def acquire_lock() -> bool:
 
 
 def in_window(now=None) -> bool:
+    """
+    Inside the trading window: a TRADING DAY, and the right time of day on it.
+
+    The day half was missing. The window was time-of-day only, so on an NSE
+    holiday the engine would have run a full 09:20-15:20 anyway -- against a
+    batch one day old, which MAX_BATCH_AGE_DAYS=5 does not call stale, and
+    against Upstox quotes that are just the previous close. Prices sitting
+    exactly where the zones were computed is the condition near_zone() is
+    looking for, so a holiday is the day it would find the MOST candidates, and
+    it would send them into a closed market.
+
+    A weekend was already safe by accident, via the timer's Mon-Fri schedule.
+    A holiday was not, and Diwali is a Thursday.
+    """
     now = now or now_ist()
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "engine"))
+        from trading_calendar import is_trading_day
+        if not is_trading_day(now.date()):
+            return False
+    except Exception as e:
+        # Fail CLOSED. An unreadable calendar is not a licence to assume the
+        # market is open.
+        log.error(f"trading calendar unreadable ({e}) — treating as closed")
+        return False
     return WINDOW_START <= now.time() < WINDOW_END
 
 

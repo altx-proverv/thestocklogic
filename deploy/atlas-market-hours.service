@@ -12,15 +12,27 @@
 # SHADOW vs LIVE is atlas/config.py's LIVE_TRADING_ENABLED, not a unit setting.
 # Nothing here turns on live trading.
 #
-# Restart=always is safe because the halt is durable. A breaker trip writes
-# both atlas_state.mode=PAUSED and a sentinel file, so a restarted process
-# reads the halt and refuses to trade rather than resuming into the failure
-# that caused it. An in-memory-only breaker would be erased here and grind.
+# RESTART=ON-FAILURE, NOT ALWAYS.
 #
-# The process exits 0 on its own at 15:20 IST. RestartSec is 60 so the restart
-# that follows costs one cycle rather than spinning: outside the window the new
-# process finds in_window() false and exits again immediately, which is cheap
-# and keeps the unit enabled for the next session without a timer.
+# This process exits 0 when the window closes: its work for the day is done.
+# Under Restart=always systemd reads that as "came back, start it again", so
+# outside market hours it span -- start, see the window closed, exit, wait,
+# start again, around the clock. Harmless in itself and genuinely bad for the
+# thing that matters: a journal full of routine restarts is one where a real
+# restart loop looks like the background.
+#
+# on-failure restarts a CRASH, which is what restarting is for, and leaves a
+# clean exit alone. The timer beside this file starts each session.
+#
+# StartLimit caps a genuine loop. A non-zero exit that keeps repeating -- a
+# preflight failure with a missing key, say -- gives up after 5 tries in 10
+# minutes and enters failed state, where `systemctl status` says so, instead of
+# retrying forever in silence.
+#
+# Restarting is safe at all because the halt is durable: a breaker trip writes
+# both atlas_state.mode=PAUSED and a sentinel file outside the repo, so a
+# restarted process reads the halt and refuses rather than resuming into the
+# failure that caused it. An in-memory-only breaker would be erased here.
 
 [Unit]
 Description=ATLAS market-hours entry engine (09:20-15:20 IST, 60s cycle)
@@ -50,8 +62,10 @@ StateDirectory=atlas
 
 ExecStart=/home/ubuntu/thestocklogic/venv/bin/python -m atlas.signal.market_open
 
-Restart=always
+Restart=on-failure
 RestartSec=60
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 # A kill must not land between the order and the row it is recorded in. SIGTERM
 # lets the current cycle finish; the two-phase write means even a SIGKILL here
@@ -63,5 +77,13 @@ TimeoutStopSec=90
 StandardOutput=journal
 StandardError=journal
 
-[Install]
-WantedBy=multi-user.target
+# NO [Install] SECTION, DELIBERATELY.
+#
+# This unit is started by atlas-market-hours.timer, not by boot. It had
+# WantedBy=multi-user.target, which meant every reboot started a session
+# regardless of the hour -- the engine would come up at 22:00, find the window
+# closed, and exit, which is the same pointless churn Restart=always caused.
+#
+# `systemctl enable atlas-market-hours.service` now fails with "no installation
+# config", which is the correct answer: enable the TIMER. Starting it by hand
+# still works and is how Monday's first session is meant to begin.
