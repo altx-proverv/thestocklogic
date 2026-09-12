@@ -1,0 +1,26 @@
+# 15:30 IST, ten minutes after the window closes.
+#
+#   sudo systemctl enable --now atlas-engine-report.timer
+#
+# Mon-Fri only; the report itself checks the NSE calendar and stays silent on a
+# holiday. On a trading day it always sends something, including the case where
+# the engine never ran -- an absent report and a quiet market must not look the
+# same.
+#
+# Needs systemd 252+ for the timezone suffix; the box is 259. On an older one
+# this is a parse error and the timer silently never fires.
+
+[Unit]
+Description=Run the ATLAS engine report at 15:30 IST
+Requires=atlas-engine-report.service
+
+[Timer]
+OnCalendar=Mon-Fri 15:30 Asia/Kolkata
+AccuracySec=1m
+# If the box was down at 15:30, still report on boot -- a late report beats none,
+# and the report is keyed to the date so it cannot report the wrong day.
+Persistent=true
+Unit=atlas-engine-report.service
+
+[Install]
+WantedBy=timers.target

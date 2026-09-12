@@ -58,6 +58,7 @@ in the ledger rather than in a set held in this process.
 
 import os
 import sys
+import json
 import time
 import fcntl
 import logging
@@ -128,6 +129,7 @@ def _headers():
 # ══════════════════════════════════════════════════════════════════
 
 _alerted = {}
+_session = None   # set by serve(); alert() counts into it
 
 
 def alert(kind: str, text: str, key: str = "") -> None:
@@ -140,6 +142,10 @@ def alert(kind: str, text: str, key: str = "") -> None:
         return
     _alerted[k] = now
     log.warning(f"[{kind}] {text}")
+    # The report counts failures by kind, and the throttle must not hide them
+    # from it -- a suppressed alert is still a failure that happened.
+    if _session is not None:
+        _session.note_failure(kind)
     try:
         send(f"<b>ATLAS — {kind}</b>\n{text}")
     except Exception as e:
@@ -150,13 +156,91 @@ def alert(kind: str, text: str, key: str = "") -> None:
 # SESSION STATE — only the immutable and the advisory
 # ══════════════════════════════════════════════════════════════════
 
+STATE_DIR = Path(os.environ.get("ATLAS_STATE_DIR", "/var/lib/atlas"))
+
+
 class Session:
+    """
+    What only this process knows, written to disk every cycle.
+
+    The 15:30 report needs "how many cycles ran" and "how many quotes came
+    back", and neither is in the database -- they are process facts that die
+    with the process, leaving the journal as the only record, which is what the
+    report exists to replace.
+
+    DECISIONS ARE NOT DUPLICATED HERE. Skips, reasons and would-have-entered
+    detail all go to atlas_entry_log at decision time; the report reads them
+    from there. This file carries only what the ledger cannot know. The one
+    deliberate overlap is the candidate count, because comparing it against the
+    number of entry_log rows is how you find out that decisions stopped being
+    logged.
+
+    Rewritten each cycle rather than once at the close, so a session that dies
+    at 11:20 still leaves a file saying it got to 11:20. Atomic: written to a
+    temp file and renamed, so a kill mid-write cannot leave the report reading
+    half a JSON object.
+    """
+
     def __init__(self):
         self.batch_date = None
         self.zone_map = {}          # (symbol, direction) -> signal
         self.cycle_n = 0
         self.entered = []
         self.started_at = now_ist()
+
+        self.quotes_last = 0
+        self.quotes_ok = 0
+        self.quotes_failed = 0
+        self.candidates_total = 0
+        self.failures = {}
+        self.reconcile = {"passes": 0, "opened": 0, "cancelled": 0, "unsettled": 0}
+        self.breaker_tripped = False
+        self.breaker_reason = ""
+        self.paused_cycles = 0
+        self.last_gate_reason = ""
+        self.ended_at = None
+
+    def note_failure(self, kind: str) -> None:
+        self.failures[kind] = self.failures.get(kind, 0) + 1
+
+    def path(self) -> Path:
+        return STATE_DIR / f"session-{self.started_at.date().isoformat()}.json"
+
+    def as_dict(self) -> dict:
+        return {
+            "date":        self.started_at.date().isoformat(),
+            "mode":        "LIVE" if LIVE_TRADING_ENABLED else "SHADOW",
+            "started_at":  self.started_at.isoformat(timespec="seconds"),
+            "last_update": now_ist().isoformat(timespec="seconds"),
+            "ended_at":    self.ended_at.isoformat(timespec="seconds") if self.ended_at else None,
+            "window":      [WINDOW_START.strftime("%H:%M"),
+                            WINDOW_END.strftime("%H:%M")],
+            "cycle_seconds":    CYCLE_SECONDS,
+            "cycles":           self.cycle_n,
+            "quotes_last":      self.quotes_last,
+            "quotes_ok":        self.quotes_ok,
+            "quotes_failed":    self.quotes_failed,
+            "batch_date":       self.batch_date,
+            "zones":            len(self.zone_map),
+            "candidates_total": self.candidates_total,
+            "entered":          self.entered,
+            "failures":         dict(self.failures),
+            "reconcile":        dict(self.reconcile),
+            "breaker_tripped":  self.breaker_tripped,
+            "breaker_reason":   self.breaker_reason,
+            "paused_cycles":    self.paused_cycles,
+            "last_gate_reason": self.last_gate_reason,
+        }
+
+    def write(self) -> None:
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = self.path().with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self.as_dict(), indent=1))
+            tmp.replace(self.path())
+        except Exception as e:
+            # Never let telemetry take a trading cycle down.
+            log.error(f"could not write session file {self.path()}: {e}")
 
     def summary(self) -> str:
         return (f"cycles {self.cycle_n}, batch {self.batch_date}, "
@@ -385,6 +469,7 @@ def cycle(state: Session) -> dict:
 
     is_paused, why = paused()
     if is_paused:
+        state.paused_cycles += 1
         out["paused"] = why
         log.info(f"cycle {state.cycle_n}: paused — {why}")
         alert("PAUSED", why, key=why[:40])
@@ -409,12 +494,15 @@ def cycle(state: Session) -> dict:
     symbols = sorted({s for s, _ in state.zone_map})
     quotes = fetch_quotes(symbols)
     if not quotes:
+        state.quotes_failed += 1
         alert("NO PRICES", f"Upstox returned no quotes for {len(symbols)} symbols")
         if not breaker.record_read(False, "upstox", "no quotes"):
             out["error"] = "halted"
         out["error"] = out.get("error", "no quotes")
         return out
     breaker.record_read(True, "upstox")
+    state.quotes_ok += 1
+    state.quotes_last = len(quotes)
 
     candidates = []
     for (sym, direction), sig in state.zone_map.items():
@@ -425,6 +513,7 @@ def cycle(state: Session) -> dict:
             candidates.append((sym, direction, sig, ltp))
 
     out["candidates"] = len(candidates)
+    state.candidates_total += len(candidates)
     if not candidates:
         log.info(f"cycle {state.cycle_n}: {len(quotes)} quotes, nothing at a zone")
         return out
@@ -459,13 +548,27 @@ def cycle(state: Session) -> dict:
 
         if status in ("ENTERED", "SHADOW_INTENT"):
             out["entered"] += 1
-            state.entered.append(f"{sym} {direction}")
+            state.entered.append({
+                "symbol": sym, "direction": direction,
+                "at": now_ist().strftime("%H:%M:%S"),
+                "entry": result.get("entry_price") or ltp,
+                "qty": result.get("qty") or 0,
+                "stop": result.get("stop_price") or signal["sl"],
+                "stop_pct": result.get("stop_pct") or signal.get("stop_pct") or 0,
+                "risk": result.get("risk_actual") or 0,
+                "setup": signal.get("setup_name", ""),
+                "status": status,
+            })
             log.warning(f"cycle {state.cycle_n}: {status} {sym} {direction} @ {ltp}")
             notify_entry(signal, result)
         else:
             out["skipped"] += 1
             log.info(f"cycle {state.cycle_n}: {sym} {direction} — {status} "
                      f"— {result.get('reason','')}")
+            if status in ("SKIPPED_REGIME", "SKIPPED_SENTIMENT"):
+                # Kept so a day with no entries can still say WHY, in the
+                # gate's own words rather than as a bare count.
+                state.last_gate_reason = result.get("reason", "")
             if status.startswith("BLOCKED_"):
                 alert(status, f"{sym}: {result.get('reason','')}", key=sym)
 
@@ -684,7 +787,9 @@ def serve() -> int:
     if not acquire_lock():
         return 1
 
+    global _session
     state = Session()
+    _session = state          # so alert() can count failures into the report
     log.info(f"ATLAS market-hours engine starting [{mode}] "
              f"{WINDOW_START}–{WINDOW_END} IST, {CYCLE_SECONDS}s cycle")
 
@@ -693,6 +798,9 @@ def serve() -> int:
     # from a death mid-order is exactly what must not be re-entered.
     try:
         summary = reconcile.settle()
+        state.reconcile["passes"] += 1
+        for k in ("opened", "cancelled", "unsettled"):
+            state.reconcile[k] += int(summary.get(k) or 0)
         log.info(f"startup reconcile: {summary}")
         if summary.get("opened"):
             alert("RECONCILE", f"{summary['opened']} position(s) adopted at startup")
@@ -742,14 +850,26 @@ def serve() -> int:
 
         if state.cycle_n % RECONCILE_EVERY_CYCLES == 0:
             try:
-                reconcile.settle()
+                summary = reconcile.settle()
+                state.reconcile["passes"] += 1
+                for k in ("opened", "cancelled", "unsettled"):
+                    state.reconcile[k] += int(summary.get(k) or 0)
             except Exception as e:
                 log.exception("reconcile failed")
                 alert("RECONCILE FAILED", f"{type(e).__name__}: {e}")
 
+        # Telemetry last, so the file reflects everything this cycle did. Every
+        # cycle rather than at the close: a session that dies at 11:20 must
+        # still leave a file that says it reached 11:20.
+        state.breaker_tripped, state.breaker_reason = breaker.is_halted()
+        state.write()
+
         elapsed = time.time() - started
         time.sleep(max(0.0, CYCLE_SECONDS - elapsed))
 
+    state.ended_at = now_ist()
+    state.breaker_tripped, state.breaker_reason = breaker.is_halted()
+    state.write()
     log.info(f"window closed — {state.summary()}")
     send(f"<b>ATLAS ENGINE DOWN [{mode}]</b>\n{state.summary()}\n"
          + ("\n".join(state.entered[:10]) if state.entered else "no entries"))

@@ -75,12 +75,26 @@ def parse(path: Path) -> list:
     return out
 
 
+def _report_after_close(rpt) -> bool:
+    """The report must fire after WINDOW_END, or it reports a session still
+    running and calls a live window an early death."""
+    sys.path.insert(0, str(ROOT))
+    from atlas.signal.market_open import WINDOW_END
+    cal = next((v for _, k, v, _ in rpt if k == "OnCalendar"), "")
+    m = re.search(r"(\d{2}):(\d{2})", cal)
+    if not m:
+        return False
+    mins = int(m.group(1)) * 60 + int(m.group(2))
+    return mins > WINDOW_END.hour * 60 + WINDOW_END.minute
+
+
 def main() -> int:
     ok = True
     print("DIRECTIVE PLACEMENT")
     print("-" * 78)
 
-    for name in ("atlas-market-hours.service", "atlas-market-hours.timer"):
+    for name in ("atlas-market-hours.service", "atlas-market-hours.timer",
+                 "atlas-engine-report.service", "atlas-engine-report.timer"):
         path = DEPLOY / name
         if not path.exists():
             print(f"  ** {name} missing")
@@ -107,6 +121,8 @@ def main() -> int:
     print("-" * 78)
     svc = parse(DEPLOY / "atlas-market-hours.service")
     tmr = parse(DEPLOY / "atlas-market-hours.timer")
+    rep = parse(DEPLOY / "atlas-engine-report.service")
+    rpt = parse(DEPLOY / "atlas-engine-report.timer")
 
     checks = [
         ("service has NO [Install] (timer-activated, not boot-started)",
@@ -123,6 +139,14 @@ def main() -> int:
         ("timer points at the service",
          any(k == "Unit" and v.startswith("atlas-market-hours")
              for _, k, v, _ in tmr)),
+        ("report service is oneshot, not a daemon",
+         any(k == "Type" and v == "oneshot" for _, k, v, _ in rep)),
+        ("report service has NO [Install] (timer-activated)",
+         not any(s_ == "Install" for s_, _, _, _ in rep)),
+        ("report timer has [Install]",
+         any(s_ == "Install" for s_, _, _, _ in rpt)),
+        ("report fires AFTER the window closes",
+         _report_after_close(rpt)),
     ]
     for label, good in checks:
         ok &= good

@@ -1,0 +1,24 @@
+# The 15:30 IST engine report. One-shot, started by its timer.
+#
+# Separate from the service it reports on, because the window closes at 15:20
+# and that process has exited by 15:30 -- and because reporting from inside it
+# would mean no report on the day it died, which is the day one matters most.
+
+[Unit]
+Description=ATLAS daily engine report (15:30 IST)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/thestocklogic
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/atlas.env
+Environment=ATLAS_STATE_DIR=/var/lib/atlas
+StateDirectory=atlas
+ExecStart=/home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.engine_report
+StandardOutput=journal
+StandardError=journal
+
+# No [Install]: started by atlas-engine-report.timer.
