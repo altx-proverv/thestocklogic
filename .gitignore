@@ -12,6 +12,9 @@ data/artifacts/
 reports/
 __pycache__/
 *.pyc
+# Backups written by tools/universe_filter.py --apply-artifact before it edits a
+# tracked file. Git history is the real backup; these must never be staged.
+*.py.bak
 .DS_Store
 
 # Superseded pre-SMC pipeline (00_generate_synthetic_data, 01_build_dataset,
