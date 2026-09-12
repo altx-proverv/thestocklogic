@@ -232,9 +232,19 @@ def main() -> int:
     import json as _json
     blk, n_blk = uf.build_exclusion_block({"price < Rs50": real[:4]}, [],
                                           "2026-09-13")
+    # keep must be CONSISTENT with the block: apply_artifact now asserts
+    # ALL_SYMBOLS == keep after writing, and a fixture that hardcodes a figure
+    # unrelated to its own block is asserting nothing. map_size likewise -- an
+    # artifact from a different map is refused before any write.
+    _u = importlib.util.spec_from_file_location("u_base", ROOT / "engine/universe.py")
+    _m = importlib.util.module_from_spec(_u)
+    _u.loader.exec_module(_m)
+    _map = len(_m.SYMBOL_SECTOR_MAP)
+    _keep_syms = sorted(set(_m.SYMBOL_SECTOR_MAP) - set(real[:4]))
     base = {"schema": 1, "generated_at": "2026-09-13T10:00:00+00:00",
             "window": ["a", "b"], "lookback_sessions": 300, "thresholds": {},
-            "tradeable": 843, "current_universe": 495, "keep": 460,
+            "tradeable": 843, "current_universe": _map, "map_size": _map,
+            "keep": _map - n_blk, "keep_symbols_sha": uf._sha(_keep_syms),
             "additions_held_back": [], "drops_by_reason": {"price < Rs50": real[:4]},
             "held_not_excluded": [], "holdings_readable": True,
             "n_excluded": n_blk, "block": blk}

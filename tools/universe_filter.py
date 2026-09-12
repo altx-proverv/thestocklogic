@@ -381,16 +381,45 @@ def open_positions() -> tuple:
     return True, held
 
 
-def compare_to_current(survivors: pd.DataFrame) -> dict:
+def compare_to_current(survivors: "pd.DataFrame") -> dict:
+    """
+    The baseline is SYMBOL_SECTOR_MAP, NOT ALL_SYMBOLS. This matters.
+
+    It used to read ALL_SYMBOLS, which is the map MINUS the exclusions this tool
+    itself wrote. Since the emitted block REPLACES EXCLUDED wholesale, an
+    already-excluded symbol could never appear in `drop` -- and so was dropped
+    from the list and silently re-admitted on every run.
+
+    EXCLUDED became a function of the PREVIOUS EXCLUDED rather than of (map,
+    filters, data), which oscillates with period 2: run once and 35 symbols are
+    excluded while 5 come back; run again and those 5 go out while the 35 come
+    back. Observed on the box -- HEG and HFCL, both series BE with a 5% band,
+    were re-admitted by the first apply.
+
+    Baselined on the map, EXCLUDED is a pure function of its inputs and the
+    identity ALL_SYMBOLS == keep holds exactly:
+
+        ALL_SYMBOLS = map - EXCLUDED = map - (map - tradeable)
+                    = map & tradeable = keep
+
+    which is what apply_artifact now asserts before it keeps a write.
+    """
     import importlib.util
     spec = importlib.util.spec_from_file_location("u", ROOT / "engine/universe.py")
     u = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(u)
-    cur = set(u.ALL_SYMBOLS)
+    base = set(u.SYMBOL_SECTOR_MAP)
+    already = set(getattr(u, "EXCLUDED", set()))
     new = set(survivors.index)
-    return {"current": cur, "pass": new,
-            "keep": sorted(cur & new), "add": sorted(new - cur),
-            "drop": sorted(cur - new)}
+    return {"current": base, "pass": new,
+            "keep": sorted(base & new), "add": sorted(new - base),
+            "drop": sorted(base - new),
+            # Carried so the emitted block can name what it lets back in. A
+            # re-admission is legitimate -- a recent listing crossing 250
+            # sessions -- but it should be a stated decision, not a side effect
+            # of regenerating the list.
+            "readmitted": sorted(already & new),
+            "already_excluded": sorted(already)}
 
 
 def explain_drops(drop: list, sl: pd.DataFrame, stats: pd.DataFrame) -> dict:
@@ -565,7 +594,7 @@ def write_exclusions(block: str, n_excluded: int,
         log.error("universe.py does not import after the edit — restoring backup")
         path.write_text(src)
         return 1
-    n_map, n_excl, n_all, orphans = probe
+    n_map, n_excl, n_all, orphans, _ = probe
 
     # THE CHECK IS "DID THE BLOCK WE WROTE TAKE EFFECT", nothing more.
     #
@@ -592,8 +621,17 @@ def write_exclusions(block: str, n_excluded: int,
     return 0
 
 
+def _all_symbols(path: Path) -> list:
+    """ALL_SYMBOLS from a fresh import, for digest comparison."""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("_u_all", path)
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return list(mod.ALL_SYMBOLS)
+
+
 def _probe(path: Path):
-    """(len map, len EXCLUDED, len ALL_SYMBOLS, orphan set) from a fresh import."""
+    """(len map, len EXCLUDED, len ALL_SYMBOLS, orphans, EXCLUDED) — fresh import."""
     import importlib.util as _il
     try:
         spec = _il.spec_from_file_location("_u_probe", path)
@@ -601,10 +639,17 @@ def _probe(path: Path):
         spec.loader.exec_module(mod)
         orphans = set(mod.EXCLUDED) - set(mod.SYMBOL_SECTOR_MAP)
         return (len(mod.SYMBOL_SECTOR_MAP), len(mod.EXCLUDED),
-                len(mod.ALL_SYMBOLS), orphans)
+                len(mod.ALL_SYMBOLS), orphans, set(mod.EXCLUDED))
     except Exception as e:
         log.error(f"universe.py probe failed: {type(e).__name__}: {e}")
         return None
+
+
+def _sha(items) -> str:
+    """Short digest of a symbol list, so two machines can compare sets cheaply."""
+    import hashlib
+    h = hashlib.sha256("\n".join(sorted(items)).encode())
+    return h.hexdigest()[:16]
 
 
 def write_artifact(block: str, n_excluded: int, reasons: dict,
@@ -627,7 +672,15 @@ def write_artifact(block: str, n_excluded: int, reasons: dict,
                        "price": MIN_PRICE, "sessions": MIN_SESSIONS},
         "tradeable": len(cmp["pass"]),
         "current_universe": len(cmp["current"]),
+        "map_size": len(cmp["current"]),
+        # THE ASSERTION apply_artifact MAKES. With the baseline on the map,
+        # ALL_SYMBOLS after the write must equal this exactly. A mismatch means
+        # the block did not do what the funnel computed, which is how five
+        # symbols were silently re-admitted before anyone noticed.
         "keep": len(cmp["keep"]),
+        "keep_symbols_sha": _sha(cmp["keep"]),
+        "readmitted": list(cmp.get("readmitted") or []),
+        "previously_excluded": list(cmp.get("already_excluded") or []),
         "additions_held_back": sorted(cmp["add"]),
         "drops_by_reason": {r: sorted(v) for r, v in reasons.items()},
         "held_not_excluded": sorted(held_drops),
@@ -742,8 +795,89 @@ def apply_artifact(path: Path, universe: Path = UNIVERSE_PY) -> int:
     if age_days is not None and age_days > 14:
         print(f"  NOTE: {age_days} days old. Bands and liquidity move; re-run on "
               f"the box if that matters for this list.")
+    # PRECONDITION: the artifact must belong to THIS map.
+    #
+    # An artifact computed against a different revision of universe.py can apply
+    # cleanly and still be wrong -- the arithmetic closes if `keep` happens to
+    # match, and nothing else notices. The map is an input to the funnel, so a
+    # different map means a different answer. Checked BEFORE writing rather than
+    # detected after.
+    before_excluded = set()
+    pb = _probe(universe)
+    if pb is None:
+        return 1
+    before_excluded = set(pb[4])
+    if p.get("map_size") is not None and p["map_size"] != pb[0]:
+        log.error(f"artifact was computed against a {p['map_size']}-symbol "
+                  f"SYMBOL_SECTOR_MAP; this checkout has {pb[0]} — it does not "
+                  f"belong to this revision. Refusing without writing.")
+        return 1
+
     print()
-    return write_exclusions(block, n, path=universe)
+    rc = write_exclusions(block, n, path=universe)
+    if rc != 0:
+        return rc
+
+    after = _probe(universe)
+    if after is None:
+        return 1
+    n_map, n_excl, n_all, orph, excl_set = after
+
+    # GUARD: THE ARITHMETIC MUST CLOSE.
+    #
+    # With the baseline on SYMBOL_SECTOR_MAP, ALL_SYMBOLS after the write is
+    # exactly the artifact's `keep`:
+    #
+    #     ALL_SYMBOLS = map - EXCLUDED = map - (map - tradeable) = keep
+    #
+    # This is the check that would have caught five symbols being silently
+    # re-admitted -- it reported keep 460 and produced ALL_SYMBOLS 465, and
+    # nothing compared the two. A mismatch means the block did not do what the
+    # funnel computed, so the write is reverted rather than kept and explained.
+    keep = p.get("keep")
+    want_sha = p.get("keep_symbols_sha")
+    got_sha = _sha(_all_symbols(universe))
+    if want_sha and got_sha != want_sha:
+        log.error("THE RESULTING UNIVERSE IS NOT THE ONE THE FUNNEL COMPUTED.")
+        log.error(f"  expected keep digest {want_sha}, got {got_sha}")
+        log.error("  same count can still be a different set; this compares the "
+                  "symbols themselves.")
+        bak = universe.with_suffix(".py.bak")
+        if bak.exists():
+            universe.write_text(bak.read_text())
+            log.error(f"  restored from {bak.name}")
+        return 1
+    if keep is not None and n_all != keep:
+        log.error("ARITHMETIC DOES NOT CLOSE — reverting the write.")
+        log.error(f"  the artifact computed keep = {keep}")
+        log.error(f"  applying its block gives ALL_SYMBOLS = {n_all}")
+        log.error(f"  difference {n_all - keep:+d}")
+        if p.get("map_size") is not None and p["map_size"] != n_map:
+            log.error(f"  and the maps differ: artifact was computed against "
+                      f"{p['map_size']} symbols, this checkout has {n_map} -- "
+                      f"the artifact does not belong to this commit")
+        else:
+            log.error("  same map size, so the block itself is inconsistent with "
+                      "the funnel that produced it")
+        bak = universe.with_suffix(".py.bak")
+        if bak.exists():
+            universe.write_text(bak.read_text())
+            log.error(f"  restored from {bak.name}")
+        return 1
+
+    # GUARD: RE-ADMISSIONS ARE NAMED, NEVER INCIDENTAL.
+    readmitted = sorted(before_excluded - excl_set)
+    if readmitted:
+        print("RE-ADMITTED — these were excluded and are not any more:")
+        for sym in readmitted:
+            print(f"  {sym}")
+        print("  They pass the filters on the data this artifact was computed")
+        print("  from. That is legitimate -- a recent listing crosses 250")
+        print("  sessions eventually -- but check it is what you intend before")
+        print("  committing, because nothing else will tell you.")
+        print()
+    print(f"ARITHMETIC CLOSES: ALL_SYMBOLS {n_all} == keep {keep}")
+    return 0
 
 
 def main() -> int:
