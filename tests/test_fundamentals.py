@@ -2,8 +2,13 @@
 """
 THE FUNDAMENTALS GATE: MISSING IS NEVER A PASS
 ==============================================
-Tier 1 vetoes deterioration, Tier 2 sets a quality floor, and a stock must pass
-both. The property that matters most is the one that is easiest to get wrong:
+TIER 1 IS THE GATE -- it vetoes deterioration. TIER 2 MEASURES AND NEVER BLOCKS;
+it records ROE, D/E, FCF and whether the old rules WOULD have vetoed, so the
+claim "quality predicts outcomes here" becomes answerable from the trade log
+instead of assumed. The asymmetry is asserted below, deliberately and in detail:
+a name failing every Tier 2 rule must still PASS.
+
+The property that matters most is the one that is easiest to get wrong:
 
     every path that cannot establish a rule must block, and must be
     distinguishable from a rule that fired
@@ -73,7 +78,7 @@ def main() -> int:
 
     HOLD_OK = holds((60.0, 0.0), (60.0, 0.0), (60.0, 0.0))
 
-    print("A CLEAN STOCK PASSES BOTH TIERS")
+    print("A CLEAN STOCK PASSES")
     print("-" * 78)
     case("healthy 3 years, no pledge", F.evaluate("X", healthy(), HOLD_OK, []),
          VERDICT_PASS)
@@ -87,12 +92,86 @@ def main() -> int:
     case("pledge rising quarter on quarter",
          F.evaluate("X", healthy(), holds((60.0, 10.0), (60.0, 5.0)), []),
          VERDICT_VETO, "rising")
-    case("promoter holding down more than 5 pts",
-         F.evaluate("X", healthy(), holds((50.0, 0.0), (60.0, 0.0)), []),
+    # 60 -> 40 is a third of the stake: past both floors.
+    case("promoter holding down a third of the stake",
+         F.evaluate("X", healthy(), holds((40.0, 0.0), (60.0, 0.0)), []),
          VERDICT_VETO, "promoter holding fell")
     case("promoter down exactly 5 pts is not a veto",
          F.evaluate("X", healthy(), holds((55.0, 0.0), (60.0, 0.0), (60.0, 0.0)), []),
          VERDICT_PASS)
+    print()
+    print("MATERIALITY FLOORS: A ROUNDING DIFFERENCE IS NOT DETERIORATION")
+    print("-" * 78)
+
+    def floor(label, hs, want, want_in_reason=None):
+        nonlocal ok
+        v = F.evaluate("X", healthy(), hs, [])
+        good = v.verdict == want
+        if good and want_in_reason:
+            good = want_in_reason.lower() in v.reason.lower()
+        ok &= good
+        imm = (v.details.get("immaterial") or {})
+        print(f"  {label:<52}{v.verdict:<8}"
+              f"{'ok' if good else '** want ' + want + ' **'}")
+        return v, imm
+
+    # every one of these is a real Jun-2026 filing pair the unfloored rule vetoed
+    v, imm = floor("SUNPHARMA shape: pledge 1.4 -> 1.6",
+                   holds((60.0, 1.6), (60.0, 1.4)), VERDICT_PASS)
+    good = "pledge_rise" in imm
+    ok &= good
+    print(f"  {'and the immaterial move is still recorded':<52}"
+          f"{'ok' if good else '** INVISIBLE **'}")
+    floor("JSL shape: pledge 0.5 -> 0.6",
+          holds((60.0, 0.6), (60.0, 0.5)), VERDICT_PASS)
+    floor("GMRAIRPORT shape: pledge 15.5 -> 16.4 (rel floor)",
+          holds((60.0, 16.4), (60.0, 15.5)), VERDICT_PASS)
+    # and the ones that must still fire
+    floor("AJANTPHARM shape: pledge 17.9 -> 22.5",
+          holds((60.0, 22.5), (60.0, 17.9)), VERDICT_VETO, "rising")
+    floor("FLUOROCHEM shape: pledge 3.1 -> 6.0 (abs floor)",
+          holds((60.0, 6.0), (60.0, 3.1)), VERDICT_VETO, "rising")
+    floor("NCC shape: pledge 0.0 -> 3.8 from nothing",
+          holds((60.0, 3.8), (60.0, 0.0)), VERDICT_VETO, "rising")
+    # promoter exit: lock-in expiry and a government OFS are not insiders leaving
+    v, imm = floor("DOMS shape: promoter 70.4 -> 63.4 (IPO lock-in)",
+                   holds((63.4, 0.0), (70.4, 0.0)), VERDICT_PASS)
+    good = "promoter_drop" in imm
+    ok &= good
+    print(f"  {'and that drop is recorded, not discarded':<52}"
+          f"{'ok' if good else '** INVISIBLE **'}")
+    floor("NHPC shape: promoter 67.4 -> 61.4 (government OFS)",
+          holds((61.4, 0.0), (67.4, 0.0)), VERDICT_PASS)
+    # DELIBERATE LOSS, recorded here so it is not rediscovered as a surprise:
+    # SHRIRAMFIN 25.4 -> 20.3 is a fifth of the promoter's stake and was the one
+    # of six unfloored vetoes that looked like a genuine reduction. The relative
+    # floor lets it through. Distinguishing it needs the CAUSE of the drop (an
+    # OFS or QIP announcement in the same quarter), not a bigger number.
+    floor("SHRIRAMFIN 25.4 -> 20.3 passes (known trade-off)",
+          holds((20.3, 0.0), (25.4, 0.0)), VERDICT_PASS)
+
+    print()
+    print("A LENDER'S NEGATIVE CASH FLOW IS ITS BUSINESS MODEL")
+    print("-" * 78)
+    # Under Ind AS a loan disbursed is an operating outflow, so a growing lender
+    # reports negative CFO by construction. 25 of 38 cash-flow vetoes were
+    # lenders. An insurer is NOT exempt here -- premiums in, claims out.
+    burn2 = [year(f"FY{2026-i}", cfo=-500 * CR) for i in range(3)]
+    for sym, want in (("BAJFINANCE", VERDICT_PASS), ("PFC", VERDICT_PASS),
+                      ("HDFCBANK", VERDICT_PASS),
+                      ("LICI", VERDICT_VETO),        # insurer: check stays live
+                      ("RELIANCE", VERDICT_VETO)):
+        v = F.evaluate(sym, burn2, HOLD_OK, [])
+        good = v.verdict == want
+        ok &= good
+        print(f"  {sym + ' with CFO negative 2 years':<52}{v.verdict:<8}"
+              f"{'ok' if good else '** want ' + want + ' **'}")
+    v = F.evaluate("BAJFINANCE", burn2, HOLD_OK, [])
+    good = any("operating outflow" in x for x in v.not_evaluated)
+    ok &= good
+    print(f"  {'and the exemption names the Ind AS mechanic':<52}"
+          f"{'ok' if good else '** GENERIC **'}")
+
     rising = [year("FY2026", debt=600 * CR), year("FY2025", debt=400 * CR),
               year("FY2024", debt=200 * CR)]
     case("D/E rising two filings running",
@@ -118,20 +197,59 @@ def main() -> int:
     print(f"  {'cash-flow reason mentions cadence':<46}{'ok' if good else '** MISSING **'}")
 
     print()
-    print("TIER 2 — EACH VETO FIRES")
+    print("TIER 2 MEASURES AND NEVER BLOCKS")
     print("-" * 78)
+    # THE CENTRAL PROPERTY of the new design, and the one a future refactor is
+    # most likely to break by "tidying up" the unused return value: a name that
+    # fails every Tier 2 rule still PASSES the gate, and the record says the old
+    # rules would have thrown it away. If these flip to VETO, the gate has been
+    # switched back on silently.
+    def t2(label, annuals, sym="X", want_veto=True, want_in_reason=None):
+        nonlocal ok
+        v = F.evaluate(sym, annuals, HOLD_OK, [])
+        m = v.details.get("tier2", {})
+        good = (v.verdict == VERDICT_PASS
+                and m.get("would_veto") is want_veto)
+        if good and want_in_reason:
+            good = want_in_reason.lower() in m.get("would_veto_reason", "").lower()
+        ok &= good
+        wv = {True: "would_veto", False: "would_pass", None: "unestablished"}[
+            m.get("would_veto")]
+        print(f"  {label:<46}{v.verdict:<8}{wv:<14}{'ok' if good else '** WRONG **'}")
+        return m
+
     low_roe = [year(f"FY{2026-i}", pat=80 * CR) for i in range(3)]     # 8% ROE
-    case("average ROE below the 10% floor",
-         F.evaluate("X", low_roe, HOLD_OK, []), VERDICT_VETO, "average roe")
+    m = t2("ROE 8% is recorded, not vetoed", low_roe,
+           want_in_reason="average roe")
+    good = m.get("roe_pct") == 8.0
+    ok &= good
+    print(f"      roe_pct recorded as {m.get('roe_pct')}"
+          f"{'' if good else '  ** want 8.0 **'}")
     levered = [year(f"FY{2026-i}", debt=1500 * CR) for i in range(3)]  # D/E 1.5
-    case("D/E at or above 1.0",
-         F.evaluate("X", levered, HOLD_OK, []), VERDICT_VETO, "debt-to-equity 1.50")
+    m = t2("D/E 1.50 is recorded, not vetoed", levered,
+           want_in_reason="debt-to-equity 1.50")
+    good = m.get("de") == 1.5
+    ok &= good
+    print(f"      de recorded as {m.get('de')}"
+          f"{'' if good else '  ** want 1.5 **'}")
     burn = [year("FY2026", cfo=10 * CR, capex=900 * CR),
             year("FY2025", cfo=10 * CR, capex=900 * CR),
             year("FY2024")]
-    case("free cash flow not positive in both years",
-         F.evaluate("X", burn, HOLD_OK, []), VERDICT_VETO,
-         "not positive in both years")
+    m = t2("cash burn is recorded, not vetoed", burn,
+           want_in_reason="not positive in both years")
+    good = m.get("fcf_positive_years") == 0 and len(m.get("fcf") or []) == 2
+    ok &= good
+    print(f"      fcf_positive_years {m.get('fcf_positive_years')} of "
+          f"{len(m.get('fcf') or [])}{'' if good else '  ** WRONG **'}")
+    # and the clean case is recorded as clean, so would_veto is a real signal
+    # rather than a constant
+    t2("a healthy name records would_pass", healthy(), want_veto=False,
+       want_in_reason="quality floor met")
+    # "could not tell" is not "passed": an unmeasurable check with no failures
+    # must leave would_veto None, never False.
+    t2("capex absent -> unestablished, not a pass",
+       [year(f"FY{2026-i}", capex=None) for i in range(3)],
+       want_veto=None, want_in_reason="free cash flow needs")
 
     print()
     print("MISSING IS UNPARSEABLE, NEVER PASS")
@@ -160,10 +278,20 @@ def main() -> int:
     case("announcements not checked (None)",
          F.evaluate("X", healthy(), HOLD_OK, None),
          VERDICT_UNPARSEABLE, "announcements")
+    # HALF the auditor rule is unreadable and a PASS must say so. NSE has no
+    # category for an audit opinion and the announcement text is boilerplate, so
+    # "no auditor event found" cannot be read as "the opinion was clean".
+    v = F.evaluate("X", healthy(), HOLD_OK, [])
+    good = (v.verdict == VERDICT_PASS
+            and any("opinion not evaluable" in x for x in v.not_evaluated)
+            and "opinion" in v.reason)
+    ok &= good
+    print(f"  {'a clean auditor check names the opinion gap':<46}"
+          f"{v.verdict:<13}{'ok' if good else '** UNSTATED **'}")
     nocapex = [year(f"FY{2026-i}", capex=None) for i in range(3)]
-    case("capex absent -> FCF unknown, not zero",
-         F.evaluate("X", nocapex, HOLD_OK, []),
-         VERDICT_UNPARSEABLE, "free cash flow")
+    # NOT a gate case any more -- Tier 2 does not block, so absent capex cannot
+    # stop a trade. What must still hold is that it is not read as capex ZERO,
+    # which would make a capital-hungry business look cash-generative.
     # the specific trap: capex absent must NOT read as capex zero, which would
     # make a capital-hungry business look cash-generative.
     good = nocapex[0].fcf is None
@@ -175,63 +303,114 @@ def main() -> int:
     print("THE WINDOW AND THE EXEMPTION ARE NAMED, NEVER SILENT")
     print("-" * 78)
     v = F.evaluate("X", healthy(), HOLD_OK, [])
-    good = f"{F.ROE_AVERAGE_YEARS}-year window" in v.reason
+    m = v.details["tier2"]
+    good = f"{F.ROE_AVERAGE_YEARS}-year window" in m["would_veto_reason"]
     ok &= good
-    print(f"  {'a PASS states its window':<46}{'ok' if good else '** MISSING **'}")
+    print(f"  {'a clean tier 2 record states its window':<46}"
+          f"{'ok' if good else '** MISSING **'}")
     low = [year(f"FY{2026-i}", pat=50 * CR) for i in range(3)]     # 5% ROE
-    v = F.evaluate("X", low, HOLD_OK, [])
-    good = "2-year window" in v.reason and "5.0%" in v.reason
+    m = F.evaluate("X", low, HOLD_OK, []).details["tier2"]
+    good = "2-year window" in m["would_veto_reason"] and "5.0%" in m["would_veto_reason"]
     ok &= good
-    print(f"  {'an ROE veto states its window':<46}{'ok' if good else '** MISSING **'}")
+    print(f"  {'an ROE shortfall states its window':<46}"
+          f"{'ok' if good else '** MISSING **'}")
 
-    # financials: leverage exempt, and the exemption must be recorded
-    fin = next((s_ for s_ in F.__dict__ and [] or []), None)
+    # LEVERAGE_EXEMPT is exempt from a leverage test; nobody else is. The
+    # principle is entities whose LIABILITIES ARE NOT DEBT -- deposits and lending
+    # liabilities for banks and NBFCs, policyholder float for insurers -- and the
+    # exemption is granted by name, never by sector tag. It matters in both
+    # directions: the alternative branch BLOCKS, so a wrongly granted exemption
+    # lets a symbol trade that should not, and a wrongly withheld one vetoes LICI
+    # for the crime of not borrowing money.
     import importlib.util as _il
     _u = _il.spec_from_file_location("u_fin", ROOT / "engine/universe.py")
     _m = _il.module_from_spec(_u); _u.loader.exec_module(_m)
-    bank = next((s_ for s_, sec in _m.SYMBOL_SECTOR_MAP.items()
-                 if sec in F.FINANCIAL_SECTORS and s_ in _m.ALL_SYMBOLS), None)
-    nonbank = next((s_ for s_, sec in _m.SYMBOL_SECTOR_MAP.items()
-                    if sec not in F.FINANCIAL_SECTORS and s_ in _m.ALL_SYMBOLS), None)
+    bank = "HDFCBANK"
+    nonbank = "RELIANCE"
+    for sym, want in (("HDFCBANK", True), ("BAJFINANCE", True),
+                      ("MUTHOOTFIN", True),
+                      # float is a claims reserve, not borrowing
+                      ("LICI", True), ("HDFCLIFE", True), ("ICICIGI", True),
+                      ("RELIANCE", False),
+                      # all four carried the exemption under the old
+                      # BANKING/FINANCE sector test and must not any more
+                      ("ADANIPORTS", False), ("INDIGO", False),
+                      ("CONCOR", False), ("BSE", False),
+                      # fee and commission businesses: leverage means what it says
+                      ("HDFCAMC", False), ("CRISIL", False),
+                      # an insurance BROKER carries no float
+                      ("POLICYBZR", False)):
+        got = F.is_leverage_exempt(sym)
+        ok &= got == want
+        tag = _m.SYMBOL_SECTOR_MAP.get(sym, "?")
+        print(f"  {sym + ' (' + tag + ')':<46}"
+              f"{'exempt' if got else 'not exempt':<13}"
+              f"{'ok' if got == want else '** WRONG **'}")
+    # and the list must not drift out of the universe
+    dead = sorted(F.LEVERAGE_EXEMPT - set(_m.ALL_SYMBOLS))
+    ok &= not dead
+    print(f"  {'every exempt name is a real universe symbol':<46}"
+          f"{'ok' if not dead else '** dead: ' + ', '.join(dead[:6])}")
     # no borrowings reported at all, which is the real shape for a lender
     nodebt = [AnnualFacts(fy=f"FY{2026-i}", equity=1000 * CR, pat=200 * CR,
                           cfo=250 * CR, capex=50 * CR) for i in range(3)]
     vb = F.evaluate(bank, nodebt, HOLD_OK, [])
-    good = vb.verdict == VERDICT_PASS and any("exempt" in x for x in vb.not_evaluated)
+    mb = vb.details["tier2"]
+    good = (vb.verdict == VERDICT_PASS and mb["de_exempt"]
+            and any("exempt" in x and "bank" in x for x in mb["notes"]))
+    # and an insurer's exemption must name FLOAT, not deposits -- a generic
+    # reason would hide which category error is being excused
+    mi = F.evaluate("LICI", nodebt, HOLD_OK, []).details["tier2"]
+    good2 = mi["de_exempt"] and any("float" in x for x in mi["notes"])
+    ok &= good2
     ok &= good
-    print(f"  {'a lender passes with leverage EXEMPT':<46}{vb.verdict:<13}"
+    print(f"  {'a lender records leverage EXEMPT':<46}{vb.verdict:<13}"
           f"{'ok' if good else '** WRONG **'}")
-    if vb.not_evaluated:
-        print(f"      {[x for x in vb.not_evaluated if 'exempt' in x][0][:72]}")
+    if good:
+        print(f"      {[x for x in mb['notes'] if 'exempt' in x][0][:70]}")
+    print(f"  {'an insurer exemption names policyholder float':<46}"
+          f"{'PASS':<13}{'ok' if good2 else '** GENERIC REASON **'}")
+    if good2:
+        print(f"      {[x for x in mi['notes'] if 'exempt' in x][0][:70]}")
+    # A non-lender with no borrowings reported is opacity, not a category error,
+    # and it still BLOCKS -- but via TIER 1, whose rising-leverage test reads the
+    # same borrowings. Tier 2 is not what stops this trade, and the two must not
+    # be conflated: Tier 2 records the same gap as merely unestablished.
     vn = F.evaluate(nonbank, nodebt, HOLD_OK, [])
-    good = vn.verdict == VERDICT_UNPARSEABLE
+    mn = vn.details["tier2"]
+    good = (vn.verdict == VERDICT_UNPARSEABLE and vn.tier == "TIER1"
+            and not mn["de_exempt"] and mn["would_veto"] is None
+            and "D/E" in mn["would_veto_reason"])
     ok &= good
-    print(f"  {'a non-lender with no D/E is UNPARSEABLE':<46}{vn.verdict:<13}"
+    print(f"  {'a non-lender with no D/E: TIER 1 blocks':<46}{vn.verdict:<13}"
           f"{'ok' if good else '** WRONG **'}")
 
     print()
-    print("THE ROE FLOOR IS 10%, SET AGAINST THE MEASURED SPREAD")
+    print("THE ROE FLOOR MOVES THE RECORD, NOT THE VERDICT")
     print("-" * 78)
-    # The rule is "above 10%", so 10.0% itself does not pass.
-    for pat_cr, want in ((110, VERDICT_PASS), (150, VERDICT_PASS),
-                         (100, VERDICT_VETO), (90, VERDICT_VETO),
-                         (80, VERDICT_VETO)):
+    # The yardstick is still "above 10%", so 10.0% itself does not clear it --
+    # but every one of these trades. The floor now decides what the
+    # counterfactual says, which is the only thing it is allowed to decide.
+    for pat_cr, want_veto in ((110, False), (150, False),
+                              (100, True), (90, True), (80, True)):
         ys = [year(f"FY{2026-i}", pat=pat_cr * CR) for i in range(3)]
         v = F.evaluate("X", ys, HOLD_OK, [])
-        roe = pat_cr / 1000 * 100
-        good = v.verdict == want
+        good = (v.verdict == VERDICT_PASS
+                and v.details["tier2"]["would_veto"] is want_veto)
         ok &= good
-        print(f"  ROE {roe:>5.1f}%  ->  {v.verdict:<13}"
-              f"{'ok' if good else '** want ' + want + ' **'}")
+        print(f"  ROE {pat_cr / 1000 * 100:>5.1f}%  ->  {v.verdict:<8}"
+              f"{'would_veto' if want_veto else 'would_pass':<14}"
+              f"{'ok' if good else '** WRONG **'}")
 
     print()
-    print("A VETO OUTRANKS A CLEAN TIER 2")
+    print("TIER 1 STILL VETOES, WITH TIER 2 ATTACHED")
     print("-" * 78)
     # healthy fundamentals but a pledge problem: must be TIER1 VETO, not PASS
     v = F.evaluate("X", healthy(), holds((60.0, 40.0), (60.0, 40.0)), [])
-    good = v.verdict == VERDICT_VETO and v.tier == "TIER1"
+    good = (v.verdict == VERDICT_VETO and v.tier == "TIER1"
+            and v.details.get("tier2", {}).get("would_veto") is False)
     ok &= good
-    print(f"  {'tier 1 veto wins over a passing tier 2':<46}"
+    print(f"  {'tier 1 vetoes a name tier 2 would have kept':<46}"
           f"{v.verdict}/{v.tier}  {'ok' if good else '** WRONG **'}")
 
     print()

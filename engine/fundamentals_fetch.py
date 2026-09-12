@@ -47,6 +47,7 @@ import time
 import logging
 import argparse
 from pathlib import Path
+from urllib.parse import quote
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +75,18 @@ REQUEST_DELAY = 0.35    # between requests, to nseindia.com
 TIMEOUT = 40
 RETRIES = 2
 
+
+
+def _q(symbol: str) -> str:
+    """
+    URL-ENCODE THE SYMBOL. NSE tickers contain ampersands -- M&M, M&MFIN,
+    J&KBANK, ARE&M, GVT&D -- and interpolating one raw into a query string ends
+    the symbol parameter and starts a junk one: ?symbol=M&M asks for symbol "M".
+    NSE answers 200 with an empty or wrong payload rather than an error, so the
+    symbol simply reports "no filings" and looks like a company that does not
+    file. Five symbols were blocked this way before it was caught.
+    """
+    return quote(symbol, safe="")
 
 def _session():
     import requests
@@ -157,7 +170,7 @@ def fetch_symbol(s, symbol: str) -> dict:
     """
     from engine import fundamentals as F
 
-    r = _get(s, NSE_RESULTS.format(symbol=symbol))
+    r = _get(s, NSE_RESULTS.format(symbol=_q(symbol)))
     time.sleep(REQUEST_DELAY)
     if r is None:
         return {"years": [], "status": "unreachable",

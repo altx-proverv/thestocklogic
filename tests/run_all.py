@@ -34,6 +34,7 @@ SUITES = [
     ("exclusion block",  [sys.executable, "tests/test_exclusion_block.py"]),
     ("universe idempotency", [sys.executable, "tests/test_universe_idempotency.py"]),
     ("fundamentals",    [sys.executable, "tests/test_fundamentals.py"]),
+    ("tier1 sources",   [sys.executable, "tests/test_tier1_sources.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
