@@ -121,7 +121,7 @@ def main() -> int:
     print("TIER 2 — EACH VETO FIRES")
     print("-" * 78)
     low_roe = [year(f"FY{2026-i}", pat=80 * CR) for i in range(3)]     # 8% ROE
-    case("3-year average ROE below 12%",
+    case("average ROE below the 10% floor",
          F.evaluate("X", low_roe, HOLD_OK, []), VERDICT_VETO, "average roe")
     levered = [year(f"FY{2026-i}", debt=1500 * CR) for i in range(3)]  # D/E 1.5
     case("D/E at or above 1.0",
@@ -129,8 +129,9 @@ def main() -> int:
     burn = [year("FY2026", cfo=10 * CR, capex=900 * CR),
             year("FY2025", cfo=10 * CR, capex=900 * CR),
             year("FY2024")]
-    case("free cash flow positive in only 1 of 3",
-         F.evaluate("X", burn, HOLD_OK, []), VERDICT_VETO, "free cash flow positive in only")
+    case("free cash flow not positive in both years",
+         F.evaluate("X", burn, HOLD_OK, []), VERDICT_VETO,
+         "not positive in both years")
 
     print()
     print("MISSING IS UNPARSEABLE, NEVER PASS")
@@ -143,9 +144,19 @@ def main() -> int:
     case("only one shareholding filing",
          F.evaluate("X", healthy(), holds((60.0, 0.0)), []),
          VERDICT_UNPARSEABLE, "one shareholding")
-    case("only 2 annual filings, need 3 for leverage",
-         F.evaluate("X", healthy(2), HOLD_OK, []),
-         VERDICT_UNPARSEABLE, "annual filings")
+    # CHANGED DELIBERATELY. Only two annual years are parseable from NSE, for
+    # every symbol, so a rule needing three can never run. Treating that like
+    # opacity made every verdict UNPARSEABLE and blocked the whole universe --
+    # at which point the layer gets switched off, which is worse than a pass
+    # that states what it did not check. It is a PASS that NAMES the gap.
+    v = F.evaluate("X", healthy(2), HOLD_OK, [])
+    good = (v.verdict == VERDICT_PASS and v.not_evaluated
+            and any("rising leverage" in x for x in v.not_evaluated))
+    ok &= good
+    print(f"  {'2 filings: structural gap named, not blocking':<46}"
+          f"{v.verdict:<13}{'ok' if good else '** WRONG **'}")
+    if good:
+        print(f"      not_evaluated: {v.not_evaluated[0][:66]}")
     case("announcements not checked (None)",
          F.evaluate("X", healthy(), HOLD_OK, None),
          VERDICT_UNPARSEABLE, "announcements")
@@ -159,6 +170,59 @@ def main() -> int:
     ok &= good
     print(f"  {'AnnualFacts.fcf is None when capex is None':<46}"
           f"{'ok' if good else '** TREATED AS ZERO **'}")
+
+    print()
+    print("THE WINDOW AND THE EXEMPTION ARE NAMED, NEVER SILENT")
+    print("-" * 78)
+    v = F.evaluate("X", healthy(), HOLD_OK, [])
+    good = f"{F.ROE_AVERAGE_YEARS}-year window" in v.reason
+    ok &= good
+    print(f"  {'a PASS states its window':<46}{'ok' if good else '** MISSING **'}")
+    low = [year(f"FY{2026-i}", pat=50 * CR) for i in range(3)]     # 5% ROE
+    v = F.evaluate("X", low, HOLD_OK, [])
+    good = "2-year window" in v.reason and "5.0%" in v.reason
+    ok &= good
+    print(f"  {'an ROE veto states its window':<46}{'ok' if good else '** MISSING **'}")
+
+    # financials: leverage exempt, and the exemption must be recorded
+    fin = next((s_ for s_ in F.__dict__ and [] or []), None)
+    import importlib.util as _il
+    _u = _il.spec_from_file_location("u_fin", ROOT / "engine/universe.py")
+    _m = _il.module_from_spec(_u); _u.loader.exec_module(_m)
+    bank = next((s_ for s_, sec in _m.SYMBOL_SECTOR_MAP.items()
+                 if sec in F.FINANCIAL_SECTORS and s_ in _m.ALL_SYMBOLS), None)
+    nonbank = next((s_ for s_, sec in _m.SYMBOL_SECTOR_MAP.items()
+                    if sec not in F.FINANCIAL_SECTORS and s_ in _m.ALL_SYMBOLS), None)
+    # no borrowings reported at all, which is the real shape for a lender
+    nodebt = [AnnualFacts(fy=f"FY{2026-i}", equity=1000 * CR, pat=200 * CR,
+                          cfo=250 * CR, capex=50 * CR) for i in range(3)]
+    vb = F.evaluate(bank, nodebt, HOLD_OK, [])
+    good = vb.verdict == VERDICT_PASS and any("exempt" in x for x in vb.not_evaluated)
+    ok &= good
+    print(f"  {'a lender passes with leverage EXEMPT':<46}{vb.verdict:<13}"
+          f"{'ok' if good else '** WRONG **'}")
+    if vb.not_evaluated:
+        print(f"      {[x for x in vb.not_evaluated if 'exempt' in x][0][:72]}")
+    vn = F.evaluate(nonbank, nodebt, HOLD_OK, [])
+    good = vn.verdict == VERDICT_UNPARSEABLE
+    ok &= good
+    print(f"  {'a non-lender with no D/E is UNPARSEABLE':<46}{vn.verdict:<13}"
+          f"{'ok' if good else '** WRONG **'}")
+
+    print()
+    print("THE ROE FLOOR IS 10%, SET AGAINST THE MEASURED SPREAD")
+    print("-" * 78)
+    # The rule is "above 10%", so 10.0% itself does not pass.
+    for pat_cr, want in ((110, VERDICT_PASS), (150, VERDICT_PASS),
+                         (100, VERDICT_VETO), (90, VERDICT_VETO),
+                         (80, VERDICT_VETO)):
+        ys = [year(f"FY{2026-i}", pat=pat_cr * CR) for i in range(3)]
+        v = F.evaluate("X", ys, HOLD_OK, [])
+        roe = pat_cr / 1000 * 100
+        good = v.verdict == want
+        ok &= good
+        print(f"  ROE {roe:>5.1f}%  ->  {v.verdict:<13}"
+              f"{'ok' if good else '** want ' + want + ' **'}")
 
     print()
     print("A VETO OUTRANKS A CLEAN TIER 2")

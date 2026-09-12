@@ -10,9 +10,24 @@ gate, from a cache, so it costs nothing in the market-hours loop.
 
 THREE VERDICTS, NOT TWO
 -----------------------
-    PASS          every required fact was found and every rule passed
+    PASS          every rule that COULD be evaluated passed
     VETO          a rule fired, or a required filing is genuinely absent
-    UNPARSEABLE   the filing exists and we could not read it
+    UNPARSEABLE   this symbol's data is missing where its peers have it
+
+A PASS may carry NOT-EVALUATED CHECKS, and says so in its reason. That third
+category is forced by the data: a rule needing three annual filings cannot be
+evaluated for ANY symbol, because only two years are parseable. Treating that
+like opacity would make every verdict UNPARSEABLE and the gate would block the
+whole universe forever -- at which point the layer gets switched off, which is
+worse than a pass that states what it did not check.
+
+So the distinction is whose fault the absence is:
+
+    structurally unavailable   no symbol has it (too few filing periods, or an
+                               explicit sector exemption). Recorded on the
+                               verdict, named in the reason, does not block.
+    absent for this symbol     peers have the field and this one does not.
+                               UNPARSEABLE, blocks.
 
 UNPARSEABLE blocks trading exactly like VETO -- absence of confirmation is not
 permission -- but it is recorded separately, and that distinction is the whole
@@ -93,7 +108,7 @@ log = logging.getLogger("TSL-FUNDAMENTALS")
 # Bump when the parser or the rules change. A cached verdict carrying an older
 # version is stale by definition -- otherwise a fixed parser leaves old wrong
 # vetoes in place, and a changed threshold is applied to nothing.
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 
 CACHE = ROOT / "data/processed/fundamentals.json"
 
@@ -118,11 +133,47 @@ AUDITOR_LOOKBACK_QTRS   = 4
 # of businesses. This is a rotating book with a technical entry and a structural
 # stop. D/E under 0.5 also excludes most Indian banks and NBFCs structurally --
 # a sector exclusion disguised as a quality test.
-ROE_MIN_PCT             = 12.0
-ROE_AVERAGE_YEARS       = 3
+# ROE floor 10%, not 12%, set against the measured spread rather than a guess.
+# Over a 60-symbol spread the average-ROE distribution was p25 10.5%, p50 16.1%,
+# p75 18.0%, and the coverage cliff is in the wrong place for 12%:
+#     > 10%  79% pass
+#     > 12%  62% pass      <- 17 points of coverage for 2 points of ROE
+#     > 15%  56% pass      <-  6 points for 3 points of ROE
+# 12% sat just above the lower quartile, so it was cutting the middle rather
+# than the bottom.
+ROE_MIN_PCT             = 10.0
+
+# TWO years, not three. Only FY2023 and FY2024 are parseable from NSE's annual
+# XBRL -- 73% of symbols yield 2 years, 12% yield 1, 15% none -- so a 3-year
+# window is unsatisfiable for everyone and waiting for FY2025 costs months. Two
+# years still says something, and the window is named in every reason string so
+# nobody reads a 2-year average as a 3-year one.
+ROE_AVERAGE_YEARS       = 2
 DE_MAX                  = 1.0
+FCF_WINDOW_YEARS        = 2
+# BOTH years, stated that way. "2 of 3" over a two-year window reads as looser
+# than it is -- it is in fact every year available.
 FCF_POSITIVE_YEARS      = 2
-FCF_WINDOW_YEARS        = 3
+
+# Sectors exempt from the TIER 2 leverage test.
+#
+# Banks and NBFCs do not report BorrowingsCurrent/Noncurrent: deposits are a
+# liability but they are not borrowings, and leverage for a lender is not
+# comparable to leverage for a manufacturer. Measured over a 60-symbol spread,
+# D/E was uncomputable for 12 of 51 symbols and EVERY ONE was banking or
+# finance, while the overall parse rate was identical at 85% for financials and
+# non-financials -- so banks file perfectly well, the field simply does not
+# exist for them.
+#
+# Left in place, the leverage test would veto a quarter of the universe on
+# missing data, which is the "sector exclusion disguised as a quality test" the
+# looser threshold was chosen to avoid. The exemption is RECORDED on the verdict
+# so it can never be mistaken for having passed the test.
+#
+# TIER 1's rising-leverage test is NOT exempt. A change in leverage is
+# meaningful even where the level is not comparable, so it runs wherever the
+# data exists.
+FINANCIAL_SECTORS = ("BANKING", "FINANCE")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -185,6 +236,10 @@ class Verdict:
     as_of: str = ""
     tier: str = ""
     parser_version: int = PARSER_VERSION
+    # Checks that could not run for a reason that is not this symbol's fault --
+    # too few filing periods for anyone, or an explicit sector exemption. Named
+    # on the verdict and in the reason so a PASS never implies they passed.
+    not_evaluated: list = field(default_factory=list)
     details: dict = field(default_factory=dict)
 
     @property
@@ -312,13 +367,26 @@ def parse_annual(xml: str, fy: str = "", source: str = "") -> tuple:
 # TIER 1 — deterioration veto
 # ══════════════════════════════════════════════════════════════════
 
+def sector_of(symbol: str) -> str:
+    try:
+        sys.path.insert(0, str(ROOT / "engine"))
+        from universe import get_symbol_sector
+        return (get_symbol_sector(symbol) or "").upper()
+    except Exception:
+        return ""
+
+
+def is_financial(symbol: str) -> bool:
+    return sector_of(symbol) in FINANCIAL_SECTORS
+
+
 def tier1(symbol: str, annuals: list, holdings: list,
           auditor_flags: list) -> Verdict:
     """
     Strict. Any rule firing is a VETO; any rule that cannot be evaluated is
     UNPARSEABLE. `annuals` newest first, `holdings` newest first.
     """
-    missing = []
+    missing, skipped = [], []
 
     # 1. promoter pledge
     if not holdings:
@@ -360,9 +428,23 @@ def tier1(symbol: str, annuals: list, holdings: list,
     #    Stated in the reason because a two-year lag on a deterioration veto is
     #    materially weaker than a two-quarter one, and a reader must know.
     des = [(a.fy, a.de) for a in annuals[:DE_RISING_PERIODS + 1]]
-    if any(d is None for _, d in des) or len(des) < DE_RISING_PERIODS + 1:
-        missing.append(f"need {DE_RISING_PERIODS + 1} annual filings with "
-                       f"equity and borrowings to test rising leverage")
+    if len(des) < DE_RISING_PERIODS + 1:
+        # STRUCTURAL: only two annual years are parseable from this source, for
+        # every symbol, so nobody can show two consecutive rises. Not this
+        # symbol's opacity, so it does not block -- but it is named.
+        skipped.append(f"rising leverage needs {DE_RISING_PERIODS + 1} annual "
+                       f"filings, only {len(des)} parseable ({CADENCE_ANNUAL})")
+    elif any(d is None for _, d in des):
+        if is_financial(symbol):
+            # The same category error as the tier 2 exemption, reached from the
+            # other side: a lender reports no borrowings at all, so there is no
+            # level to compare between years. Not opacity, so it does not block.
+            skipped.append(f"rising leverage not applicable: "
+                           f"{sector_of(symbol)} reports no borrowings "
+                           f"({CADENCE_ANNUAL})")
+        else:
+            missing.append("an annual filing lacks equity or borrowings, so "
+                           "rising leverage cannot be tested")
     else:
         rising = all(des[i][1] > des[i + 1][1] for i in range(DE_RISING_PERIODS))
         if rising:
@@ -375,9 +457,11 @@ def tier1(symbol: str, annuals: list, holdings: list,
 
     # 4. negative operating cash flow two periods running -- ANNUAL likewise
     cfos = [(a.fy, a.cfo) for a in annuals[:CFO_NEGATIVE_PERIODS]]
-    if len(cfos) < CFO_NEGATIVE_PERIODS or any(c is None for _, c in cfos):
-        missing.append(f"need {CFO_NEGATIVE_PERIODS} annual filings with "
-                       f"operating cash flow")
+    if len(cfos) < CFO_NEGATIVE_PERIODS:
+        skipped.append(f"negative cash flow needs {CFO_NEGATIVE_PERIODS} annual "
+                       f"filings, only {len(cfos)} parseable ({CADENCE_ANNUAL})")
+    elif any(c is None for _, c in cfos):
+        missing.append("an annual filing lacks operating cash flow")
     elif all(c < 0 for _, c in cfos):
         chain = ", ".join(f"{fy}:{c/1e7:,.0f}cr" for fy, c in cfos)
         return Verdict(symbol, VERDICT_VETO,
@@ -399,9 +483,13 @@ def tier1(symbol: str, annuals: list, holdings: list,
         return Verdict(symbol, VERDICT_UNPARSEABLE,
                        "tier 1 not established: " + "; ".join(missing[:4]),
                        annuals[0].fy if annuals else "", "TIER1",
-                       details={"missing": missing})
-    return Verdict(symbol, VERDICT_PASS, "tier 1: no deterioration signal",
-                   annuals[0].fy if annuals else "", "TIER1")
+                       not_evaluated=skipped, details={"missing": missing})
+    note = ("tier 1: no deterioration signal"
+            + (f" ({len(skipped)} check(s) not evaluable: "
+               f"{'; '.join(skipped)})" if skipped else ""))
+    return Verdict(symbol, VERDICT_PASS, note,
+                   annuals[0].fy if annuals else "", "TIER1",
+                   not_evaluated=skipped)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -409,22 +497,29 @@ def tier1(symbol: str, annuals: list, holdings: list,
 # ══════════════════════════════════════════════════════════════════
 
 def tier2(symbol: str, annuals: list) -> Verdict:
-    missing = []
-    window = annuals[:ROE_AVERAGE_YEARS]
+    missing, skipped = [], []
+    win = f"{ROE_AVERAGE_YEARS}-year window, {CADENCE_ANNUAL}"
 
-    roes = [a.roe_pct for a in window if a.roe_pct is not None]
+    roes = [a.roe_pct for a in annuals[:ROE_AVERAGE_YEARS] if a.roe_pct is not None]
     if len(roes) < ROE_AVERAGE_YEARS:
-        missing.append(f"need {ROE_AVERAGE_YEARS} years of ROE, have {len(roes)}")
+        missing.append(f"ROE needs {ROE_AVERAGE_YEARS} years, have {len(roes)}")
     else:
         avg = sum(roes) / len(roes)
         if avg <= ROE_MIN_PCT:
             return Verdict(symbol, VERDICT_VETO,
-                           f"{ROE_AVERAGE_YEARS}-year average ROE {avg:.1f}% is "
-                           f"not above {ROE_MIN_PCT:.0f}% "
-                           f"({', '.join(f'{r:.1f}%' for r in roes)}) "
-                           f"[{CADENCE_ANNUAL}]", annuals[0].fy, "TIER2")
+                           f"average ROE {avg:.1f}% is not above "
+                           f"{ROE_MIN_PCT:.0f}% "
+                           f"({', '.join(f'{r:.1f}%' for r in roes)}) [{win}]",
+                           annuals[0].fy, "TIER2")
 
-    if not annuals or annuals[0].de is None:
+    # LEVERAGE: exempt for lenders. Deposits are not borrowings, so an absent
+    # D/E for a bank is a category error rather than opacity. Recorded, never
+    # silent.
+    if is_financial(symbol):
+        skipped.append(f"leverage test exempt: {sector_of(symbol)} — deposits "
+                       f"are not borrowings, so D/E is not comparable and NSE "
+                       f"does not report BorrowingsCurrent/Noncurrent for lenders")
+    elif not annuals or annuals[0].de is None:
         missing.append("no annual filing with equity and borrowings for D/E")
     elif annuals[0].de >= DE_MAX:
         return Verdict(symbol, VERDICT_VETO,
@@ -432,27 +527,31 @@ def tier2(symbol: str, annuals: list) -> Verdict:
                        f"{DE_MAX:.1f} ({annuals[0].fy}) [{CADENCE_ANNUAL}]",
                        annuals[0].fy, "TIER2")
 
-    fcf_window = annuals[:FCF_WINDOW_YEARS]
-    fcfs = [(a.fy, a.fcf) for a in fcf_window if a.fcf is not None]
+    fcfs = [(a.fy, a.fcf) for a in annuals[:FCF_WINDOW_YEARS] if a.fcf is not None]
     if len(fcfs) < FCF_WINDOW_YEARS:
-        missing.append(f"need {FCF_WINDOW_YEARS} years of free cash flow "
-                       f"(CFO and capex), have {len(fcfs)}")
+        missing.append(f"free cash flow needs {FCF_WINDOW_YEARS} years of CFO "
+                       f"and capex, have {len(fcfs)}")
     else:
         positive = sum(1 for _, v in fcfs if v > 0)
         if positive < FCF_POSITIVE_YEARS:
             chain = ", ".join(f"{fy}:{v/1e7:,.0f}cr" for fy, v in fcfs)
+            # Stated as "both years" because that is what it is over a two-year
+            # window. "2 of 3" would read as looser than the rule actually is.
             return Verdict(symbol, VERDICT_VETO,
-                           f"free cash flow positive in only {positive} of "
-                           f"{FCF_WINDOW_YEARS} years ({chain}) "
-                           f"[{CADENCE_ANNUAL}]", annuals[0].fy, "TIER2")
+                           f"free cash flow not positive in both years "
+                           f"({positive} of {len(fcfs)}: {chain}) [{win}]",
+                           annuals[0].fy, "TIER2")
 
     if missing:
         return Verdict(symbol, VERDICT_UNPARSEABLE,
                        "tier 2 not established: " + "; ".join(missing[:4]),
                        annuals[0].fy if annuals else "", "TIER2",
-                       details={"missing": missing})
-    return Verdict(symbol, VERDICT_PASS, "tier 2: quality floor met",
-                   annuals[0].fy if annuals else "", "TIER2")
+                       not_evaluated=skipped, details={"missing": missing})
+    note = (f"tier 2: quality floor met [{win}]"
+            + (f" ({len(skipped)} check(s) not evaluated: "
+               f"{'; '.join(skipped)})" if skipped else ""))
+    return Verdict(symbol, VERDICT_PASS, note, annuals[0].fy if annuals else "",
+                   "TIER2", not_evaluated=skipped)
 
 
 def evaluate(symbol: str, annuals: list, holdings: list,
@@ -464,7 +563,11 @@ def evaluate(symbol: str, annuals: list, holdings: list,
     v1 = tier1(symbol, annuals, holdings, auditor_flags)
     if v1.verdict != VERDICT_PASS:
         return v1
-    return tier2(symbol, annuals)
+    v2 = tier2(symbol, annuals)
+    # Carry tier 1's not-evaluated checks onto the final verdict: a PASS must
+    # name everything it did not check, not just the last tier's share.
+    v2.not_evaluated = list(v1.not_evaluated) + list(v2.not_evaluated)
+    return v2
 
 
 # ══════════════════════════════════════════════════════════════════
