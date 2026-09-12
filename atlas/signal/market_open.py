@@ -105,6 +105,19 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
+def sector_of(symbol: str) -> str:
+    """Sector from the universe map, not from the signals table -- which has no
+    such column. atlas_trades.sector does exist and _log_intent writes it, so
+    the value is still needed; it just was never available from where it was
+    being read."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "engine"))
+        from universe import get_symbol_sector
+        return get_symbol_sector(symbol) or ""
+    except Exception:
+        return ""
+
+
 def _headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json"}
@@ -164,10 +177,19 @@ def get_latest_batch_date() -> str:
 
 
 def get_signals(batch_date: str) -> list:
+    # EVERY COLUMN HERE IS ONE 06_push_supabase.py WRITES. That file builds the
+    # row literal that creates these, so it is the definition of what `signals`
+    # has; anything not in it does not exist.
+    #
+    # `sector` is not one of them. It was in this select and PostgREST answered
+    # "column signals.sector does not exist" -- the fifth field-name mismatch in
+    # this repo after gtt_trigger_id, delivery_pct, live_prices.volume and
+    # atlas_trades.order_id. The sector comes from universe.SYMBOL_SECTOR_MAP
+    # instead, which is where it actually lives and costs no query at all.
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{batch_date}"
         f"&select=symbol,direction,entry_ref,entry_low,entry_high,sl,stop_pct,"
-        f"setup_name,sector,zone_source,score,grade,structure_trend",
+        f"setup_name,zone_source,score,grade,structure_trend",
         headers=_headers(), timeout=30)
     if r.status_code != 200:
         raise RuntimeError(f"signal fetch failed: HTTP {r.status_code} "
@@ -418,7 +440,7 @@ def cycle(state: Session) -> dict:
             "stop_pct":   float(sig.get("stop_pct", 0) or 0),
             "structure_trend": sig.get("structure_trend", ""),
             "setup_name": sig.get("setup_name", ""),
-            "sector":     sig.get("sector", ""),
+            "sector":     sector_of(sym),
             "zone_source": sig.get("zone_source", ""),
             "score":      float(sig.get("score", 0) or 0),
             "grade":      sig.get("grade", ""),
@@ -500,8 +522,44 @@ def in_window(now=None) -> bool:
     return WINDOW_START <= now.time() < WINDOW_END
 
 
+REQUIRED_ENV = (
+    ("SUPABASE_SERVICE_KEY", "the ledger — no reads, no writes, no gates"),
+    ("TELEGRAM_BOT_TOKEN",   "the alert channel"),
+    ("TELEGRAM_CHAT_ID",     "the alert channel"),
+)
+
+
+def preflight() -> list:
+    """
+    Missing environment, named. Empty list means good to start.
+
+    THE ALERT CHANNEL IS REQUIRED, NOT OPTIONAL. telegram.send() logs
+    "Telegram not configured — skipping message" and returns, so an unset token
+    does not fail anything: it just means every alert for the whole session
+    goes nowhere. Under the 09:37 cron that lost one message. Under a service
+    it loses the halt notice, the reconcile notice and every entry -- a silent
+    failure is quiet 360 times.
+
+    These come from the crontab header today, and systemd does not read a
+    crontab. That is what EnvironmentFile=/etc/atlas.env is for; see
+    deploy/atlas.env.example.
+    """
+    return [(name, why) for name, why in REQUIRED_ENV
+            if not os.environ.get(name)]
+
+
 def serve() -> int:
     mode = "LIVE" if LIVE_TRADING_ENABLED else "SHADOW"
+
+    missing = preflight()
+    if missing:
+        for name, why in missing:
+            log.error(f"MISSING ENV {name} — {why}")
+        log.error("refusing to start: see deploy/atlas.env.example. Running "
+                  "without the alert channel means no failure this session is "
+                  "reported anywhere.")
+        return 1
+
     if not acquire_lock():
         return 1
 

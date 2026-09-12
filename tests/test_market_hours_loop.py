@@ -209,6 +209,39 @@ def main() -> int:
     print(f"  {'different kinds/keys still get through':<46}{len(sent):<6}"
           f"{'ok' if good else '** SUPPRESSED TOO MUCH **'}")
 
+    print()
+    print("THE SERVICE REFUSES TO START DEAF")
+    print("-" * 78)
+    # telegram.send() logs "not configured" and returns, so a missing token
+    # fails nothing and silences every alert for the session. Under systemd,
+    # which never sees the crontab header, that is the default unless
+    # /etc/atlas.env supplies it.
+    saved = {k: os.environ.get(k) for k, _ in mo.REQUIRED_ENV}
+    try:
+        for k, _ in mo.REQUIRED_ENV:
+            os.environ[k] = "set"
+        good = mo.preflight() == []
+        ok &= good
+        print(f"  {'all env present -> starts':<46}"
+              f"{'ok' if good else '** BLOCKED WRONGLY **'}")
+
+        for missing in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+                        "SUPABASE_SERVICE_KEY"):
+            for k, _ in mo.REQUIRED_ENV:
+                os.environ[k] = "set"
+            os.environ.pop(missing)
+            names = [n for n, _ in mo.preflight()]
+            good = names == [missing]
+            ok &= good
+            print(f"  {'missing ' + missing + ' -> refuses':<46}"
+                  f"{'ok' if good else '** STARTED ANYWAY: ' + str(names) + ' **'}")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
     HALT.unlink(missing_ok=True)
     print("-" * 78)
     print("MARKET-HOURS LOOP:", "correct" if ok else "*** DEFECTIVE ***")

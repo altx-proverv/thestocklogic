@@ -358,8 +358,70 @@ def scan_urls(text: str):
     for m in re.finditer(r"""/rest/v1/([a-z0-9_]+)(\?[^\s'"`]*)?""", text):
         table = m.group(1)
         qs = (m.group(2) or "").lstrip("?")
+        qs += _continuation(text, m.end(), had_query=bool(m.group(2)))
         found.append((table, _cols_from_query(qs)))
     return found
+
+
+# A query split across adjacent string literals is one string to Python and two
+# to a regex that stops at a quote:
+#
+#     f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{d}"
+#     f"&select=symbol,direction,sector,..."
+#
+# The match above ends at the first closing quote, so everything in the second
+# fragment was invisible -- and a query is usually split exactly where the
+# column list starts, because that is the long part. This checker reported
+# `signals: ['signal_date']` for that query and called it clean, which is the
+# same failure the comma note above describes: validating one column and
+# implying you validated all of them. It shipped signals.sector that way.
+#
+# So: continue through adjacent literals. Conservatively -- only when the next
+# fragment actually looks like more query, meaning it opens with & or , or the
+# text so far ends mid-parameter. Joining anything else would invent columns
+# and produce false alarms, and a checker that cries wolf gets ignored.
+_LIT_START = re.compile(r"""["'`]\s*\+?\s*[rbfuRBFU]{0,2}(["'`])""")
+
+
+def _continuation(text: str, pos: int, had_query: bool = True,
+                  limit: int = 20) -> str:
+    """
+    More query, carried in adjacent string literals.
+
+    `had_query` says whether the URL fragment already contained a "?". When it
+    did not, the split is before the question mark:
+
+        f"{SUPABASE_URL}/rest/v1/signals"
+        f"?select=signal_date,symbol,direction,..."
+
+    which is how mark_signals is written, and the whole query was invisible --
+    the checker reported zero columns for it and therefore verified nothing.
+    """
+    out = ""
+    started = had_query
+    for _ in range(limit):
+        m = _LIT_START.match(text, pos)
+        if not m:
+            break
+        quote = m.group(1)
+        end = text.find(quote, m.end())
+        if end == -1:
+            break
+        frag = text[m.end():end]
+        if any(c.isspace() for c in frag):
+            break
+        # Continue only into something that is plainly more query. Anything
+        # else would invent columns, and a checker that cries wolf gets ignored.
+        if not started:
+            if not frag.startswith("?"):
+                break
+            frag = frag.lstrip("?")
+            started = True
+        elif not (frag.startswith(("&", ",")) or out.endswith((",", "=", "&"))):
+            break
+        out += frag
+        pos = end
+    return out
 
 
 def scan_payloads(path: Path):

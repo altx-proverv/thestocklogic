@@ -33,9 +33,12 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/thestocklogic
 Environment=PYTHONUNBUFFERED=1
 
-# The service key lives in the crontab header today. systemd does not read
-# that, so keep it in a root-owned file with mode 600:
-#   SUPABASE_SERVICE_KEY=...
+# Every secret is read from the environment, and until now the environment came
+# from the crontab header. systemd does not read a crontab, so without this
+# file the service starts with none of them: no ledger key, no broker, and --
+# the quiet one -- no Telegram, which means every alert for the session goes
+# nowhere while nothing reports a failure. preflight() refuses to start rather
+# than run deaf. Copy deploy/atlas.env.example, chmod 600, fill it in.
 EnvironmentFile=/etc/atlas.env
 
 # Outside the repo: the box deploys with `git reset --hard`, and the halt must
