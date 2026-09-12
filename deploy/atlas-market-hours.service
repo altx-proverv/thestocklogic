@@ -39,6 +39,17 @@ Description=ATLAS market-hours entry engine (09:20-15:20 IST, 60s cycle)
 After=network-online.target
 Wants=network-online.target
 
+# THESE BELONG IN [Unit], NOT [Service]. They lived under [Service] and systemd
+# answered "Unknown key 'StartLimitIntervalSec' in section [Service], ignoring"
+# -- so the rate limit meant to catch a crash loop was itself silently absent,
+# which is the failure it exists to prevent. They moved to [Unit] in systemd
+# 230; only RestartSec stays in [Service].
+#
+# install.sh now runs systemd-analyze verify before installing, so the next
+# unknown key is a refusal rather than a line in the journal.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=ubuntu
@@ -64,8 +75,8 @@ ExecStart=/home/ubuntu/thestocklogic/venv/bin/python -m atlas.signal.market_open
 
 Restart=on-failure
 RestartSec=60
-StartLimitIntervalSec=600
-StartLimitBurst=5
+# StartLimitIntervalSec / StartLimitBurst are in [Unit] above -- systemd
+# ignores them here.
 
 # A kill must not land between the order and the row it is recorded in. SIGTERM
 # lets the current cycle finish; the two-phase write means even a SIGKILL here

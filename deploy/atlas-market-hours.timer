@@ -15,25 +15,31 @@
 # begins. Systemd is still the only scheduler; this is not the cron coming
 # back.
 #
-# 03:50 UTC IS 09:20 IST, AND THAT IS WRITTEN IN UTC ON PURPOSE.
-# The box runs Etc/UTC. India does not observe daylight saving, so IST is
-# UTC+5:30 year-round and this conversion never drifts. systemd 252+ would
-# accept `OnCalendar=Mon-Fri 09:20 Asia/Kolkata` directly, which is clearer;
-# check `systemctl --version` before switching, because on an older systemd the
-# timezone suffix is a parse error and the timer silently never fires.
+# The schedule is written in IST because the window is. The box runs Etc/UTC,
+# and this was previously spelled out as 03:50 UTC with a note explaining the
+# conversion -- correct, and one more place where a reader has to do the
+# arithmetic to check it against WINDOW_START. systemd on the box is 259 and
+# takes the timezone directly, so it says what it means.
 #
-# Ten minutes before the window opens, deliberately. The service checks
-# in_window() itself and exits immediately if it is early, so firing a little
-# before costs one start and guarantees nothing is missed at the open.
-# in_window() also refuses on NSE holidays, which Mon-Fri cannot see: Diwali is
-# a Thursday.
+# Needs systemd 252+. On an older one the timezone suffix is a parse error and
+# the timer silently never fires, so check `systemctl --version` before moving
+# this file to another machine.
+#
+# It fires AT the open rather than before it. The service refuses to run
+# outside the window, so an early start used to mean the process came up, found
+# the window closed and exited before the session began. serve() now waits for
+# the open instead, which makes an early start harmless rather than a wasted
+# morning -- but the timer still aims at 09:20 so the common path needs no wait.
+#
+# Mon-Fri cannot see NSE holidays; in_window() checks the trading calendar for
+# that. Diwali is a Thursday.
 
 [Unit]
 Description=Start the ATLAS market-hours engine at 09:20 IST on trading days
 Requires=atlas-market-hours.service
 
 [Timer]
-OnCalendar=Mon-Fri 03:50 UTC
+OnCalendar=Mon-Fri 09:20 Asia/Kolkata
 AccuracySec=30s
 
 # If the box was down when the timer should have fired, run it on boot. Safe

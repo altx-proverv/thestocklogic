@@ -154,6 +154,33 @@ fi
 # ══════════════════════════════════════════════════════════════════
 step "3. install the unit and timer (NOT started, timer NOT enabled)"
 # ══════════════════════════════════════════════════════════════════
+# VALIDATE BEFORE INSTALLING.
+#
+# StartLimitIntervalSec sat in [Service], where systemd does not recognise it.
+# It logged "Unknown key ... ignoring" and carried on, so the rate limit meant
+# to catch a crash loop was itself silently missing -- the failure it exists to
+# prevent. Nothing refused, nothing broke, and the unit looked installed.
+#
+# systemd-analyze verify parses a unit the way systemd will and names every
+# unknown key. Only unknown-key and syntax problems are fatal here: verify also
+# reports things like a missing User on a non-running system, and a check that
+# cries wolf gets ignored.
+if command -v systemd-analyze >/dev/null 2>&1; then
+  VERIFY_OUT="$(systemd-analyze verify "$UNIT_SRC" "$TIMER_SRC" 2>&1 || true)"
+  FATAL="$(printf '%s\n' "$VERIFY_OUT" | grep -iE "unknown key|unknown lvalue|invalid|failed to parse" || true)"
+  if [[ -n "$FATAL" ]]; then
+    say "   unit validation FAILED:"
+    printf '%s\n' "$FATAL" | sed 's/^/     /'
+    say "   refusing to install. Fix the unit files and re-run."
+    exit 1
+  fi
+  [[ -n "$VERIFY_OUT" ]] && { say "   systemd-analyze notes (non-fatal):";
+                              printf '%s\n' "$VERIFY_OUT" | sed 's/^/     /'; }
+  say "   systemd-analyze verify: no unknown keys"
+else
+  say "   systemd-analyze not present — skipping unit validation"
+fi
+
 if (( APPLY )); then
   [[ -f "$UNIT_DST" ]] && cp -a "$UNIT_DST" "$BACKUP_DIR/atlas-market-hours.service.$STAMP"
   install -o root -g root -m 644 "$UNIT_SRC" "$UNIT_DST"

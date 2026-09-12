@@ -572,6 +572,58 @@ def preflight() -> list:
             if not os.environ.get(name)]
 
 
+MAX_WAIT_FOR_OPEN_SECONDS = 3600
+
+
+def wait_for_open(now=None) -> bool:
+    """
+    Hold until the window opens if we started early. -> is there a session to run.
+
+    `while in_window()` alone meant an early start was a wasted morning: the
+    process came up, found 09:00 outside the window, and exited before the
+    session began. The timer aims at 09:20 so that rarely bites on the common
+    path -- but a start by hand is exactly how the first session is meant to
+    begin, and "started it at nine, it said window closed and quit" is a bad
+    way to find this out.
+
+    Bounded at an hour, so a start at 03:00 exits rather than holding a process
+    all morning. Not a trading day, or already past the close, exits too.
+    """
+    now = now or now_ist()
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "engine"))
+        from trading_calendar import is_trading_day
+        if not is_trading_day(now.date()):
+            log.info(f"{now.date()} is not an NSE trading day — nothing to do")
+            return False
+    except Exception as e:
+        log.error(f"trading calendar unreadable ({e}) — treating as closed")
+        return False
+
+    if now.time() >= WINDOW_END:
+        log.info(f"{now.time().strftime('%H:%M')} IST is past the close — nothing to do")
+        return False
+    if in_window(now):
+        return True
+
+    target = now.replace(hour=WINDOW_START.hour, minute=WINDOW_START.minute,
+                         second=0, microsecond=0)
+    delta = (target - now).total_seconds()
+    if delta > MAX_WAIT_FOR_OPEN_SECONDS:
+        log.info(f"{delta / 60:.0f} min before the open — too early to hold, exiting")
+        return False
+
+    log.info(f"started {delta / 60:.1f} min early — waiting for "
+             f"{WINDOW_START.strftime('%H:%M')} IST")
+    while True:
+        remaining = (target - now_ist()).total_seconds()
+        if remaining <= 0:
+            break
+        time.sleep(min(30.0, remaining))
+    log.info("window open")
+    return True
+
+
 def serve() -> int:
     mode = "LIVE" if LIVE_TRADING_ENABLED else "SHADOW"
 
@@ -603,6 +655,13 @@ def serve() -> int:
         log.exception("startup reconcile failed")
         alert("RECONCILE FAILED", f"{type(e).__name__}: {e} — not starting")
         return 1
+
+    # Waits if we started before the open; exits if there is no session today.
+    # After the reconcile, so a start on a holiday or after the close still
+    # settles anything a previous process left PENDING.
+    if not wait_for_open():
+        log.info("no session to run — exiting cleanly")
+        return 0
 
     send(f"<b>ATLAS ENGINE UP [{mode}]</b>\n"
          f"{WINDOW_START.strftime('%H:%M')}–{WINDOW_END.strftime('%H:%M')} IST, "
