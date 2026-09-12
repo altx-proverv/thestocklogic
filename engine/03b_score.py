@@ -402,20 +402,61 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════
 
 def load_all_smc() -> pd.DataFrame:
-    """Load all SMC parquets into one DataFrame."""
-    files = sorted(SMC_DIR.glob("*.parquet"))
+    """
+    DEPRECATED -- use smc_batches(). Kept in case another caller exists.
+
+    This read every SMC parquet and concatenated them into ONE frame. At 0.77 MB
+    per symbol that is ~383 MB at 500 symbols and ~610 MB at 796, and pd.concat
+    peaks at roughly double while the input list and the result are both alive.
+    The box is a t2.micro with 1 GB, so the universe expansion would have OOM'd
+    right here -- and main()'s 100-symbol batching could not help, because the
+    concat happened before any batching did.
+    """
+    log.warning("load_all_smc() loads the whole universe into memory; "
+                "smc_batches() is the bounded version")
     dfs = []
-    for f in tqdm(files, desc="Loading"):
+    for f in tqdm(sorted(SMC_DIR.glob("*.parquet")), desc="Loading"):
         try:
             df = pd.read_parquet(f)
             df["date"] = pd.to_datetime(df["date"])
             dfs.append(df)
         except Exception as e:
             log.warning(f"Skip {f.stem}: {e}")
-
     combined = pd.concat(dfs, ignore_index=True)
     log.info(f"Loaded: {len(combined):,} rows, {combined['symbol'].nunique()} symbols")
     return combined
+
+
+def smc_batches(batch_size: int = 100):
+    """
+    Yield at most `batch_size` symbols at a time, read from disk on demand.
+
+    Peak memory becomes O(batch) rather than O(universe): ~77 MB per 100 symbols
+    whatever the universe size, against 383 MB today and 610 MB at 796.
+
+    Scoring is row-wise -- score_vectorized has no rolling, shift or groupby, and
+    the only cross-row step in this file is build_playbooks' groupby(date) --
+    so a batch is as valid a unit as the whole frame. Nothing here needs to see
+    another symbol's rows.
+
+    Yields (batch_no, total_batches, frame) so the caller can log progress
+    without counting files itself.
+    """
+    files = sorted(SMC_DIR.glob("*.parquet"))
+    total = max(1, (len(files) + batch_size - 1) // batch_size)
+    log.info(f"{len(files)} SMC file(s), {total} batch(es) of up to {batch_size}")
+    for i in range(0, len(files), batch_size):
+        dfs = []
+        for f in files[i:i + batch_size]:
+            try:
+                df = pd.read_parquet(f)
+                df["date"] = pd.to_datetime(df["date"])
+                dfs.append(df)
+            except Exception as e:
+                log.warning(f"Skip {f.stem}: {e}")
+        if not dfs:
+            continue
+        yield i // batch_size + 1, total, pd.concat(dfs, ignore_index=True)
 
 
 def process_direction(combined: pd.DataFrame, direction: str,
@@ -485,20 +526,18 @@ def main():
     symbol_sector = load_symbol_sector()
     log.info(f"Sector bias: {sector_bias}")
 
-    # Load all SMC data
-    log.info("\n── Step 1: Loading SMC data ──")
-    combined = load_all_smc()
-
-    # Score in batches of 100 stocks to avoid OOM on t2.micro
-    log.info("\n── Step 2: Scoring (vectorized — batched) ──")
-    symbols = combined["symbol"].unique().tolist()
+    # Read and score one batch at a time. The whole universe is never resident:
+    # each batch is read from disk, scored, reduced to its qualifying rows, and
+    # dropped before the next is read. Peak memory is O(batch), so it does not
+    # grow with the universe -- which is what makes 500 -> 796 symbols possible
+    # on a 1 GB box.
+    log.info("\n── Steps 1+2: Loading and scoring, batch at a time ──")
     batch_size = 100
     all_qualifying = []
 
-    for i in range(0, len(symbols), batch_size):
-        batch_syms = symbols[i:i+batch_size]
-        batch = combined[combined["symbol"].isin(batch_syms)].copy()
-        log.info(f"Batch {i//batch_size+1}/{(len(symbols)-1)//batch_size+1}: {len(batch_syms)} stocks, {len(batch):,} rows")
+    for n, total, batch in smc_batches(batch_size):
+        log.info(f"Batch {n}/{total}: {batch['symbol'].nunique()} stocks, "
+                 f"{len(batch):,} rows")
 
         longs = process_direction(batch, "long", sector_bias, symbol_sector)
         longs_q = longs[longs["qualifies"]].copy()
@@ -513,8 +552,11 @@ def main():
         del longs_q, shorts_q
         all_qualifying.append(batch_q)
 
-    del combined
+    if not all_qualifying:
+        log.error("no SMC data scored — is data/processed/smc populated?")
+        return
     scored = pd.concat(all_qualifying, ignore_index=True)
+    del all_qualifying
     del all_qualifying
     log.info(f"Total qualifying: {len(scored):,}")
     scored.to_parquet(SIGNALS_DIR / "all_scores_v2.parquet", index=False)
