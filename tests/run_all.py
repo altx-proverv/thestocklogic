@@ -30,6 +30,7 @@ SUITES = [
     # has shapes this checkout does not -- recent listings, gappy series.
     ("smc equivalence", [sys.executable, "tests/test_smc_equivalence.py",
                          "--limit", "40"]),
+    ("bhavcopy layouts", [sys.executable, "tests/test_bhavcopy_layouts.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

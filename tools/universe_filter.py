@@ -24,9 +24,35 @@ SOURCES, BOTH OFFICIAL, NEITHER SCRAPED
   sec_list.csv     nsearchives.nseindia.com/content/equities/sec_list.csv
                    Symbol, Series, Security Name, Band, Remarks. The only
                    source for the circuit band.
-  bhavcopy         already on disk in data/raw/bhavcopy. TURNOVER_LACS is the
-                   exchange's own traded value, so the Rs5 crore test needs no
-                   new source and no computation from price x volume.
+  bhavcopy         already on disk in data/raw/bhavcopy. The exchange's own
+                   traded value, so the Rs5 crore test needs no new source and
+                   no computation from price x volume.
+
+TWO BHAVCOPY FORMATS, AND THE BUG THAT CAME OF IGNORING ONE
+-----------------------------------------------------------
+NSE switched the daily file to the UDiFF layout between 2026-08-18 and
+2026-09-10. Both are on disk, under the same filename pattern:
+
+    old      SYMBOL, SERIES, CLOSE_PRICE, TURNOVER_LACS   -- lakhs
+    UDiFF    TckrSymb, SctySrs, ClsPric, TtlTrfVal        -- RUPEES
+
+The first version of this tool knew only the old names, and `continue`d on
+anything else. So UDiFF files were skipped in silence and the session count was
+computed over FILES IT COULD PARSE rather than sessions that exist. On the box
+that reported every symbol -- RELIANCE and TCS included -- as having fewer than
+250 trading days, and proposed dropping all 495. A confident wrong answer, same
+class as the No Band trap.
+
+THE UNITS DIFFER BY 1e5 AND THAT IS THE MORE DANGEROUS HALF. RELIANCE on
+2026-09-10: TtlTrfVal 11,838,269,882 = Rs1,184 crore. Read as lakhs that is
+Rs118 million crore. Treating the two columns as interchangeable would make
+every symbol look 100,000x more liquid and pass the Rs5 crore filter -- the same
+bug pointing the other way, and far harder to notice because the output looks
+plausible.
+
+So: both formats are parsed, turnover is normalised to lakhs explicitly, and a
+file that cannot be parsed is COUNTED AND FATAL rather than skipped. A funnel
+computed from a partial read is not a funnel.
 
 "No Band" MEANS NO PRICE BAND, AND MUST PASS
 --------------------------------------------
@@ -76,13 +102,19 @@ MIN_SESSIONS      = 250
 LOOKBACK_SESSIONS = 300     # window the medians are taken over
 
 
+_SEC_LIST_CACHE = {}
+
+
 def fetch_sec_list(url: str = SEC_LIST_URL) -> pd.DataFrame:
+    if url in _SEC_LIST_CACHE:
+        return _SEC_LIST_CACHE[url]
     r = requests.get(url, headers={"User-Agent": UA}, timeout=40)
     r.raise_for_status()
     df = pd.read_csv(io.StringIO(r.text))
     df.columns = [c.strip() for c in df.columns]
     for c in ("Symbol", "Series", "Band"):
         df[c] = df[c].astype(str).str.strip()
+    _SEC_LIST_CACHE[url] = df
     return df
 
 
@@ -98,8 +130,55 @@ def band_passes(band: pd.Series) -> pd.Series:
     return no_band | (numeric >= MIN_BAND_PCT)
 
 
-def bhavcopy_stats(lookback: int = LOOKBACK_SESSIONS) -> pd.DataFrame:
-    """Per-symbol sessions / median traded value / last close, from EQ rows."""
+def _normalise(x: pd.DataFrame) -> pd.DataFrame:
+    """One shape from either bhavcopy layout: symbol, series, close, turnover_lacs."""
+    cols = {c.strip(): c for c in x.columns}
+    if "SYMBOL" in cols and "TURNOVER_LACS" in cols:
+        out = pd.DataFrame({
+            "symbol": x[cols["SYMBOL"]].astype(str).str.strip(),
+            "series": x[cols["SERIES"]].astype(str).str.strip(),
+            "close":  pd.to_numeric(x[cols["CLOSE_PRICE"]], errors="coerce"),
+            # already lakhs
+            "turnover_lacs": pd.to_numeric(x[cols["TURNOVER_LACS"]], errors="coerce"),
+        })
+        return out
+    if "TckrSymb" in cols and "TtlTrfVal" in cols:
+        out = pd.DataFrame({
+            "symbol": x[cols["TckrSymb"]].astype(str).str.strip(),
+            "series": x[cols["SctySrs"]].astype(str).str.strip(),
+            "close":  pd.to_numeric(x[cols["ClsPric"]], errors="coerce"),
+            # RUPEES -> lakhs. Without this divisor every symbol looks 100,000x
+            # more liquid and the Rs5 crore filter stops filtering.
+            "turnover_lacs": pd.to_numeric(x[cols["TtlTrfVal"]], errors="coerce") / 1e5,
+        })
+        return out
+    raise ValueError(f"unrecognised bhavcopy layout: {sorted(cols)[:8]}")
+
+
+_STATS_CACHE = {}
+
+
+def bhavcopy_stats(lookback: int = LOOKBACK_SESSIONS) -> tuple:
+    """
+    Per-symbol sessions / median traded value / last close, from EQ rows.
+
+    A file that cannot be read or whose layout is unrecognised is FATAL, not
+    skipped. Silently dropping files is what produced a funnel claiming RELIANCE
+    had under 250 trading days.
+    """
+    # main() needs these twice -- once for the funnel, once to explain the drops
+    # -- and re-reading 300 CSVs to answer the same question is a minute of the
+    # box's time for nothing.
+    # Keyed on directory CONTENTS, not just its path. A cache keyed on the path
+    # alone keeps serving the old answer after a file is added or repaired --
+    # which the layout harness caught by adding a bad file and expecting the
+    # next call to fail.
+    _present = sorted(glob.glob(str(RAW_DIR / "*.csv")))
+    key = (str(RAW_DIR), lookback, len(_present),
+           max((os.path.getmtime(f) for f in _present), default=0.0))
+    if key in _STATS_CACHE:
+        return _STATS_CACHE[key]
+
     files = []
     for f in glob.glob(str(RAW_DIR / "*.csv")):
         m = re.match(r"cm(\d{2}[A-Za-z]{3}\d{4})bhav\.csv$", os.path.basename(f))
@@ -109,30 +188,63 @@ def bhavcopy_stats(lookback: int = LOOKBACK_SESSIONS) -> pd.DataFrame:
             files.append((datetime.strptime(m.group(1), "%d%b%Y").date(), f))
         except ValueError:
             continue
+    # Only TRADING days. A cached file for an NSE holiday is never requested by
+    # 01b and is sometimes an error page NSE served for a date that has no
+    # bhavcopy -- engine/repair_bhavcopy.py classifies exactly those as inert.
+    # Treating them as fatal below would make a holiday stop the funnel.
+    try:
+        from trading_calendar import is_trading_day
+        files = [(d, f) for d, f in files if is_trading_day(d)]
+    except Exception as e:
+        log.warning(f"trading calendar unavailable ({e}) — not filtering holidays")
+
     files.sort()
     files = files[-lookback:]
     if not files:
         raise RuntimeError(f"no bhavcopy CSVs under {RAW_DIR}")
 
-    keep = ("SYMBOL", "SERIES", "CLOSE_PRICE", "TURNOVER_LACS")
-    frames = []
+    frames, layouts, unreadable = [], {}, []
     for _, f in files:
         try:
-            x = pd.read_csv(f, usecols=lambda c: c.strip() in keep)
-        except Exception:
-            continue                       # HTML error pages and the like
-        x.columns = [c.strip() for c in x.columns]
-        if "SERIES" not in x.columns or "TURNOVER_LACS" not in x.columns:
+            x = pd.read_csv(f)
+        except Exception as e:
+            unreadable.append((os.path.basename(f), f"read failed: {e}"))
             continue
-        x = x[x["SERIES"].astype(str).str.strip() == "EQ"]
-        frames.append(x[["SYMBOL", "CLOSE_PRICE", "TURNOVER_LACS"]])
+        try:
+            norm = _normalise(x)
+        except ValueError as e:
+            # An HTML error page cached as .csv lands here, and so would a third
+            # NSE layout. Either way it must be seen, not swallowed.
+            unreadable.append((os.path.basename(f), str(e)[:90]))
+            continue
+        kind = "UDiFF" if "TckrSymb" in {c.strip() for c in x.columns} else "old"
+        layouts[kind] = layouts.get(kind, 0) + 1
+        frames.append(norm[norm["series"] == "EQ"])
+
+    if unreadable:
+        # Every one of these is a TRADING session, holidays having been filtered
+        # out above. A session that will not parse silently shortens the count
+        # for every symbol, which is the bug that reported RELIANCE as having
+        # fewer than 250 trading days.
+        log.error(f"{len(unreadable)} of {len(files)} trading-session file(s) "
+                  f"could not be parsed — refusing to compute a funnel from a "
+                  f"partial read")
+        for name, why in unreadable[:10]:
+            log.error(f"  {name}: {why}")
+        raise RuntimeError(
+            f"{len(unreadable)} unparseable bhavcopy file(s). Run "
+            f"`python3 -m engine.repair_bhavcopy` if they are error pages, or "
+            f"teach _normalise() the layout if NSE has changed it again.")
+
+    log.info(f"parsed {len(frames)} session(s): "
+             + ", ".join(f"{k} x{v}" for k, v in sorted(layouts.items())))
 
     b = pd.concat(frames, ignore_index=True)
-    b["SYMBOL"] = b["SYMBOL"].astype(str).str.strip()
-    g = b.groupby("SYMBOL").agg(sessions=("CLOSE_PRICE", "size"),
-                                med_turnover_lacs=("TURNOVER_LACS", "median"),
-                                last_close=("CLOSE_PRICE", "last"))
-    return g, files[0][0], files[-1][0]
+    g = b.groupby("symbol").agg(sessions=("close", "size"),
+                                med_turnover_lacs=("turnover_lacs", "median"),
+                                last_close=("close", "last"))
+    _STATS_CACHE[key] = (g, files[0][0], files[-1][0])
+    return _STATS_CACHE[key]
 
 
 def funnel(verbose: bool = True) -> dict:
