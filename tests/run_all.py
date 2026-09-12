@@ -31,6 +31,7 @@ SUITES = [
     ("smc equivalence", [sys.executable, "tests/test_smc_equivalence.py",
                          "--limit", "40"]),
     ("bhavcopy layouts", [sys.executable, "tests/test_bhavcopy_layouts.py"]),
+    ("exclusion block",  [sys.executable, "tests/test_exclusion_block.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
