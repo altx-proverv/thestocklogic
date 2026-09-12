@@ -156,12 +156,12 @@ ENABLE_EXIT_MANAGEMENT = False
 #
 # Shadow first, then live on a date fixed in advance:
 #
-#   2026-09-15, -16, -17   SHADOW. Proves the breaker, the duplicate guard and
+#   2026-09-14, -15, -16   SHADOW. Proves the breaker, the duplicate guard and
 #                          the notification path against real market conditions.
 #                          It is NOT a strategy validation -- three sessions
 #                          cannot say anything about a strategy, and the regime
 #                          gate will very likely hold everything in cash anyway.
-#   2026-09-18 onward      LIVE.
+#   2026-09-17 onward      LIVE.
 #
 # THE SCHEDULE IS THE TRIGGER, WHICH IS A REAL CHANGE. Nothing asks for
 # confirmation on the first live morning: the engine comes up and places real
@@ -176,7 +176,7 @@ ENABLE_EXIT_MANAGEMENT = False
 # Read once at import. The trading window never crosses midnight, so a running
 # session keeps the value it started with, which is what you want -- a service
 # should not change mode underneath itself.
-GO_LIVE_DATE = date(2026, 9, 18)
+GO_LIVE_DATE = date(2026, 9, 17)
 
 
 def _resolve_live() -> bool:
