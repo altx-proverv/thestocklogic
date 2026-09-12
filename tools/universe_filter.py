@@ -77,7 +77,7 @@ import glob
 import argparse
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
@@ -376,16 +376,113 @@ def explain_drops(drop: list, sl: pd.DataFrame, stats: pd.DataFrame) -> dict:
     return out
 
 
+UNIVERSE_PY = ROOT / "engine/universe.py"
+
+
+def write_exclusions(block: str, n_excluded: int,
+                     path: Path = UNIVERSE_PY) -> int:
+    """
+    Replace the EXCLUDED block in engine/universe.py, in place.
+
+    This exists because the paste step kept being the thing that failed. The
+    tool already computes the list on the machine where the data is current;
+    carrying it through a terminal and back is an opportunity for it to arrive
+    empty or truncated.
+
+    Bounded: it rewrites only the region from the MECHANICAL EXCLUSIONS header
+    (or `EXCLUDED = {` if the header is absent) through the closing brace, and
+    it refuses if it cannot find exactly one such region. Everything else in the
+    file -- the 500-entry sector map, the instrument keys -- is untouched.
+    """
+    if not path.exists():
+        log.error(f"{path} not found")
+        return 1
+    src = path.read_text()
+
+    start_marker = "# ── MECHANICAL EXCLUSIONS"
+    if start_marker in src:
+        start = src.index(start_marker)
+    elif "\nEXCLUDED = {" in src:
+        start = src.index("\nEXCLUDED = {") + 1
+    else:
+        log.error("no EXCLUDED block found in universe.py — refusing to guess "
+                  "where it belongs. Add one by hand once, then this can "
+                  "maintain it.")
+        return 1
+    if src.count("\nEXCLUDED = {") != 1:
+        log.error(f"found {src.count(chr(10) + 'EXCLUDED = {')} EXCLUDED blocks "
+                  f"— refusing to edit an ambiguous file")
+        return 1
+
+    brace = src.index("\nEXCLUDED = {", start)
+    end = src.index("\n}", brace) + len("\n}")
+
+    backup = path.with_suffix(".py.bak")
+    backup.write_text(src)
+
+    new_src = src[:start] + block + src[end:]
+    path.write_text(new_src)
+
+    probe = _probe(path)
+    if probe is None:
+        log.error("universe.py does not import after the edit — restoring backup")
+        path.write_text(src)
+        return 1
+    n_map, n_excl, n_all, orphans = probe
+
+    # THE CHECK IS "DID THE BLOCK WE WROTE TAKE EFFECT", nothing more.
+    #
+    # Two earlier versions of this guard were wrong in opposite ways. The first
+    # asserted ALL_SYMBOLS must shrink -- but replacing a longer exclusion list
+    # with a shorter one grows the universe legitimately, and a symbol is
+    # re-admitted the moment it crosses 250 sessions. The second asserted
+    # ALL_SYMBOLS == map - EXCLUDED, which silently assumes every excluded
+    # symbol is a map member; it is not a consistency check but a subset
+    # assumption wearing one.
+    log.info(f"{path} updated ({backup.name} kept)")
+    log.info(f"  SYMBOL_SECTOR_MAP {n_map}  EXCLUDED {n_excl}  ALL_SYMBOLS {n_all}")
+    if n_excl != n_excluded:
+        log.error(f"wrote {n_excluded} symbol(s) but EXCLUDED parsed as "
+                  f"{n_excl} — restoring backup")
+        path.write_text(src)
+        return 1
+    if orphans:
+        # Not fatal: the map can change independently. But an exclusion list
+        # naming symbols the universe does not have is a sign of a stale list.
+        log.warning(f"{len(orphans)} excluded symbol(s) are not in "
+                    f"SYMBOL_SECTOR_MAP and therefore exclude nothing: "
+                    f"{', '.join(sorted(orphans)[:8])}")
+    return 0
+
+
+def _probe(path: Path):
+    """(len map, len EXCLUDED, len ALL_SYMBOLS, orphan set) from a fresh import."""
+    import importlib.util as _il
+    try:
+        spec = _il.spec_from_file_location("_u_probe", path)
+        mod = _il.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        orphans = set(mod.EXCLUDED) - set(mod.SYMBOL_SECTOR_MAP)
+        return (len(mod.SYMBOL_SECTOR_MAP), len(mod.EXCLUDED),
+                len(mod.ALL_SYMBOLS), orphans)
+    except Exception as e:
+        log.error(f"universe.py probe failed: {type(e).__name__}: {e}")
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--emit-exclusions", action="store_true",
                     help="print the EXCLUDED block for engine/universe.py")
+    ap.add_argument("--write-exclusions", action="store_true",
+                    help="write that block INTO engine/universe.py, in place")
     ap.add_argument("--additions", action="store_true",
                     help="list the passing symbols being held back")
     ap.add_argument("--time-smc", type=float, default=0.0, metavar="MS",
                     help="override the 02b ms/symbol figure in the runtime table")
     a = ap.parse_args()
 
+    emitting = a.emit_exclusions or a.write_exclusions
     res = funnel(verbose=not a.emit_exclusions)
     surv = res["survivors"]
     sl = fetch_sec_list()
@@ -393,7 +490,7 @@ def main() -> int:
     cmp = compare_to_current(surv)
     reasons = explain_drops(cmp["drop"], sl, stats)
 
-    if a.emit_exclusions:
+    if emitting:
         readable, held = open_positions()
         if not readable:
             print("# REFUSING TO EMIT.", file=sys.stderr)
@@ -409,37 +506,54 @@ def main() -> int:
         safe_reasons = {r: v for r, v in safe_reasons.items() if v}
 
         first, last = res["window"]
-        print("# Generated by tools/universe_filter.py")
-        print(f"# sec_list bands as of {datetime.utcnow():%Y-%m-%d}, medians over "
-              f"{LOOKBACK_SESSIONS} sessions to {last}.")
-        print("#")
-        print("# These symbols are in SYMBOL_SECTOR_MAP and fail a MECHANICAL")
-        print("# filter -- liquidity, price, band, series or history. No quality")
-        print("# judgement is involved: a stock too thin to exit a Rs1,00,000")
-        print("# position out of is not tradeable whatever its fundamentals.")
+        emit("# ── MECHANICAL EXCLUSIONS ─────────────────────────────────────────")
+        emit("#")
+        emit("# Generated by tools/universe_filter.py --write-exclusions")
+        emit(f"# sec_list bands as of {datetime.now(timezone.utc):%Y-%m-%d}, "
+             f"medians over {LOOKBACK_SESSIONS} sessions to {last}.")
+        emit("#")
+        emit("# These symbols are in SYMBOL_SECTOR_MAP and fail a MECHANICAL")
+        emit("# filter -- liquidity, price, band, series or history. No quality")
+        emit("# judgement is involved: a stock too thin to exit a Rs1,00,000")
+        emit("# position out of is not tradeable whatever its fundamentals.")
+        emit("#")
+        emit("# Every filter here was established on the data present when this")
+        emit("# ran -- sec_list fetched live, bhavcopy read to the date above.")
+        emit("# Re-run the tool rather than editing this block by hand; it also")
+        emit("# checks atlas_trades and refuses to exclude a symbol that is held.")
+        buf = []
+        def emit(line=""):
+            buf.append(line)
+
         if held_drops:
-            print("#")
-            print("# HELD, THEREFORE NOT EXCLUDED — DECIDE THESE BY HAND:")
+            emit("#")
+            emit("# HELD, THEREFORE NOT EXCLUDED — DECIDE THESE BY HAND:")
             for sym in held_drops:
                 why = next((r for r, v in reasons.items() if sym in v), "?")
-                print(f"#   {sym:<14} {why}")
-            print("#")
-            print("# Excluding a held symbol does not force an exit, but 01b")
-            print("# stops rebuilding its parquet and mark_signals,")
-            print("# update_outcomes and trade_review all glob the stocks")
-            print("# directory -- they would resolve the open position against")
-            print("# a price series that stopped moving, so the stop and target")
-            print("# can never trigger. Exit the position first, or keep the")
-            print("# symbol until it closes.")
-        print("EXCLUDED = {")
+                emit(f"#   {sym:<14} {why}")
+            emit("#")
+            emit("# Excluding a held symbol does not force an exit, but 01b")
+            emit("# stops rebuilding its parquet and mark_signals,")
+            emit("# update_outcomes and trade_review all glob the stocks")
+            emit("# directory -- they would resolve the open position against")
+            emit("# a price series that stopped moving, so the stop and target")
+            emit("# can never trigger. Exit the position first, or keep the")
+            emit("# symbol until it closes.")
+        emit("EXCLUDED = {")
         for r, syms in sorted(safe_reasons.items(), key=lambda kv: -len(kv[1])):
-            print(f"    # {r} ({len(syms)})")
+            emit(f"    # {r} ({len(syms)})")
             for sym in syms:
-                print(f'    "{sym}",')
-        print("}")
+                emit(f'    "{sym}",')
+        emit("}")
         if held_drops:
-            print(f"# {len(held_drops)} held symbol(s) withheld from this list.")
-        return 0
+            emit(f"# {len(held_drops)} held symbol(s) withheld from this list.")
+        block = "\n".join(buf)
+
+        if a.emit_exclusions:
+            print(block)
+            return 0
+        return write_exclusions(block, len(safe_reasons and
+                                          [x for v in safe_reasons.values() for x in v]))
 
     print()
     print("AGAINST THE CURRENT UNIVERSE")
