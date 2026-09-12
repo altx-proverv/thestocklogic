@@ -33,6 +33,7 @@ SUITES = [
     ("bhavcopy layouts", [sys.executable, "tests/test_bhavcopy_layouts.py"]),
     ("exclusion block",  [sys.executable, "tests/test_exclusion_block.py"]),
     ("universe idempotency", [sys.executable, "tests/test_universe_idempotency.py"]),
+    ("fundamentals",    [sys.executable, "tests/test_fundamentals.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
