@@ -84,6 +84,8 @@ reported 564 survivors and claimed 212 current symbols were failing on band.
 The correct answer is 796.
 """
 
+from __future__ import annotations
+
 import io
 import os
 import re
@@ -96,8 +98,22 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 
-import pandas as pd
-import requests
+# pandas and requests are imported INSIDE the functions that need them, not
+# here.
+#
+# --apply-artifact is offline by design: it reads a JSON file written on the box
+# and edits engine/universe.py. It needs no NSE call, no Supabase and no
+# bhavcopy, so it should run wherever a commit can happen -- which is not
+# necessarily a machine with the analysis stack installed. A module-level
+# `import pandas` made that impossible: the Mac's system python3 has no pandas
+# and the mode died before parsing its own arguments.
+#
+# That is the same shape as the emit bug this tool already had: a path that can
+# only run where it cannot do its job. `from __future__ import annotations`
+# above is part of the same fix -- without it a `pd.DataFrame` in a signature is
+# evaluated at def time and fails just as hard.
+#
+# Keep it this way. Anything imported at module level here must be stdlib.
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -133,7 +149,9 @@ SMC_MS_PER_SYMBOL_PRE_CONVERSION = 1800.0
 _SEC_LIST_CACHE = {}
 
 
-def fetch_sec_list(url: str = SEC_LIST_URL) -> pd.DataFrame:
+def fetch_sec_list(url: str = SEC_LIST_URL) -> "pd.DataFrame":
+    import pandas as pd
+    import requests
     if url in _SEC_LIST_CACHE:
         return _SEC_LIST_CACHE[url]
     r = requests.get(url, headers={"User-Agent": UA}, timeout=40)
@@ -152,6 +170,7 @@ def band_passes(band: pd.Series) -> pd.Series:
     no band at all. See the module docstring: reading this numerically excludes
     every large cap, silently.
     """
+    import pandas as pd
     raw = band.astype(str).str.strip()
     no_band = raw.str.lower() == "no band"
     numeric = pd.to_numeric(raw, errors="coerce")
@@ -160,6 +179,7 @@ def band_passes(band: pd.Series) -> pd.Series:
 
 def _normalise(x: pd.DataFrame) -> pd.DataFrame:
     """One shape from either bhavcopy layout: symbol, series, close, turnover_lacs."""
+    import pandas as pd
     cols = {c.strip(): c for c in x.columns}
     if "SYMBOL" in cols and "TURNOVER_LACS" in cols:
         out = pd.DataFrame({
@@ -194,6 +214,7 @@ def bhavcopy_stats(lookback: int = LOOKBACK_SESSIONS) -> tuple:
     skipped. Silently dropping files is what produced a funnel claiming RELIANCE
     had under 250 trading days.
     """
+    import pandas as pd
     # main() needs these twice -- once for the funnel, once to explain the drops
     # -- and re-reading 300 CSVs to answer the same question is a minute of the
     # box's time for nothing.
@@ -700,8 +721,15 @@ def apply_artifact(path: Path, universe: Path = UNIVERSE_PY) -> int:
         pass
 
     print(f"ARTIFACT  {path}")
-    print(f"  computed  {p.get('generated_at')}"
-          + (f"   ({age_days} day(s) ago)" if age_days is not None else ""))
+    if age_days is None:
+        age_note = ""
+    elif age_days < 0:
+        # The box and this machine disagree about the time. Worth saying rather
+        # than rendering "-1 day(s) ago".
+        age_note = f"   (dated {abs(age_days)} day(s) AHEAD of this clock)"
+    else:
+        age_note = f"   ({age_days} day(s) ago)"
+    print(f"  computed  {p.get('generated_at')}{age_note}")
     print(f"  window    {p['window'][0]} to {p['window'][1]}, "
           f"{p.get('lookback_sessions')} sessions")
     print(f"  tradeable {p.get('tradeable')}   current {p.get('current_universe')}"

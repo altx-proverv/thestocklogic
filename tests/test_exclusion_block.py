@@ -48,8 +48,52 @@ def universe_members(n: int) -> list:
     return sorted(m.SYMBOL_SECTOR_MAP)[:n]
 
 
+def import_without(blocked: tuple):
+    """Import universe_filter fresh with `blocked` modules unavailable."""
+    import builtins
+    real = builtins.__import__
+
+    def guard(name, *a, **k):
+        root = name.split(".")[0]
+        if root in blocked:
+            raise ModuleNotFoundError(f"No module named {root!r}")
+        return real(name, *a, **k)
+
+    builtins.__import__ = guard
+    try:
+        sp = importlib.util.spec_from_file_location(
+            "uf_bare", ROOT / "tools/universe_filter.py")
+        mod = importlib.util.module_from_spec(sp)
+        sp.loader.exec_module(mod)
+        return mod, None
+    except Exception as e:
+        return None, e
+    finally:
+        builtins.__import__ = real
+
+
 def main() -> int:
     ok = True
+    print("THE MODULE IMPORTS WITHOUT THE ANALYSIS STACK")
+    print("-" * 78)
+    # --apply-artifact is offline by design and must run wherever a commit can
+    # happen, which is not necessarily a machine with pandas. A module-level
+    # `import pandas` made it die before parsing its arguments -- and a
+    # `pd.DataFrame` annotation would too, without `from __future__ import
+    # annotations`. Same shape as the emit bug: a path that can only run where
+    # it cannot do its job.
+    mod, err = import_without(("pandas", "numpy", "requests"))
+    good = mod is not None
+    ok &= good
+    print(f"  import with pandas/numpy/requests blocked   "
+          f"{'ok' if good else '** ' + type(err).__name__ + ': ' + str(err) + ' **'}")
+    if good:
+        for fn in ("apply_artifact", "build_exclusion_block", "write_exclusions"):
+            has = callable(getattr(mod, fn, None))
+            ok &= has
+            print(f"  {fn:<44}{'available' if has else '** MISSING **'}")
+
+    print()
     print("THE BUILDER RUNS AT ALL")
     print("-" * 78)
     # The regression: this used to raise UnboundLocalError before producing a line.
