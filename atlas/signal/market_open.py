@@ -461,8 +461,7 @@ def cycle(state: Session) -> dict:
             out["entered"] += 1
             state.entered.append(f"{sym} {direction}")
             log.warning(f"cycle {state.cycle_n}: {status} {sym} {direction} @ {ltp}")
-            alert(status, f"{sym} {direction} @ Rs{ltp:.1f} "
-                          f"(stop Rs{signal['sl']:.1f})", key=sym)
+            notify_entry(signal, result)
         else:
             out["skipped"] += 1
             log.info(f"cycle {state.cycle_n}: {sym} {direction} — {status} "
@@ -471,6 +470,52 @@ def cycle(state: Session) -> dict:
                 alert(status, f"{sym}: {result.get('reason','')}", key=sym)
 
     return out
+
+
+def notify_entry(sig: dict, result: dict) -> None:
+    """
+    An entry, the moment it happens. NOT throttled, ever.
+
+    This used to go through alert(), which suppresses a repeat of the same
+    (kind, key) for 15 minutes. Keyed on the symbol, that meant a second entry
+    in the same symbol inside the cooldown was silently not reported -- the
+    throttle exists so 360 failed cycles do not produce 360 messages, and an
+    entry is the one event where every single instance matters. Entries are also
+    rare by construction: one per symbol per day, capped by the gate stack and
+    by funds. There is nothing to throttle.
+
+    In SHADOW the message is identical but marked, so the path that will carry a
+    real fill is the same path proven beforehand -- a notification that only
+    starts working on the first live day is a notification nobody has tested.
+    """
+    live = result.get("status") == "ENTERED"
+    tag = "ENTERED" if live else "SHADOW — would have entered"
+    qty = result.get("qty") or 0
+    entry = result.get("entry_price") or sig.get("ltp") or 0
+    stop = result.get("stop_price") or sig.get("sl") or 0
+    risk = result.get("risk_actual") or 0
+    notional = result.get("notional") or 0
+    stop_pct = result.get("stop_pct") or sig.get("stop_pct") or 0
+
+    body = (
+        f"{'🟢' if live else '👁'} <b>ATLAS {tag}</b>\n"
+        f"<b>{sig.get('symbol')}</b> {sig.get('direction')}\n"
+        f"entry    Rs{float(entry):,.2f}\n"
+        f"qty      {qty}\n"
+        f"stop     Rs{float(stop):,.2f}  ({float(stop_pct):.2f}%)\n"
+        f"risk     Rs{float(risk):,.0f}\n"
+        f"notional Rs{float(notional):,.0f}\n"
+        f"setup    {sig.get('setup_name') or '—'}\n"
+        f"zone     {sig.get('zone_source') or '—'}"
+    )
+    if live:
+        body += "\n\n<b>MANUAL STOP REQUIRED</b> — ATLAS places no SL order."
+    try:
+        send(body)
+    except Exception as e:
+        # An unreported entry is worse than a noisy one. Say so in the journal
+        # at least, and do not let it take the cycle down.
+        log.error(f"ENTRY NOTIFICATION FAILED for {sig.get('symbol')}: {e}")
 
 
 def log_decision(sig: dict, result: dict) -> None:
@@ -663,7 +708,25 @@ def serve() -> int:
         log.info("no session to run — exiting cleanly")
         return 0
 
-    send(f"<b>ATLAS ENGINE UP [{mode}]</b>\n"
+    # Which mode, and why, in the message that opens the session. The go-live
+    # switch is a date, so "am I live today" is a question the operator should
+    # never have to work out from a config file.
+    from atlas.config import GO_LIVE_DATE
+    today = now_ist().date()
+    if LIVE_TRADING_ENABLED:
+        banner = "🟢 <b>LIVE — real orders</b>"
+        forced = os.environ.get("ATLAS_LIVE", "").strip().lower()
+        if forced in ("true", "1", "yes", "on") and today < GO_LIVE_DATE:
+            banner += f"\n<b>forced early by ATLAS_LIVE</b> (scheduled {GO_LIVE_DATE})"
+    else:
+        left = (GO_LIVE_DATE - today).days
+        banner = (f"👁 <b>SHADOW — no orders</b>\n"
+                  f"live from {GO_LIVE_DATE} ({left} day{'s' if left != 1 else ''})")
+        if os.environ.get("ATLAS_LIVE", "").strip().lower() in ("false", "0", "no", "off"):
+            banner = "👁 <b>SHADOW — held by the ATLAS_LIVE brake</b>"
+
+    log.warning(f"MODE: {mode} (go-live {GO_LIVE_DATE}, today {today})")
+    send(f"<b>ATLAS ENGINE UP</b>\n{banner}\n"
          f"{WINDOW_START.strftime('%H:%M')}–{WINDOW_END.strftime('%H:%M')} IST, "
          f"{CYCLE_SECONDS}s cycles")
 

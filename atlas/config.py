@@ -3,7 +3,19 @@ ATLAS — Agentic Trading & Lifecycle Automation System
 Central configuration. All modules import from here.
 """
 import os
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+# IST, because every date decision in this system is an IST date. The box runs
+# Etc/UTC, so date.today() here is the UTC date -- which is the previous day
+# between 00:00 and 05:30 IST. The go-live switch below turns on real money by
+# date, so it reads the right one.
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _today_ist() -> date:
+    return datetime.now(_IST).date()
+
 
 ROOT         = Path(__file__).parent.parent
 ENGINE_DIR   = ROOT / "engine"
@@ -140,8 +152,43 @@ ALLOW_AUTOMATED_TARGET     = False
 # Scalable seam: flip True in a later phase to enable end-to-end management.
 ENABLE_EXIT_MANAGEMENT = False
 
-# Master live-trading gate — DEFAULT DENY. Must be deliberately enabled.
-LIVE_TRADING_ENABLED = os.environ.get("ATLAS_LIVE", "false").lower() == "true"
+# ── MASTER LIVE-TRADING GATE ──────────────────────────────────────
+#
+# Shadow first, then live on a date fixed in advance:
+#
+#   2026-09-15, -16, -17   SHADOW. Proves the breaker, the duplicate guard and
+#                          the notification path against real market conditions.
+#                          It is NOT a strategy validation -- three sessions
+#                          cannot say anything about a strategy, and the regime
+#                          gate will very likely hold everything in cash anyway.
+#   2026-09-18 onward      LIVE.
+#
+# THE SCHEDULE IS THE TRIGGER, WHICH IS A REAL CHANGE. Nothing asks for
+# confirmation on the first live morning: the engine comes up and places real
+# orders because the date says so. ATLAS_LIVE below is the brake.
+#
+# ATLAS_LIVE, when set, overrides the date in either direction:
+#   ATLAS_LIVE=false   forces SHADOW however late it is -- the emergency brake,
+#                      and it needs no commit, just a restart
+#   ATLAS_LIVE=true    forces LIVE before the date, for a deliberate early test
+#   unset              the date decides
+#
+# Read once at import. The trading window never crosses midnight, so a running
+# session keeps the value it started with, which is what you want -- a service
+# should not change mode underneath itself.
+GO_LIVE_DATE = date(2026, 9, 18)
+
+
+def _resolve_live() -> bool:
+    forced = os.environ.get("ATLAS_LIVE", "").strip().lower()
+    if forced in ("false", "0", "no", "off"):
+        return False
+    if forced in ("true", "1", "yes", "on"):
+        return True
+    return _today_ist() >= GO_LIVE_DATE
+
+
+LIVE_TRADING_ENABLED = _resolve_live()
 
 # Rules 8, 9, 10, 11 — regime → side hierarchy
 ALLOW_LONG_IN_BULLISH   = True
