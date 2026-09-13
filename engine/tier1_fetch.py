@@ -174,6 +174,31 @@ AUDITOR_NOTED_DESCS = (
     "change in auditors",
 )
 
+# ── MECHANICAL DILUTION: WHY A PROMOTER PERCENTAGE FELL ───────────
+# A promoter stake can fall because insiders are leaving, or because of a
+# corporate action that moves the number without anyone losing conviction. Tier 1
+# should veto the first and not the second, so it needs the CAUSE.
+#
+# ONLY THESE TWO DESCS QUALIFY, and the two rejected candidates matter more than
+# the two accepted ones:
+#
+#   "Disclosure under SEBI Takeover Regulations" is filed by ALL SIX symbols whose
+#   promoter holding fell -- SHRIRAMFIN, DOMS, NHPC, BELRISE, BLUEJET and
+#   PREMIERENE. It is filed BECAUSE the holding changed, so it is a consequence of
+#   the drop, not a cause of it, and using it would excuse every case including
+#   the genuine ones. It discriminates nothing.
+#
+#   "Allotment of Securities" appears for SHRIRAMFIN (3) and PREMIERENE. It is
+#   routine ESOP and bond allotment. Counting it would excuse SHRIRAMFIN -- the
+#   one case this mechanism exists to catch.
+#
+# Of the six, only NHPC filed an actual Offer for sale, which is exactly the
+# government divestment that should not read as insiders leaving.
+DILUTION_DESCS = (
+    "offer for sale",
+    "qualified institutional placement",
+)
+
 
 
 def _q(symbol: str) -> str:
@@ -367,12 +392,12 @@ def parse_shp(xml: str) -> tuple:
 
 def classify_announcements(rows: list) -> tuple:
     """
-    (veto_flags, noted) from the STRUCTURED desc only.
+    (veto_flags, noted, dilution) from the STRUCTURED desc only.
 
     Free text is not consulted: for auditor rows it restates the category
     verbatim, so matching on it adds false positives and no recall.
     """
-    veto, noted = [], []
+    veto, noted, dilution = [], [], []
     for r in rows or []:
         d = (r.get("desc") or "").strip()
         dl = d.lower()
@@ -381,7 +406,9 @@ def classify_announcements(rows: list) -> tuple:
             veto.append(f"{d} ({stamp})")
         elif any(k in dl for k in AUDITOR_NOTED_DESCS):
             noted.append(f"{d} ({stamp})")
-    return veto, noted
+        if any(k in dl for k in DILUTION_DESCS):
+            dilution.append(f"{d} ({stamp})")
+    return veto, noted, dilution
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -422,7 +449,8 @@ def fetch_symbol(s, symbol: str, verbose: bool = False) -> dict:
     One symbol's Tier 1 sources. Never raises; every failure is recorded in a
     way that makes fundamentals.tier1() block rather than pass.
     """
-    out = {"holdings": [], "auditor": None, "notes": [], "status": "ok"}
+    out = {"holdings": [], "auditor": None, "dilution": None,
+           "notes": [], "status": "ok"}
 
     # ── shareholding ──────────────────────────────────────────────
     r = _get(s, SHP_MASTER.format(symbol=_q(symbol)))
@@ -497,11 +525,12 @@ def fetch_symbol(s, symbol: str, verbose: bool = False) -> dict:
             out["notes"].append(f"announcements not JSON: {e}")
         if arows is not None:
             arows = arows if isinstance(arows, list) else (arows.get("data") or [])
-            veto, noted = classify_announcements(arows)
+            veto, noted, dilution = classify_announcements(arows)
             out["auditor"] = {"flags": veto, "noted": noted,
                               "rows_scanned": len(arows),
                               "window_days": LOOKBACK_DAYS,
                               "from": frm}
+            out["dilution"] = dilution
             if verbose:
                 log.info(f"  {symbol} announcements: {len(arows)} rows, "
                          f"{len(veto)} veto, {len(noted)} noted")
@@ -550,6 +579,7 @@ def report(path: Path = STORE) -> int:
                        if v.get("holdings")
                        and v["holdings"][0].get("pledged_pct") is not None)
     ann = sum(1 for v in syms.values() if v.get("auditor") is not None)
+    dil = [k for k, v in syms.items() if v.get("dilution")]
     flagged = [k for k, v in syms.items() if (v.get("auditor") or {}).get("flags")]
     noted = [k for k, v in syms.items() if (v.get("auditor") or {}).get("noted")]
     print("=" * 78)
@@ -562,6 +592,8 @@ def report(path: Path = STORE) -> int:
           f"({', '.join(flagged[:10])}{'...' if len(flagged) > 10 else ''})")
     print(f"  {len(noted):>4}      'Change in Auditors' noted, NOT a veto "
           f"({', '.join(noted[:8])}{'...' if len(noted) > 8 else ''})")
+    print(f"  {len(dil):>4}      OFS/QIP in the window (explains a promoter drop) "
+          f"({', '.join(dil[:8])}{'...' if len(dil) > 8 else ''})")
     return 0
 
 

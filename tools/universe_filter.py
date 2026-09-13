@@ -122,6 +122,10 @@ sys.path.insert(0, str(ROOT / "engine"))
 log = logging.getLogger("universe-filter")
 
 SEC_LIST_URL = "https://nsearchives.nseindia.com/content/equities/sec_list.csv"
+# NSE's own list of listed ETFs. Needed because an ETF trades in the EQ series
+# and passes every mechanical filter here on merit: NIFTYBEES is the most liquid
+# instrument in the whole funnel at Rs417 crore a day.
+ETF_LIST_URL = "https://www.nseindia.com/api/etf"
 RAW_DIR = ROOT / "data/raw/bhavcopy"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
@@ -162,6 +166,55 @@ def fetch_sec_list(url: str = SEC_LIST_URL) -> "pd.DataFrame":
         df[c] = df[c].astype(str).str.strip()
     _SEC_LIST_CACHE[url] = df
     return df
+
+
+_ETF_CACHE = {}
+
+
+def fetch_etf_list(url: str = ETF_LIST_URL) -> set:
+    """
+    NSE's listed ETFs, by symbol. RAISES on failure -- see below.
+
+    AN ETF IS NOT A COMPANY. It trades in the EQ series, it is deeply liquid, and
+    it passes every filter in this funnel on merit: 23 of them were sitting in the
+    held-back additions, NIFTYBEES the single most liquid instrument in the list.
+    They only failed the fundamentals gate by accident, because a fund has no
+    shareholding pattern and files no results, so Tier 1 came back UNPARSEABLE.
+    Relying on that is relying on a side effect: it puts a pile of instruments
+    through SMC zone detection and scoring, and the layer that stops them is one
+    parser change away from not stopping them.
+
+    NAME MATCHING IS NOT SAFE HERE, which is why this endpoint is worth a request.
+    GOLDIAM (Goldiam International) and SKYGOLD (Sky Gold and Diamonds) are real
+    jewellery manufacturers, and any regex reaching for GOLD/SILVER/BEES/ETF
+    catches them. NSE's list does not.
+
+    A FAILED FETCH RAISES. An empty ETF set silently admits every ETF, which is
+    the permissive default this codebase keeps getting bitten by -- "cannot read"
+    must never mean "nothing there".
+    """
+    import requests
+    if url in _ETF_CACHE:
+        return _ETF_CACHE[url]
+    s_ = requests.Session()
+    s_.headers.update({"User-Agent": UA,
+                       "Accept": "application/json,text/plain,*/*"})
+    try:
+        s_.get("https://www.nseindia.com", timeout=40)
+    except Exception as e:
+        log.warning(f"could not warm the NSE session ({e}) — continuing")
+    r = s_.get(url, timeout=60)
+    r.raise_for_status()
+    d = r.json()
+    rows = d.get("data") if isinstance(d, dict) else d
+    syms = {(x.get("symbol") or "").strip().upper() for x in (rows or [])}
+    syms.discard("")
+    if not syms:
+        raise RuntimeError(
+            f"{url} returned no ETF symbols. Refusing to continue: an empty set "
+            f"would admit every ETF into the universe as an ordinary equity.")
+    _ETF_CACHE[url] = syms
+    return syms
 
 
 def band_passes(band: pd.Series) -> pd.Series:
@@ -314,9 +367,15 @@ def funnel(verbose: bool = True) -> dict:
               f"{LOOKBACK_SESSIONS} sessions to {last_day}")
         print("-" * 78)
 
+    etfs = fetch_etf_list()
     s = step("NSE listed securities (sec_list.csv)", sl)
     s = step("EQ series only", sl[sl["Series"] == "EQ"],
              "BE/BZ surveillance, SM/ST SME, GS/GB gilts")
+    # Before liquidity: an ETF would otherwise pass on merit and be filtered out
+    # only by a fundamentals lookup that happens to find nothing.
+    s = step("not an ETF (NSE api/etf)",
+             s[~s["Symbol"].str.upper().isin(etfs)],
+             f"{len(etfs)} listed ETFs; GOLDIAM/SKYGOLD are real companies")
     s = step(f"circuit band >= {MIN_BAND_PCT}% or No Band", s[band_passes(s["Band"])],
              "No Band = unrestricted, must pass")
     j = s.set_index("Symbol").join(stats, how="inner")

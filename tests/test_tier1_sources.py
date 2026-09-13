@@ -177,22 +177,22 @@ def main() -> int:
     print()
     print("AUDITOR EVENTS COME FROM THE STRUCTURED desc")
     print("-" * 78)
-    veto, noted = T.classify_announcements(ann("Resignation of Statutory Auditor"))
+    veto, noted, _ = T.classify_announcements(ann("Resignation of Statutory Auditor"))
     check("resignation of statutory auditor -> veto", len(veto), 1)
-    veto, noted = T.classify_announcements(ann("Initiation of Forensic Audit"))
+    veto, noted, _ = T.classify_announcements(ann("Initiation of Forensic Audit"))
     check("initiation of forensic audit -> veto", len(veto), 1)
     # THE ONE THAT MATTERS. 189 per six weeks, mostly PSUs reappointing CAG
     # auditors. If this ever returns a veto, the universe empties.
-    veto, noted = T.classify_announcements(ann("Change in Auditors"))
+    veto, noted, _ = T.classify_announcements(ann("Change in Auditors"))
     check("change in auditors -> NOT a veto", len(veto), 0,
           "189 in six weeks vs 28 resignations; the filers were PSUs")
     check("  but it IS counted", len(noted), 1)
-    veto, noted = T.classify_announcements(
+    veto, noted, _ = T.classify_announcements(
         ann("Copy of Newspaper Publication", "Outcome of Board Meeting",
             "Resignation of Director/KMP/SMP", "Change in Director(s)"))
     check("routine categories -> nothing", len(veto) + len(noted), 0,
           "a director resigning is not an auditor resigning")
-    veto, _ = T.classify_announcements([])
+    veto, _, _ = T.classify_announcements([])
     check("no announcements in the window -> no veto", len(veto), 0)
 
     print()
@@ -204,8 +204,28 @@ def main() -> int:
              "attchmntText": "The auditor resigned last year, as previously "
                              "disclosed, and a qualified opinion was discussed.",
              "sort_date": "2026-08-01 10:00:00"}]
-    veto, noted = T.classify_announcements(rows)
+    veto, noted, _ = T.classify_announcements(rows)
     check("auditor words in an unrelated row -> nothing", len(veto), 0)
+
+    print()
+    print("WHY A PROMOTER PERCENTAGE FELL: ONLY OFS AND QIP COUNT")
+    print("-" * 78)
+    # THE TRAP. "Disclosure under SEBI Takeover Regulations" is filed BECAUSE the
+    # holding moved, so all six symbols whose promoter stake fell filed one --
+    # SHRIRAMFIN included. Counting it would excuse every case, genuine ones too.
+    _, _, dil = T.classify_announcements(ann("Disclosure under SEBI Takeover Regulations"))
+    check("takeover disclosure is NOT dilution", len(dil), 0,
+          "filed by all six; a consequence of the drop, not a cause")
+    # "Allotment of Securities" is routine ESOP and bond allotment. SHRIRAMFIN
+    # filed three. Counting it would excuse the one case worth catching.
+    _, _, dil = T.classify_announcements(ann("Allotment of Securities"))
+    check("allotment of securities is NOT dilution", len(dil), 0)
+    _, _, dil = T.classify_announcements(ann("Offer for sale"))
+    check("offer for sale IS dilution", len(dil), 1)
+    _, _, dil = T.classify_announcements(ann("Qualified Institutional Placement"))
+    check("QIP IS dilution", len(dil), 1)
+    _, _, dil = T.classify_announcements(ann("Dividend", "Record Date", "Buyback"))
+    check("ordinary corporate actions are not dilution", len(dil), 0)
 
     print()
     print("THE PLACEHOLDER URL IS STILL NOT A URL")

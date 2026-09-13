@@ -207,13 +207,25 @@ PROMOTER_DROP_MAX_PCT   = 5.0    # in a single quarter
 PLEDGE_RISE_MIN_PTS     = 2.0
 PLEDGE_RISE_MIN_REL     = 0.25
 
-# The same shape for promoter exit, and for the same reason: of the six symbols
-# the unfloored rule vetoed, four (BELRISE, BLUEJET, DOMS, PREMIERENE) were recent
-# listings hitting lock-in expiry and one (NHPC) was a government offer for sale.
-# Neither is an insider leaving. A promoter at 70% selling 7 points has parted
-# with a tenth of their stake; the relative floor is what distinguishes that from
-# a promoter genuinely stepping back.
-PROMOTER_DROP_MIN_REL   = 0.25
+# PROMOTER EXIT is the same shape but a DIFFERENT NUMBER, and the number is the
+# whole argument. Of the six symbols the unfloored rule vetoed, five were
+# mechanical -- BELRISE, BLUEJET, DOMS and PREMIERENE recent listings hitting
+# lock-in expiry, NHPC a government offer for sale -- and one, SHRIRAMFIN, was a
+# promoter at 25.4% going to 20.3%. What separates them is not the point drop
+# (5.1 for SHRIRAMFIN against 7.0 for DOMS, so absolute size has the ordering
+# BACKWARDS) but the SHARE OF THE STAKE GIVEN UP:
+#
+#     SHRIRAMFIN   25.4 -> 20.3    20.1% of the stake     <- insiders leaving
+#     DOMS         70.4 -> 63.4     9.9%
+#     NHPC         67.4 -> 61.4     8.9%
+#     PREMIERENE   63.9 -> 58.5     8.5%
+#     BLUEJET      79.8 -> 73.2     8.3%
+#     BELRISE      66.5 -> 61.1     8.1%
+#
+# The gap between 20% and 10% is where the floor belongs, so 15%. At 25% it let
+# SHRIRAMFIN through; at 15% it catches SHRIRAMFIN and clears all five mechanical
+# cases, which is the whole of the observed evidence.
+PROMOTER_DROP_MIN_REL   = 0.15
 DE_RISING_PERIODS       = 2      # consecutive ANNUAL filings, see above
 CFO_NEGATIVE_PERIODS    = 2      # consecutive ANNUAL filings, see above
 AUDITOR_LOOKBACK_QTRS   = 4
@@ -607,7 +619,7 @@ def exempt_because(symbol: str) -> str:
 
 
 def tier1(symbol: str, annuals: list, holdings: list,
-          auditor_flags: list) -> Verdict:
+          auditor_flags: list, dilution_events: list = None) -> Verdict:
     """
     Strict. Any rule firing is a VETO; any rule that cannot be evaluated is
     UNPARSEABLE. `annuals` newest first, `holdings` newest first.
@@ -658,7 +670,22 @@ def tier1(symbol: str, annuals: list, holdings: list,
             drop = prev.promoter_pct - cur.promoter_pct
             need = max(PROMOTER_DROP_MAX_PCT,
                        prev.promoter_pct * PROMOTER_DROP_MIN_REL)
-            if drop > need:
+            # A drop past the floor is still not insiders leaving if a corporate
+            # action moved the denominator. Only an OFS or a QIP counts -- see
+            # DILUTION_DESCS in tier1_fetch for why the obvious candidate,
+            # "Disclosure under SEBI Takeover Regulations", is worthless here: all
+            # six symbols filed one, because it is filed BECAUSE the holding moved.
+            #
+            # dilution_events None means the announcements were not read, which
+            # yields NO excuse rather than a free pass. Fail-closed points towards
+            # more vetoes here, not fewer.
+            if drop > need and dilution_events:
+                skipped.append(
+                    f"promoter drop of {drop:.1f} pts "
+                    f"({prev.promoter_pct:.1f}% -> {cur.promoter_pct:.1f}%) not "
+                    f"treated as an exit: {'; '.join(dilution_events[:2])} in the "
+                    f"window moved the denominator ({CADENCE_QUARTERLY})")
+            elif drop > need:
                 return Verdict(symbol, VERDICT_VETO,
                                f"promoter holding fell {drop:.1f} points "
                                f"({prev.promoter_pct:.1f}% -> {cur.promoter_pct:.1f}%, "
@@ -875,7 +902,7 @@ def tier2(symbol: str, annuals: list) -> Tier2Metrics:
 
 
 def evaluate(symbol: str, annuals: list, holdings: list,
-             auditor_flags: list) -> Verdict:
+             auditor_flags: list, dilution_events: list = None) -> Verdict:
     """
     TIER 1 IS THE GATE. Tier 2 is measured and attached, and cannot change the
     verdict -- there is no branch on it below, by design.
@@ -886,7 +913,7 @@ def evaluate(symbol: str, annuals: list, holdings: list,
     about the market that is currently indistinguishable from a belief about
     this parser. So it measures and waits for the evidence.
     """
-    v = tier1(symbol, annuals, holdings, auditor_flags)
+    v = tier1(symbol, annuals, holdings, auditor_flags, dilution_events)
     m = tier2(symbol, annuals)
     v.details["tier2"] = m.as_dict()
     # Tier 2's own unmeasured checks land under tier2, not on not_evaluated:
@@ -1006,7 +1033,8 @@ def build_cache(symbols: list = None, path: Path = CACHE) -> dict:
         # auditor None means the announcements were never successfully read, and
         # tier1() must see None -- not [] -- or an unchecked symbol reads as clean.
         flags = auditor.get("flags") if isinstance(auditor, dict) else None
-        v = evaluate(sym, _annuals_for(arec), _holdings_for(trec), flags)
+        v = evaluate(sym, _annuals_for(arec), _holdings_for(trec), flags,
+                     trec.get("dilution"))
         row = asdict(v)
         if isinstance(auditor, dict) and auditor.get("noted"):
             row["details"]["auditor_noted"] = auditor["noted"]
@@ -1078,6 +1106,8 @@ def report_cache(path: Path = CACHE) -> int:
                 ne["rising leverage not evaluable (needs 3 annual filings)"] += 1
             elif "opinion not evaluable" in x:
                 ne["audit opinion not readable from announcements"] += 1
+            elif "not treated as an exit" in x:
+                ne["promoter drop explained by an OFS/QIP"] += 1
             elif "not applicable" in x:
                 ne["leverage n/a: lender reports no borrowings"] += 1
     print("\nCHECKS NOT EVALUATED (named on the verdict, do not block):")

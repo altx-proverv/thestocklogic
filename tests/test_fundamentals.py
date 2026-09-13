@@ -142,13 +142,41 @@ def main() -> int:
           f"{'ok' if good else '** INVISIBLE **'}")
     floor("NHPC shape: promoter 67.4 -> 61.4 (government OFS)",
           holds((61.4, 0.0), (67.4, 0.0)), VERDICT_PASS)
-    # DELIBERATE LOSS, recorded here so it is not rediscovered as a surprise:
-    # SHRIRAMFIN 25.4 -> 20.3 is a fifth of the promoter's stake and was the one
-    # of six unfloored vetoes that looked like a genuine reduction. The relative
-    # floor lets it through. Distinguishing it needs the CAUSE of the drop (an
-    # OFS or QIP announcement in the same quarter), not a bigger number.
-    floor("SHRIRAMFIN 25.4 -> 20.3 passes (known trade-off)",
-          holds((20.3, 0.0), (25.4, 0.0)), VERDICT_PASS)
+    # THE CASE THE FLOOR EXISTS TO KEEP: a promoter at 25.4% going to 20.3% has
+    # given up a FIFTH of the stake. Absolute points have the ordering backwards
+    # -- 5.1 here against DOMS's 7.0 -- so the share of the stake is what
+    # separates an exit from lock-in expiry, and 15% is the gap between them.
+    floor("SHRIRAMFIN 25.4 -> 20.3 is a fifth of the stake",
+          holds((20.3, 0.0), (25.4, 0.0)), VERDICT_VETO, "promoter holding fell")
+
+    print()
+    print("A DROP WITH A CAUSE IS NOT AN EXIT")
+    print("-" * 78)
+    OFS = ["Offer for sale (2026-06-02)"]
+    # NHPC: a government divestment. Past no floor here, but the point is the
+    # mechanism -- a LARGE mechanical drop must not veto either.
+    for label, prev_p, cur_p, dil, want in (
+            ("a third of the stake sold via OFS", 67.0, 45.0, OFS, VERDICT_PASS),
+            ("the same drop with no OFS or QIP", 67.0, 45.0, None, VERDICT_VETO),
+            ("SHRIRAMFIN is not excused by an allotment", 25.4, 20.3, None,
+             VERDICT_VETO)):
+        v = F.evaluate("X", healthy(), holds((cur_p, 0.0), (prev_p, 0.0)), [], dil)
+        good = v.verdict == want
+        ok &= good
+        print(f"  {label:<52}{v.verdict:<8}"
+              f"{'ok' if good else '** want ' + want + ' **'}")
+    v = F.evaluate("X", healthy(), holds((45.0, 0.0), (67.0, 0.0)), [], OFS)
+    good = any("not treated as an exit" in x for x in v.not_evaluated)
+    ok &= good
+    print(f"  {'and the excuse is recorded, never silent':<52}"
+          f"{'ok' if good else '** SILENT **'}")
+    # announcements unread must yield NO excuse -- fail-closed points at MORE
+    # vetoes here, not fewer.
+    v = F.evaluate("X", healthy(), holds((45.0, 0.0), (67.0, 0.0)), [], None)
+    good = v.verdict == VERDICT_VETO
+    ok &= good
+    print(f"  {'unread announcements grant no excuse':<52}"
+          f"{v.verdict:<8}{'ok' if good else '** EXCUSED **'}")
 
     print()
     print("A LENDER'S NEGATIVE CASH FLOW IS ITS BUSINESS MODEL")
