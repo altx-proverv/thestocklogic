@@ -5,6 +5,15 @@ Agent IDENTIFIES and ENTERS. No SL, no target, no exit orders. Exits manual.
 
 GATE STACK
   0. Structural stop present      -- required for risk-based sizing
+  0b. Fundamentals (Tier 1 only)  -- deterioration veto, from a cache, no
+                                     network. Tier 2 is measured and recorded
+                                     on the verdict but NEVER blocks.
+                                     BLOCKED_NO_FUNDAMENTALS = the cache is
+                                     missing or stale, so nothing was assessed.
+                                     SKIPPED_FUNDAMENTALS  = assessed, vetoed.
+                                     The split matters: a cache that has not
+                                     been built yet must not read as a market
+                                     that has turned.
   1. Regime AND sentiment         -- both must hold or ATLAS stays in cash.
                                      REGIME:    close>200DMA and 50DMA>200DMA
                                      SENTIMENT: advances>declines today and
@@ -428,6 +437,39 @@ def enter_trade(signal: dict) -> dict:
     if stop_price <= 0:
         return {"status": "REJECTED_NO_STOP",
                 "reason": "no structural stop -- cannot size by risk"}
+
+    # GATE 0b -- FUNDAMENTALS. Tier 1 only; Tier 2 measures and never blocks.
+    #
+    # Cache-only, no network, so it is free and sits ahead of every gate that
+    # costs a request. Entry-only by construction: enter_trade is never on an
+    # exit path, so a name that deteriorates while held is a stop-loss question,
+    # not this gate's.
+    #
+    # TWO DISTINCT STATUSES, DELIBERATELY. gate() fails closed, so before the
+    # cache is built it blocks EVERYTHING -- correct, and indistinguishable from
+    # a deteriorated universe unless it says so. BLOCKED_NO_FUNDAMENTALS means
+    # the cache is missing, unreadable or stale and NOTHING has been assessed;
+    # SKIPPED_FUNDAMENTALS means this symbol was assessed and Tier 1 vetoed it.
+    # Folded into one status, a missing file would read as the market turning.
+    try:
+        from engine.fundamentals import (load_cache_cached, cache_health,
+                                         gate as fundamentals_gate)
+        fcache = load_cache_cached()
+        cache_ok, cache_why = cache_health(fcache)
+        if not cache_ok:
+            return {"status": "BLOCKED_NO_FUNDAMENTALS", "reason": cache_why,
+                    "infrastructure": True}
+        f_ok, f_why = fundamentals_gate(symbol, cache=fcache)
+        if not f_ok:
+            return {"status": "SKIPPED_FUNDAMENTALS", "reason": f_why}
+    except Exception as e:
+        # An exception here is not permission to trade. The layer exists to stop
+        # names a technical stop cannot protect against, and a broken gate that
+        # defaults to open is worse than no gate, because it looks like one.
+        log.error(f"fundamentals gate raised for {symbol}: {e}")
+        return {"status": "BLOCKED_NO_FUNDAMENTALS",
+                "reason": f"fundamentals gate unavailable ({e}) — failing closed",
+                "infrastructure": True}
 
     # GATE 1 -- regime AND sentiment. Both must hold or ATLAS stays in cash.
     #

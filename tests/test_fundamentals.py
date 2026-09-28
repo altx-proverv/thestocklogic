@@ -472,6 +472,55 @@ def main() -> int:
           f"{'ALLOWED' if allowed else '** BLOCKED **'}")
 
     print()
+    print("A MISSING CACHE IS INFRASTRUCTURE, NOT A DETERIORATED UNIVERSE")
+    print("-" * 78)
+    # gate() fails closed, so before the cache is built it blocks EVERY symbol.
+    # That is correct and it is also indistinguishable from a universe that went
+    # bad, unless something separates the two. cache_health() is that separation:
+    # the entry path reports BLOCKED_NO_FUNDAMENTALS when it fails and
+    # SKIPPED_FUNDAMENTALS only when a symbol was actually assessed.
+    for label, cache, want in (
+            ("no cache at all", {}, False),
+            ("cache from an older parser",
+             {"parser_version": F.PARSER_VERSION - 1,
+              "verdicts": {"X": {"verdict": VERDICT_PASS}}}, False),
+            ("present but holding no verdicts",
+             {"parser_version": F.PARSER_VERSION, "verdicts": {}}, False),
+            ("a usable cache",
+             {"parser_version": F.PARSER_VERSION,
+              "verdicts": {"X": {"verdict": VERDICT_PASS, "reason": "fine"}}}, True)):
+        got, why = F.cache_health(cache)
+        ok &= got == want
+        print(f"  {label:<46}{'usable' if got else 'UNUSABLE':<12}"
+              f"{'ok' if got == want else '** WRONG **'}")
+        if not got:
+            # the wording has to point at the pipeline, not the market
+            good = any(w in why.lower() for w in
+                       ("infrastructure", "rebuilt", "rebuild", "refresh"))
+            ok &= good
+            print(f"      {'names the remedy' if good else '** READS AS A MARKET EVENT **'}"
+                  f": {why[:52]}")
+
+    print()
+    print("THE CACHE IS RE-READ WHEN IT CHANGES, WITHOUT A RESTART")
+    print("-" * 78)
+    # The overnight cron may land the cache after 09:20. Holding it in a module
+    # global for the session would mean the first morning never picks it up.
+    import tempfile as _tf
+    tmpc = Path(_tf.mkdtemp()) / "f.json"
+    F._LIVE_CACHE["mtime"] = F._NEVER
+    got = F.load_cache_cached(tmpc)
+    ok &= got == {}
+    print(f"  {'absent file -> empty, not a stale hit':<46}"
+          f"{'ok' if got == {} else '** WRONG **'}")
+    F.save_cache({"X": {"verdict": VERDICT_PASS, "reason": "fine"}}, tmpc)
+    got = F.load_cache_cached(tmpc)
+    good = bool(got) and F.cache_health(got)[0]
+    ok &= good
+    print(f"  {'file appears -> picked up next read':<46}"
+          f"{'ok' if good else '** STALE ** '}")
+
+    print()
     print("THE CONTEXT TRAP: A YEAR IS NOT A QUARTER")
     print("-" * 78)
     # Both duration contexts claim the same dates; only the magnitude separates

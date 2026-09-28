@@ -537,6 +537,63 @@ def fetch_symbol(s, symbol: str, verbose: bool = False) -> dict:
     return out
 
 
+def refresh_announcements(symbols: list, path: Path = STORE) -> dict:
+    """
+    Re-read ONLY the announcements for symbols already in the store.
+
+    Auditor resignations and OFS/QIP filings appear daily; promoter holding and
+    pledge come from a quarterly filing. A full --refetch re-downloads two SHP
+    XBRL documents per symbol -- roughly half a gigabyte across the universe --
+    to re-learn numbers that cannot have changed. This is the daily path; the
+    full fetch runs weekly.
+
+    A symbol NOT already in the store is skipped rather than half-created: a
+    record with announcements and no shareholding would make tier1() report
+    "no shareholding data" for a symbol nobody ever tried to fetch.
+    """
+    store = load_store(path)
+    have = store["symbols"]
+    todo = [s for s in symbols if s in have]
+    missing = [s for s in symbols if s not in have]
+    if missing:
+        log.warning(f"{len(missing)} symbol(s) not in the store — skipped, they "
+                    f"need a full fetch first (e.g. {', '.join(missing[:5])})")
+    log.info(f"refreshing announcements for {len(todo)} symbol(s)")
+    s_ = _session()
+    today = date.today()
+    frm = (today - timedelta(days=LOOKBACK_DAYS)).strftime("%d-%m-%Y")
+    done = 0
+    for i, sym in enumerate(todo, 1):
+        r = _get(s_, ANNOUNCEMENTS.format(symbol=_q(sym), frm=frm,
+                                          to=today.strftime("%d-%m-%Y")))
+        if r is not None:
+            try:
+                rows = r.json()
+                rows = rows if isinstance(rows, list) else (rows.get("data") or [])
+                veto, noted, dil = classify_announcements(rows)
+                rec = have[sym]
+                rec["dilution"] = dil
+                if isinstance(rec.get("auditor"), dict):
+                    rec["auditor"]["flags"] = veto
+                    rec["auditor"]["noted"] = noted
+                    rec["auditor"]["rows_scanned"] = len(rows)
+                    rec["auditor"]["from"] = frm
+                else:
+                    rec["auditor"] = {"flags": veto, "noted": noted,
+                                      "rows_scanned": len(rows),
+                                      "window_days": LOOKBACK_DAYS, "from": frm}
+                done += 1
+            except Exception as e:
+                log.warning(f"{sym}: {e}")
+        if i % 50 == 0:
+            save_store(store, path)
+            log.info(f"{i}/{len(todo)} refreshed ({done} ok)")
+        time.sleep(REQUEST_DELAY)
+    save_store(store, path)
+    log.info(f"announcements refreshed for {done}/{len(todo)} symbol(s)")
+    return store
+
+
 def run(symbols: list, refetch: bool = False, verbose: bool = False,
         path: Path = STORE) -> dict:
     store = load_store(path)
@@ -604,6 +661,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--refetch", action="store_true")
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--announcements-only", action="store_true",
+                    help="re-read only announcements for symbols already in the "
+                         "store (the daily path; skips the SHP XBRL)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO,
@@ -619,7 +679,10 @@ def main() -> int:
         ap.error("give --all or --symbol")
     if a.limit:
         syms = syms[:a.limit]
-    run(syms, refetch=a.refetch, verbose=a.verbose)
+    if a.announcements_only:
+        refresh_announcements(syms)
+    else:
+        run(syms, refetch=a.refetch, verbose=a.verbose)
     return report()
 
 

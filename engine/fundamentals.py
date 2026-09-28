@@ -948,6 +948,62 @@ def save_cache(verdicts: dict, path: Path = CACHE) -> None:
     log.info(f"fundamentals cache: {len(verdicts)} verdict(s) -> {path}")
 
 
+# A distinct sentinel, not None: None is a legitimate mtime here (it is what a
+# MISSING file yields), so using None for "never loaded" makes the two states
+# indistinguishable and the first load after a missing file can be skipped.
+_NEVER = object()
+_LIVE_CACHE = {"mtime": _NEVER, "data": None}
+
+
+def load_cache_cached(path: Path = CACHE) -> dict:
+    """
+    load_cache() with an mtime check, for the market-hours loop.
+
+    The loop evaluates candidates up to 360 times a session and the cache is a
+    local JSON of several hundred verdicts; re-reading it per evaluation is
+    wasteful, and holding it in a module global for the whole session means a
+    cache that lands at 10:00 is never picked up -- which matters precisely on
+    the first morning, when the overnight cron may not have run yet.
+    """
+    try:
+        mt = path.stat().st_mtime
+    except OSError:
+        mt = None
+    if _LIVE_CACHE["mtime"] is _NEVER or _LIVE_CACHE["mtime"] != mt:
+        _LIVE_CACHE["data"] = load_cache(path) if mt is not None else {}
+        _LIVE_CACHE["mtime"] = mt
+    return _LIVE_CACHE["data"] or {}
+
+
+def cache_health(cache: dict = None) -> tuple:
+    """
+    (ok, reason) for THE CACHE ITSELF, with no symbol involved.
+
+    WHY THIS IS SEPARATE FROM gate(). gate() fails closed, so before the cache
+    exists it blocks every symbol -- which is correct and is also indistinguishable,
+    from the outside, from a universe that has genuinely deteriorated. "No entries
+    today" must never be readable as a market event when the real cause is a file
+    that has not been built yet. The loop checks this ONCE per cycle and says so
+    in its own words; gate() then speaks only about symbols.
+    """
+    cache = cache if cache is not None else load_cache()
+    if not cache:
+        return False, ("the fundamentals cache does not exist or cannot be read. "
+                       "This is infrastructure, not the market: run "
+                       "engine.tier1_fetch and engine.fundamentals --refresh")
+    pv = cache.get("parser_version")
+    if pv != PARSER_VERSION:
+        return False, (f"the fundamentals cache was written by parser v{pv}, this "
+                       f"is v{PARSER_VERSION}. Every symbol blocks until it is "
+                       f"rebuilt: engine.fundamentals --refresh")
+    n = len(cache.get("verdicts") or {})
+    if not n:
+        return False, ("the fundamentals cache is present but holds no verdicts. "
+                       "Rebuild it: engine.fundamentals --refresh")
+    return True, (f"{n} verdict(s), parser v{pv}, written "
+                  f"{cache.get('written_at', '?')}")
+
+
 def gate(symbol: str, cache: dict = None) -> tuple:
     """
     (tradeable, reason). THE function the signal path calls.

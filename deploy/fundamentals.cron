@@ -1,0 +1,54 @@
+# ATLAS — FUNDAMENTALS CACHE
+# ==========================
+# Install:  crontab -l > /tmp/ct && cat deploy/fundamentals.cron >> /tmp/ct \
+#           && crontab /tmp/ct && crontab -l | tail -20
+#
+# WHY THIS EXISTS AT ALL. fundamentals.gate() is consulted per candidate at
+# decision time and reads ONLY the local cache -- never the network, because the
+# market-hours loop cannot afford a request per symbol per cycle. data/processed
+# is gitignored, so the deploy (git reset --hard origin/main, every five minutes)
+# neither delivers the cache nor destroys it. It has to be built here, and until
+# it is, gate() FAILS CLOSED and blocks every symbol. That is correct and it is
+# also invisible unless something says so, which is why the loop reports it as
+# BLOCKED_NO_FUNDAMENTALS and the 15:30 report leads with it.
+#
+# EVERYTHING FINISHES BEFORE 09:20 IST, when the loop starts. The box runs UTC,
+# so IST = UTC + 5:30 and these are written in UTC.
+#
+# THE TWO FETCHES RUN AT DIFFERENT CADENCES, because their sources do:
+#
+#   announcements   auditor resignations, forensic audits, OFS and QIP filings
+#                   appear any day. DAILY, and announcements ONLY: a full
+#                   --refetch re-downloads two SHP XBRL documents per symbol,
+#                   about half a gigabyte across the universe, to re-read
+#                   promoter and pledge numbers that come from a quarterly
+#                   filing and cannot have moved.
+#
+#   shareholding    promoter % and pledge, quarterly filings. WEEKLY is already
+#                   four times faster than the data changes, and it is the run
+#                   that admits symbols new to the store.
+#
+#   annual results  balance sheet and cash flow. WEEKLY, and generous: NSE's
+#                   period=Annual endpoint stops at FY2024 for every symbol, so
+#                   there is nothing newer to find. It runs at all so that a
+#                   restored source is picked up without anyone remembering to.
+#
+# --refresh NEVER TOUCHES THE NETWORK. It joins the two stores and writes the
+# cache the gate reads, so it must run after both, and it is the only step whose
+# failure leaves the gate blocking.
+
+# ── daily: announcements, then rebuild the cache ──────────────────
+# 03:00 IST — announcements for every symbol already in the store
+30 21 * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.tier1_fetch --all --announcements-only >> /home/ubuntu/logs/tier1_announcements.log 2>&1
+
+# 04:10 IST — join both stores into the gate cache. Runs every day even when
+# neither fetch changed anything, because PARSER_VERSION may have moved with a
+# deploy and a cache written by an older parser blocks the whole universe.
+40 22 * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fundamentals --refresh >> /home/ubuntu/logs/fundamentals_refresh.log 2>&1
+
+# ── weekly: the full fetches ──────────────────────────────────────
+# Sunday 01:30 IST — annual filings
+0 20 * * 6 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fundamentals_fetch --all >> /home/ubuntu/logs/fundamentals_annual.log 2>&1
+
+# Sunday 02:30 IST — shareholding + announcements, full refetch
+0 21 * * 6 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.tier1_fetch --all --refetch >> /home/ubuntu/logs/tier1_full.log 2>&1

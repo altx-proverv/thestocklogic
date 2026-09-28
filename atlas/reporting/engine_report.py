@@ -207,6 +207,23 @@ def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
         out.append("")
         out.extend(batch_lines)
 
+    # ── and the fundamentals cache, for the same reason ────────────
+    # BLOCKED_NO_FUNDAMENTALS means the gate never assessed anything: the cache
+    # is missing, unreadable or stale. Left in the skip tally it reads as a day
+    # the universe deteriorated, which is the one thing it must never look like.
+    no_fund = [r for r in rows if r.get("status") == "BLOCKED_NO_FUNDAMENTALS"]
+    if no_fund:
+        out.append("")
+        out.append(f"🔴 <b>FUNDAMENTALS CACHE UNAVAILABLE — {len(no_fund)} "
+                   f"symbol(s) blocked without being assessed.</b>")
+        out.append("Nothing was judged on its fundamentals today. This is a "
+                   "missing or stale cache, NOT a universe that deteriorated.")
+        out.append(f"  {(no_fund[0].get('reason') or '')[:160]}")
+        out.append("")
+        out.append("Check:  ls -l data/processed/fundamentals.json")
+        out.append("        python3 -m engine.tier1_fetch --all &amp;&amp; "
+                   "python3 -m engine.fundamentals --refresh")
+
     # ── engine ───────────────────────────────────────────────────
     out.append("")
     out.append("<b>ENGINE</b>")
