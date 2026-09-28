@@ -15,7 +15,7 @@ import os
 import sys
 import time
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -42,7 +42,16 @@ log = logging.getLogger(__name__)
 
 # ── CONFIG ────────────────────────────────────────────────────────
 START_DATE    = date(2023, 1, 1)
-END_DATE      = date.today()
+
+# IST, because the box runs UTC and every NSE time below is an IST one.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# NSE publishes the day's bhavcopy in the evening, well after the 15:30 close.
+# Asked for it earlier, the archive answers with an ERROR PAGE, and bhavcopy_save
+# writes that HTML to disk under a .csv name. 18:00 IST is conservative: the EOD
+# chain runs at 18:35, and a file that is a few hours late is a gap the next run
+# fills, while a cached error page is permanent.
+BHAVCOPY_READY_IST_HOUR = 18
 RAW_DIR       = Path("data/raw/bhavcopy")
 PROCESSED_DIR = Path("data/processed")
 STOCKS_DIR    = Path("data/processed/stocks")
@@ -65,6 +74,28 @@ except ModuleNotFoundError:
 
 
 # ── HELPERS ───────────────────────────────────────────────────────
+
+def last_requestable_session(now: datetime = None) -> date:
+    """
+    The newest session whose bhavcopy can exist yet.
+
+    THE BUG THIS CLOSES. END_DATE was date.today(), so any run requested today's
+    file whatever the time. A 09:30 IST run on 2026-09-28 asked for a session that
+    had not happened, NSE served an error page, and it was cached under
+    cm28Sep2026bhav.csv -- permanently, because download_all treats existence as
+    success. One mid-session run poisons that date for good.
+
+    Before the publish hour, today is simply not asked for. The next evening run
+    picks it up, which is the run that was always going to produce the signals.
+    """
+    now = now or datetime.now(IST)
+    d = now.date()
+    if is_trading_day(d) and now.hour < BHAVCOPY_READY_IST_HOUR:
+        d -= timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
 
 def get_trading_days(start: date, end: date) -> list:
     days, cur = [], start
@@ -159,26 +190,68 @@ def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
 # ── STEP 1: DOWNLOAD ──────────────────────────────────────────────
 
 def download_all(trading_days: list) -> dict:
-    """Downloads all Bhavcopy CSVs. Returns {date: True/False}."""
+    """
+    Downloads all Bhavcopy CSVs. Returns {date: True/False}.
+
+    EXISTENCE IS NOT SUCCESS, which is what made a single bad fetch permanent.
+    Two separate guards, because they fail at different moments:
+
+      AT WRITE TIME   a payload that is not a bhavcopy is deleted immediately and
+                      counted as failed. bhavcopy_save writes whatever NSE
+                      returns, so an error page lands as a .csv and every later
+                      run skips it. Refusing to cache it is the only point at
+                      which that is cheap -- and unlinking something this
+                      function just wrote is not touching history.
+
+      AT SKIP TIME    an ALREADY cached bad file is reported, loudly, and counted
+                      as failed rather than success. It is NOT deleted here:
+                      repair_bhavcopy owns that on purpose, because deleting and
+                      re-downloading is not something a nightly job should do on
+                      its own initiative. What this must not do is keep calling it
+                      a success, which is how two real sessions went missing from
+                      every parquet in the universe without anyone noticing.
+    """
+    try:
+        from engine.repair_bhavcopy import is_bad
+    except ModuleNotFoundError:
+        from repair_bhavcopy import is_bad
+
     results = {}
-    missing = []
+    missing, poisoned = [], []
 
     for d in tqdm(trading_days, desc="Downloading Bhavcopy"):
         fname = csv_filename(d)
         fpath = RAW_DIR / fname
 
         if fpath.exists():
-            results[d] = True
+            why = is_bad(fpath)
+            if why:
+                results[d] = False
+                poisoned.append((d, why))
+                log.error(f"CACHED FILE IS NOT A BHAVCOPY: {fname} — {why}. "
+                          f"Not counted as downloaded.")
+            else:
+                results[d] = True
             continue
 
         try:
             bhavcopy_save(d, str(RAW_DIR))
-            if fpath.exists():
-                results[d] = True
-            else:
+            if not fpath.exists():
                 results[d] = False
                 missing.append(d)
                 log.warning(f"MISSING after download: {d}")
+            else:
+                why = is_bad(fpath)
+                if why:
+                    # Never cache junk. This is the fix for the whole class: the
+                    # file is gone before any later run can mistake it for data.
+                    fpath.unlink()
+                    results[d] = False
+                    missing.append(d)
+                    log.warning(f"REJECTED {d}: NSE did not return a bhavcopy "
+                                f"({why}) — discarded, not cached")
+                else:
+                    results[d] = True
         except Exception as e:
             results[d] = False
             missing.append(d)
@@ -190,6 +263,12 @@ def download_all(trading_days: list) -> dict:
     log.info(f"Downloaded: {success}/{len(trading_days)} days")
     if missing:
         log.warning(f"Missing {len(missing)} days: {missing[:5]}{'...' if len(missing)>5 else ''}")
+    if poisoned:
+        log.error(f"{len(poisoned)} CACHED FILE(S) ARE NOT BHAVCOPIES and every "
+                  f"session they cover is absent from every parquet:")
+        for d, why in poisoned[:10]:
+            log.error(f"    {d}  {why}")
+        log.error("    Fix: python3 -m engine.repair_bhavcopy --fix")
     return results
 
 
@@ -476,12 +555,21 @@ def validate():
 
 def main():
     log.info("THE STOCK LOGIC — Stage 1b: Bhavcopy Download")
-    log.info(f"Range: {START_DATE} to {END_DATE}")
+    end = last_requestable_session()
+    now_ist = datetime.now(IST)
+    log.info(f"Range: {START_DATE} to {end}  "
+             f"(now {now_ist:%Y-%m-%d %H:%M} IST)")
+    if end != now_ist.date():
+        log.info(f"today ({now_ist.date()}) is not requested: "
+                 + ("its session has not closed and the bhavcopy is published "
+                    f"after {BHAVCOPY_READY_IST_HOUR}:00 IST"
+                    if is_trading_day(now_ist.date())
+                    else "not an NSE trading day"))
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     STOCKS_DIR.mkdir(parents=True, exist_ok=True)
 
-    trading_days = get_trading_days(START_DATE, END_DATE)
+    trading_days = get_trading_days(START_DATE, end)
     log.info(f"Trading days: {len(trading_days)}")
 
     # Step 1: Download

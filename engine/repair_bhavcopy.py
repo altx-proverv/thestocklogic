@@ -147,6 +147,35 @@ def repair(only: str = None, raw_dir: Path = RAW_DIR, fix: bool = False) -> dict
     except ModuleNotFoundError:
         from data_manifest import record_repair, record_gap
 
+    # A date whose bhavcopy cannot exist yet must not be re-fetched. Without
+    # this, --fix run during market hours on today's file unlinks it, asks NSE
+    # again, gets the same error page, and RECORDS A GAP -- which asserts that
+    # NSE had no data for that session and that every signal on the next one was
+    # computed without it. Neither is true: it simply has not been published.
+    # A false gap in the ledger is worse than the bad file it replaced.
+    try:
+        import importlib.util as _il
+        _sp = _il.spec_from_file_location("b01d", ROOT / "engine/01b_download_bhavcopy.py")
+        _b01 = _il.module_from_spec(_sp)
+        _sp.loader.exec_module(_b01)
+        newest = _b01.last_requestable_session()
+    except Exception as e:
+        log.warning(f"cannot determine the newest requestable session ({e}) — "
+                    f"proceeding, a premature re-fetch will look like a gap")
+        newest = None
+
+    if newest is not None:
+        early = [b for b in trading if b[1] > newest]
+        if early:
+            trading = [b for b in trading if b[1] <= newest]
+            for f, d, reason, _ in early:
+                print(f"  HELD     {f.name:<24} {d}  its bhavcopy is not "
+                      f"published yet (newest available: {newest})")
+            print(f"\n  {len(early)} file(s) held back rather than re-fetched. "
+                  f"Re-run after {_b01.BHAVCOPY_READY_IST_HOUR}:00 IST; recording "
+                  f"a gap now would claim NSE has no data for a session that has "
+                  f"simply not been published.")
+
     repaired, gaps = [], []
     for f, d, reason, _ in trading:
         print(f"\n  re-fetching {d} ...")

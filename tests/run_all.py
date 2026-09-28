@@ -31,6 +31,7 @@ SUITES = [
     ("smc equivalence", [sys.executable, "tests/test_smc_equivalence.py",
                          "--limit", "40"]),
     ("bhavcopy layouts", [sys.executable, "tests/test_bhavcopy_layouts.py"]),
+    ("bhavcopy guard",  [sys.executable, "tests/test_bhavcopy_guard.py"]),
     ("exclusion block",  [sys.executable, "tests/test_exclusion_block.py"]),
     ("universe idempotency", [sys.executable, "tests/test_universe_idempotency.py"]),
     ("fundamentals",    [sys.executable, "tests/test_fundamentals.py"]),
