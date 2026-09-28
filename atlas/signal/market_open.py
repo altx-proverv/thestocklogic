@@ -146,10 +146,19 @@ def alert(kind: str, text: str, key: str = "") -> None:
     # from it -- a suppressed alert is still a failure that happened.
     if _session is not None:
         _session.note_failure(kind)
+    # send() DOES NOT RAISE. It catches its own exceptions and returns False --
+    # including the "Telegram not configured" path, which only logs a warning. So
+    # this except clause could never fire, and the return value being discarded
+    # meant a failing Telegram made every alert in ATLAS a no-op that reported
+    # success. An alert you cannot tell was never delivered is not an alert.
     try:
-        send(f"<b>ATLAS — {kind}</b>\n{text}")
+        delivered = send(f"<b>ATLAS — {kind}</b>\n{text}")
     except Exception as e:
+        delivered = False
         log.error(f"could not send alert: {e}")
+    if not delivered:
+        log.error(f"ALERT NOT DELIVERED [{kind}] {text} — Telegram send failed or "
+                  f"is unconfigured. This alert exists only in this journal.")
 
 
 # ══════════════════════════════════════════════════════════════════

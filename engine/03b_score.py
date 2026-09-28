@@ -10,6 +10,7 @@ import os, sys, logging, warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from collections import Counter
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -531,6 +532,35 @@ def build_playbooks(scored: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(all_plays, ignore_index=True)
 
 
+def tally(df: pd.DataFrame, stats: dict, dq_reasons) -> None:
+    """
+    Accumulate report COUNTS from a full scored batch, before it is reduced to
+    its qualifying rows.
+
+    THIS EXISTS BECAUSE THE REPORT CANNOT BE COMPUTED FROM `scored`. Only
+    qualifying rows survive into it, so every statistic derived from it was
+    structurally fixed: "Qualifying: N (100.0%)", "Disqualified: 0", and an
+    empty disqualification breakdown, on every run since the engine was written.
+    A number that can only ever say one thing is worse than no number, because
+    it reads as a healthy result.
+
+    Counts, not rows, so peak memory stays O(batch) and this does not undo the
+    batching it sits inside.
+    """
+    live = df[~df["is_warmup"]] if "is_warmup" in df.columns else df
+    if not len(live):
+        return
+    q = live["qualifies"].fillna(False).astype(bool)
+    d = (live["disqualified"].fillna(False).astype(bool)
+         if "disqualified" in live.columns
+         else pd.Series(False, index=live.index))
+    stats["live"] += len(live)
+    stats["qual"] += int(q.sum())
+    stats["dq"]   += int(d.sum())
+    if "disqualify_reason" in live.columns:
+        dq_reasons.update(live.loc[d, "disqualify_reason"].dropna().astype(str))
+
+
 def main():
     log.info("THE STOCK LOGIC — Stage 3b: SMC Trade Scoring Engine (Vectorized)")
     SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -549,16 +579,22 @@ def main():
     log.info("\n── Steps 1+2: Loading and scoring, batch at a time ──")
     batch_size = 100
     all_qualifying = []
+    # Report counts, tallied per batch while the full frame is still in hand.
+    # See tally() for why the report cannot be derived from `scored`.
+    stats = {"live": 0, "qual": 0, "dq": 0}
+    dq_reasons = Counter()
 
     for n, total, batch in smc_batches(batch_size):
         log.info(f"Batch {n}/{total}: {batch['symbol'].nunique()} stocks, "
                  f"{len(batch):,} rows")
 
         longs = process_direction(batch, "long", sector_bias, symbol_sector)
+        tally(longs, stats, dq_reasons)
         longs_q = longs[longs["qualifies"]].copy()
         del longs
 
         shorts = process_direction(batch, "short", sector_bias, symbol_sector)
+        tally(shorts, stats, dq_reasons)
         shorts_q = shorts[shorts["qualifies"]].copy()
         del shorts
         del batch
@@ -583,17 +619,23 @@ def main():
         log.info(f"Playbooks: {playbooks['playbook_date'].nunique()} days, "
                  f"{len(playbooks)} signals")
 
-    # Report
-    live = scored[~scored["is_warmup"]]
-    q    = live[live["qualifies"]]
-    dq   = live[live["disqualified"]]
+    # Report. The COUNTS come from the per-batch tally, which saw every scored
+    # row; `q` is the surviving qualifying frame and is used only where the rows
+    # themselves are needed (score distribution, setups).
+    q = scored[~scored["is_warmup"]] if len(scored) else scored
+    n_live, n_q, n_dq = stats["live"], stats["qual"], stats["dq"]
 
     log.info(f"\n{'='*60}")
     log.info("SIGNAL ENGINE REPORT")
     log.info(f"{'='*60}")
-    log.info(f"  Total stock-days  : {len(live):,}")
-    log.info(f"  Qualifying signals: {len(q):,} ({len(q)/max(len(live),1)*100:.1f}%)")
-    log.info(f"  Disqualified      : {len(dq):,} ({len(dq)/max(len(live),1)*100:.1f}%)")
+    log.info(f"  Total stock-days  : {n_live:,}")
+    log.info(f"  Qualifying signals: {n_q:,} ({n_q/max(n_live,1)*100:.1f}%)")
+    log.info(f"  Disqualified      : {n_dq:,} ({n_dq/max(n_live,1)*100:.1f}%)")
+    # The three must account for every scored row. If they do not, a row was
+    # neither qualified nor disqualified and the scoring block has a hole in it.
+    if n_live and n_q + n_dq != n_live:
+        log.warning(f"  ⚠️ {n_live - n_q - n_dq:,} row(s) neither qualified nor "
+                    f"disqualified — the scoring block is not exhaustive")
 
     if len(q):
         log.info(f"\n  Score distribution:")
@@ -609,7 +651,7 @@ def main():
             log.info(f"    {d}: {len(sub)} signals, avg score {sub['total_score'].mean():.1f}")
 
     log.info(f"\n  Disqualification breakdown:")
-    for reason, cnt in dq["disqualify_reason"].value_counts().items():
+    for reason, cnt in dq_reasons.most_common():
         log.info(f"    {reason:<30}: {cnt:,}")
 
     log.info(f"\n  Top setups:")
@@ -638,7 +680,7 @@ def main():
                 f"{r.get('setup_name','')}"
             )
 
-    log.info(f"\nSTATUS: {'PASS' if len(q)>0 else 'FAIL'}")
+    log.info(f"\nSTATUS: {'PASS' if n_q>0 else 'FAIL'}")
     log.info("Next: python3 engine/06_push_supabase.py")
 
 

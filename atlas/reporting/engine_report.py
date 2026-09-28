@@ -122,6 +122,60 @@ def expected_cycles(sess: dict) -> int:
         return 0
 
 
+def batch_health(day: date, sess: dict) -> tuple:
+    """
+    (ok, lines) for the signal batch the loop was working from.
+
+    THE CHECK THAT WAS MISSING. The report printed `batch —` every day for the
+    eighteen sessions 03b was crashing on cleanup, and said nothing about it. An
+    em-dash in a field is not an alarm: it reads as "nothing to report", which is
+    exactly the opposite of what it meant. A missing batch, or one older than the
+    last trading session, is the EOD pipeline being down, and that is the single
+    most consequential thing this report can tell you -- every other number below
+    it is describing an engine that had nothing to work with.
+
+    The expected batch is the PREVIOUS trading day's: the EOD chain runs in the
+    evening on day D and publishes signals dated D, which the loop trades on D+1.
+    Anything older is stale. Same-day or newer is fine and not flagged.
+    """
+    raw = str((sess or {}).get("batch_date") or "").strip()
+    try:
+        from trading_calendar import prev_trading_day
+        expected = prev_trading_day(day)
+    except Exception as e:
+        log.error(f"trading calendar unreadable ({e}) — cannot age the batch")
+        expected = None
+
+    if not raw or raw.lower() in ("none", "—", "-"):
+        return False, [
+            "🔴 <b>NO SIGNAL BATCH TODAY.</b>",
+            "The loop had no published signals to work from, so every number "
+            "below describes an engine with nothing to do. This is the EOD "
+            "pipeline, not the market.",
+            "",
+            "Check:  journalctl -u atlas-market-hours --since today | grep -i batch",
+            "        python3 engine/03b_score.py &amp;&amp; python3 engine/06_push_supabase.py",
+        ]
+    try:
+        bd = date.fromisoformat(raw[:10])
+    except ValueError:
+        return False, [f"🔴 <b>BATCH DATE UNREADABLE:</b> {raw!r}.",
+                       "Treated as no batch. Nothing should be trusted below."]
+
+    if expected and bd < expected:
+        age = (day - bd).days
+        return False, [
+            f"🔴 <b>STALE BATCH — {bd} is {age} day(s) old.</b>",
+            f"The newest published signals predate the last trading session "
+            f"({expected}). The EOD chain has not produced a batch since then; "
+            f"the loop is running against signals that have already aged out.",
+            "",
+            "Check:  journalctl -u atlas-market-hours --since today | grep -i batch",
+            "        python3 engine/03b_score.py &amp;&amp; python3 engine/06_push_supabase.py",
+        ]
+    return True, []
+
+
 def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
     mode = sess.get("mode") or ("LIVE" if LIVE_TRADING_ENABLED else "SHADOW")
     title = "ATLAS DAILY REPORT"
@@ -146,6 +200,12 @@ def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
         return "\n".join(head)
 
     out = list(head)
+
+    # ── the batch, FIRST, because it invalidates everything under it ───
+    batch_ok, batch_lines = batch_health(day, sess)
+    if not batch_ok:
+        out.append("")
+        out.extend(batch_lines)
 
     # ── engine ───────────────────────────────────────────────────
     out.append("")
@@ -315,12 +375,17 @@ def run(day: date = None, dry: bool = False) -> int:
     log_ok, rows = load_decisions(day)
     body = compose(day, sess, log_ok, rows)
 
+    # A bad batch also fails the UNIT, so `systemctl --failed` and the journal
+    # carry it too. A report that has to be read to be noticed is one holiday
+    # away from eighteen days of not being noticed.
+    batch_ok, _ = batch_health(day, sess) if (sess or rows) else (False, None)
+
     if len(body) > TELEGRAM_LIMIT:
         body = body[:TELEGRAM_LIMIT] + "\n… truncated"
 
     if dry:
         print(body)
-        return 0
+        return 0 if batch_ok else 2
 
     from atlas.reporting.telegram import send
     ok = send(body)
@@ -329,6 +394,10 @@ def run(day: date = None, dry: bool = False) -> int:
         print(body)
         return 1
     log.info(f"engine report sent for {day}")
+    if not batch_ok:
+        log.error("signal batch missing or stale — reported, exiting non-zero "
+                  "so the unit shows it too")
+        return 2
     return 0
 
 
