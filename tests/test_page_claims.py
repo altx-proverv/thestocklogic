@@ -149,6 +149,37 @@ def main() -> int:
               f"{'ok' if good else '** FAILS **'}")
 
     print()
+    print("A STALE BATCH SAYS SO, RATHER THAN POSING AS TODAY'S")
+    print("-" * 78)
+    # sessionDate is derived from batchDate, so a stale batch labelled itself for
+    # whatever session followed it: with nothing published since 25 Sep the page
+    # read "TODAY'S TRADES - Mon, 28 Sep" on the 28th and again on the 29th.
+    check("the page computes an expected session of its own",
+          "expectedSession" in signals)
+    check("  and compares the batch against it", "isStale" in signals)
+    check("  distinguishing 'not published yet' from 'published nothing'",
+          "19*60" in signals.replace(" ", ""),
+          "the 18:35 chain, so no alarm between 15:15 and the evening run")
+    check("the stale state names the session with no signals",
+          "NOTHING PUBLISHED FOR" in signals)
+    check("  and labels the old cards as the last batch",
+          "LAST PUBLISHED BATCH" in signals)
+    check("  carrying the regime when one is known",
+          "market_direction" in signals and "regime " in signals)
+    # the scenarios run against the PAGE'S OWN functions, not a copy
+    import shutil, subprocess
+    if shutil.which("node"):
+        r = subprocess.run(["node", str(ROOT / "tests/signals_batch_state.js")],
+                           capture_output=True, text=True)
+        check("node scenario suite passes", r.returncode == 0,
+              (r.stdout.strip().splitlines() or [""])[-1])
+        if r.returncode != 0:
+            print(r.stdout[-900:])
+    else:
+        # The AWS box has no node. Say so rather than reporting a pass.
+        print(f"  {'node scenario suite':<56}SKIPPED  node not installed")
+
+    print()
     print("THE DEPLOY CAN REACH THE RUNNING LISTENER")
     print("-" * 78)
     wd = read("scripts/bot_watchdog.sh")

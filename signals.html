@@ -814,9 +814,49 @@ async function render(){
   var displayEOD=watchlistEOD;
   var sessionDate=nextTD(batchDate);
   var isWatchlist=batchDate>=today;
-  var secLabel=isWatchlist?"TOMORROW'S WATCHLIST":"TODAY'S TRADES";
-  var secDate=(isWatchlist?'For ':'')+fmtDate(sessionDate);
-  var allToday=displayEOD.concat(todayLive);
+
+  // A BATCH THAT IS TOO OLD MUST SAY SO.
+  //
+  // sessionDate is derived from batchDate, so a stale batch happily labelled
+  // itself for whatever session followed it: with nothing published since 25
+  // Sep, the page read "TODAY'S TRADES - Mon, 28 Sep" on the 28th, and went on
+  // reading it on the 29th. Nothing distinguished "here are today's signals"
+  // from "nothing was published, here are the last ones" -- the second is a
+  // statement about the pipeline or the market, and it was being rendered as
+  // the first.
+  //
+  // expectedSession is the session a reader is entitled to signals FOR. The EOD
+  // chain runs at 18:35 IST and stamps the evening it ran, so before ~19:00 the
+  // current batch is the one for today; after it, for the next session. Without
+  // that split, every afternoon between the 15:15 close and the evening run
+  // would look like a failure when it is simply not published yet.
+  function weekdayOrNext(ds){
+    var p=ds.split('-'),d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+    return (d.getUTCDay()===0||d.getUTCDay()===6)?nextTD(ds):ds;
+  }
+  var _published=_istMin>=19*60;           // the 18:35 chain, with slack
+  var expectedSession=_published?nextTD(today):weekdayOrNext(today);
+  // NOTE: nextTD skips weekends only. On an NSE holiday expectedSession is a day
+  // early and this reports a missing batch that was never due. The holiday list
+  // lives in engine/trading_calendar.py and is not served to the browser.
+  var isStale=sessionDate<expectedSession;
+
+  // The reason, only when we actually have one. 06_push suppresses LONG signals
+  // in a bearish regime, which is the common way a batch comes out empty, and
+  // the heatmap is already loaded. Stated as an observation -- "regime bearish"
+  // -- not as a proven cause, because the page cannot know why the chain
+  // published nothing, only what the regime was.
+  var _regime=(sectors&&sectors.length&&sectors[0].market_direction)||'';
+  var staleReason=_regime?' &middot; regime '+String(_regime).toLowerCase():'';
+
+  var secLabel=isStale?'NO SIGNALS':(isWatchlist?"TOMORROW'S WATCHLIST":"TODAY'S TRADES");
+  var secDate=isStale
+    ?('for '+fmtDate(expectedSession)+staleReason)
+    :((isWatchlist?'For ':'')+fmtDate(sessionDate));
+  // The summary counter must agree with the headline. On a stale batch it was
+  // still totalling the OLD signals, so the page said "NO SIGNALS" above a
+  // counter reading 5 up -- the same contradiction one element lower down.
+  var allToday=isStale?[]:displayEOD.concat(todayLive);
   var lc=allToday.filter(function(s){return s.direction==='LONG';}).length;
   var sc=allToday.filter(function(s){return s.direction==='SHORT';}).length;
   document.getElementById('mCount').innerHTML='<span style="color:var(--green)">'+lc+' ↑</span><span style="color:var(--muted2)"> | </span><span style="color:var(--red)">'+sc+' ↓</span>';
@@ -930,7 +970,23 @@ async function render(){
     return h;
   }
 
-  html+=buildSection(watchlistEOD,todayLive,secLabel,secDate,false);
+  if(isStale){
+    // Two separate statements, never one: what was NOT published, and then what
+    // is being shown instead. Folded together they read as today's signals.
+    html+='<div class="sec-header"><span class="sec-badge today" '
+        +'style="color:var(--amber);border-color:rgba(245,132,69,0.4);'
+        +'background:rgba(245,132,69,0.1)">'+secLabel+'</span>'
+        +'<span class="sec-date">'+secDate+'</span></div>'
+        +'<div class="stay-cash"><h3>NOTHING PUBLISHED FOR '
+        +fmtDate(expectedSession).toUpperCase()+'</h3><p>The last batch was '
+        +fmtDate(batchDate)+', for '+fmtDate(sessionDate)+'. '
+        +'These are those signals, not today&rsquo;s.</p></div>';
+    html+=buildSection(watchlistEOD,[],'LAST PUBLISHED BATCH',
+                       fmtDate(batchDate)+' &rarr; for '+fmtDate(sessionDate),
+                       true);
+  } else {
+    html+=buildSection(watchlistEOD,todayLive,secLabel,secDate,false);
+  }
 
   // Live signals date map for archive
   window.byLiveDate={};
