@@ -480,8 +480,23 @@ def process_direction(combined: pd.DataFrame, direction: str,
 
     df["setup_name"] = determine_setup_names(df)
 
-    # Compute levels for qualifying signals
-    qual_mask = df["qualifies"]
+    # Compute levels for qualifying signals.
+    #
+    # THE MASK MUST BE A SNAPSHOT, NOT A VIEW. df["qualifies"] returns a Series
+    # backed by the same data as the column, and the loop below WRITES
+    # "qualifies" -- zone validation rejects rows, setting some to False. With a
+    # view, that write shrinks the mask itself, and then:
+    #   - the next column assignment has fewer keys than values and raises
+    #     "Must have equal len keys and value when setting with an iterable", or
+    #   - worse, when only some rows are invalidated it does not raise: the
+    #     columns listed AFTER "qualifies" -- disqualified, disqualify_reason --
+    #     get written against the shrunken mask, landing on the wrong rows.
+    #
+    # It survived because on the box no qualifying row was being invalidated
+    # here, so the mask never moved. The first day zone validation rejected one
+    # would have been a crash or silent misalignment. to_numpy(copy=True)
+    # freezes it.
+    qual_mask = df["qualifies"].to_numpy(dtype=bool, copy=True)
     if qual_mask.sum() > 0:
         levels = compute_trade_levels_vectorized(df[qual_mask].copy())
         for col in ["entry_ref","entry_low","entry_high","sl","stop_pct",
@@ -556,7 +571,6 @@ def main():
         log.error("no SMC data scored — is data/processed/smc populated?")
         return
     scored = pd.concat(all_qualifying, ignore_index=True)
-    del all_qualifying
     del all_qualifying
     log.info(f"Total qualifying: {len(scored):,}")
     scored.to_parquet(SIGNALS_DIR / "all_scores_v2.parquet", index=False)
