@@ -77,7 +77,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
     MAX_TRADES_PER_DAY, BLOCKING_STATUSES,
-    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
+    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO, ALLOW_SHORT_ENTRIES,
     ALLOW_LONG_IN_BULLISH,
     ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
     DEFAULT_ON_UNKNOWN_REGIME,
@@ -323,6 +323,16 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
         # The branch is kept rather than deleted so the reason survives with
         # it, and so a future regime change makes the consequence visible
         # instead of silently re-enabling a side nobody decided to re-enable.
+        # FIRST, AND UNCONDITIONALLY. Everything below is kept for the record of
+        # what the rule was, but this line is what makes a short unreachable, and
+        # it does so without depending on any other module's classification. The
+        # two conditions below are individually satisfiable -- a bull +
+        # extreme_bearish context passes both -- so they were never the guarantee
+        # they read as. See ALLOW_SHORT_ENTRIES in atlas/config.
+        if not ALLOW_SHORT_ENTRIES:
+            return (False, "short entries are disabled -- a published short is "
+                           "information for the reader, not an instruction",
+                    "CONFIG")
         if regime != "bull":
             return (False, f"regime {regime} -- entries require bull", "REGIME")
         if REQUIRE_EXTREME_BEARISH_FOR_SHORTS and not ctx.get("extreme_bearish"):

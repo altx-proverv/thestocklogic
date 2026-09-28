@@ -180,6 +180,29 @@ def main() -> int:
         print(f"  {'node scenario suite':<56}SKIPPED  node not installed")
 
     print()
+    print("THE REGIME IS CONTEXT, NOT A FILTER ON WHAT IS SHOWN")
+    print("-" * 78)
+    check("the page marks counter-trend signals", "counterTrend" in signals)
+    check("  de-emphasising rather than hiding them",
+          "sc-counter" in signals and "opacity" in signals)
+    check("  and labelling them on the card", "COUNTER-TREND" in signals)
+    check("a regime banner frames every signal list", "regimeBanner" in signals)
+    check("  naming what ATLAS will and will not act on",
+          "ATLAS" in signals and "not instructions" in signals)
+    # A short on the screener is information. The page must not read as a
+    # short instruction, and the entry path must be unable to take one --
+    # that half is proved in tests/test_regime_gate.py.
+    from atlas.config import ALLOW_SHORT_ENTRIES
+    check("short ENTRIES are disabled in config", ALLOW_SHORT_ENTRIES is False)
+    from atlas.execution.atlas_entry import regime_allows_side
+    worst = {"regime": "bull", "extreme_bearish": True, "source": "market.parquet",
+             "advance_count": 1500, "decline_count": 500,
+             "nifty_close": 25000, "nifty_20dma": 24000}
+    allowed, why, blocked = regime_allows_side(worst, "SHORT")
+    check("  and the most permissive context still blocks a short",
+          allowed is False, f"blocked_by={blocked}")
+
+    print()
     print("THE DEPLOY CAN REACH THE RUNNING LISTENER")
     print("-" * 78)
     wd = read("scripts/bot_watchdog.sh")

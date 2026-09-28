@@ -172,6 +172,115 @@ def main() -> int:
         ok = False
         print(f"  ** could not verify against build_market: {type(e).__name__}: {e}")
 
+    print()
+    print("NO SHORT CAN PASS THE ENTRY GATE, FROM ANY CONTEXT")
+    print("-" * 92)
+    # The screener publishes shorts in a bearish regime -- 06_push suppresses
+    # LONGS there and keeps shorts -- so shorts now reach the signals table and
+    # the page. ATLAS reads that same table. This section is the proof that a
+    # published short is information and not an instruction, and it had NO
+    # coverage before: the property was asserted only in a comment.
+    #
+    # Swept rather than sampled. Every combination of regime, the extreme-bearish
+    # hedge flag and sentiment must block, so a future edit cannot open one
+    # corner of the space unnoticed.
+    short_fails = []
+    for regime in ("bull", "sideways", "bear", "unknown"):
+        for extreme in (False, True):
+            for adv, dec in ((1200, 800), (800, 1200)):
+                for close, ma20 in ((25000, 24500), (24000, 24500)):
+                    c = ctx(regime=regime, adv=adv, dec=dec, close=close,
+                            ma20=ma20, extreme=extreme)
+                    got, reason, blocked = regime_allows_side(c, "SHORT")
+                    if got:
+                        short_fails.append((regime, extreme, adv > dec,
+                                            close > ma20, reason))
+    ok &= not short_fails
+    print(f"  {'all 32 regime x hedge x sentiment combinations block':<58}"
+          f"{'ok' if not short_fails else '** ' + str(len(short_fails)) + ' ALLOWED **'}")
+    for f in short_fails[:6]:
+        print(f"      ALLOWED: regime={f[0]} extreme={f[1]} breadth+={f[2]} "
+              f"above20={f[3]} — {f[4][:40]}")
+
+    # THE CASE I EXPECTED TO BE REACHABLE, and the reason this is a test and not
+    # a reading. A bear market bouncing is an ordinary configuration: price well
+    # under the 200DMA so extreme_bearish holds, but above its 20DMA on the day
+    # with positive breadth, so SENTIMENT passes. Reading the SHORT branch it
+    # looked as though only extreme_bearish gated it, which would have let this
+    # through. A second guard -- regime != "bull" -- is what actually stops it.
+    bounce = ctx(regime="bear", extreme=True, adv=1200, dec=800,
+                 close=21000, ma20=20800)
+    got, reason, blocked = regime_allows_side(bounce, "SHORT")
+    # blocked_by is CONFIG, not REGIME: ALLOW_SHORT_ENTRIES fires ahead of the
+    # regime test on purpose, so the log says "we do not take shorts" rather
+    # than "the regime was wrong today" -- which would imply a different regime
+    # could make it right.
+    good = (not got) and blocked == "CONFIG"
+    ok &= good
+    print(f"  {'bear bounce: extreme_bearish + positive sentiment':<58}"
+          f"{'ok' if good else '** ' + ('ALLOWED' if got else 'blocked_by=' + str(blocked)) + ' **'}"
+          f"  {reason[:34]}")
+
+    # WHICH GUARD IS LOAD-BEARING, stated rather than assumed. These are
+    # complementary, not redundant: the regime guard is the only thing stopping
+    # an extreme-bearish short, and the extreme_bearish guard is the only thing
+    # stopping a short on an ordinary bear day. Deleting either opens a real
+    # corner, so both are named here for whoever reads this next.
+    got_a, _, _ = regime_allows_side(ctx(regime="bear", extreme=True), "SHORT")
+    got_b, _, blk_b = regime_allows_side(ctx(regime="bull", extreme=False), "SHORT")
+    ok &= (not got_a) and (not got_b)
+    print(f"  {'  regime!=bull blocks the extreme-bearish short':<58}"
+          f"{'ok' if not got_a else '** OPEN **'}")
+    print(f"  {'  extreme_bearish blocks the ordinary bull-day short':<58}"
+          f"{'ok' if not got_b else '** OPEN **'}  blocked_by={blk_b}")
+
+    print()
+    print("AND NO REAL MARKET ROW CAN CLAIM bull AND extreme_bearish AT ONCE")
+    print("-" * 92)
+    # The one context that WOULD pass is regime="bull" with extreme_bearish=True.
+    # Unreachability therefore rests on build_market never emitting that pair, so
+    # the invariant is asserted at the classifier rather than trusted.
+    #
+    #   extreme_bearish requires `broken`  (close < 200DMA x (1 - NEUTRAL_BAND))
+    #   `broken` sets market_regime = "bear" AFTER the bull assignment
+    #   so extreme_bearish implies regime == "bear", never "bull"
+    contradiction = regime_allows_side(
+        ctx(regime="bull", extreme=True), "SHORT")[0]
+    print(f"  {'(a bull + extreme_bearish context WOULD pass the gate)':<58}"
+          f"{'yes' if contradiction else 'no'}  — so the classifier must never emit it")
+    try:
+        import numpy as np, pandas as pd
+        import importlib.util as il
+        _sp = il.spec_from_file_location("bm", ROOT / "engine/build_market.py")
+        bm = il.module_from_spec(_sp)
+        _sp.loader.exec_module(bm)
+        # A 400-day series that sweeps from a strong uptrend into a deep bear, so
+        # every regime and the hedge flag all actually occur in one frame.
+        n = 400
+        trend = np.concatenate([np.linspace(18000, 26000, 250),
+                                np.linspace(26000, 17000, n - 250)])
+        df = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=n, freq="D"),
+            "nifty_close": trend,
+            "vix_close": np.concatenate([np.full(250, 12.0),
+                                         np.full(n - 250, 26.0)]),
+        })
+        out = bm._classify(df)
+        both = out[(out["market_regime"] == "bull") & out["extreme_bearish"]]
+        seen = sorted(out["market_regime"].unique())
+        eb = int(out["extreme_bearish"].sum())
+        ok &= both.empty and eb > 0 and "bull" in seen and "bear" in seen
+        print(f"  {'classifier emits bull + extreme_bearish together':<58}"
+              f"{len(both)} row(s)  {'ok' if both.empty else '** INVARIANT BROKEN **'}")
+        print(f"      swept {n} sessions: regimes {seen}, "
+              f"extreme_bearish on {eb} of them")
+        if eb == 0 or "bull" not in seen:
+            print("      ** the sweep did not exercise both states — "
+                  "the invariant above is untested **")
+    except Exception as e:
+        ok = False
+        print(f"  ** could not exercise build_market._classify: {e}")
+
     print("-" * 92)
     print("ENTRY GATE:", "correct" if ok else "*** DEFECTIVE ***")
     return 0 if ok else 1

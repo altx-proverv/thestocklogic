@@ -104,6 +104,21 @@ nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-f
 .chip-long{background:var(--green2);color:var(--green);border-color:rgba(0,214,143,0.3)}
 .chip-short{background:var(--red2);color:var(--red);border-color:rgba(255,77,109,0.3)}
 .chip-neu{background:var(--sky2);color:var(--sky);border-color:rgba(59,169,238,0.2)}
+/* A counter-trend card is DE-EMPHASISED, never hidden. The screener reports what
+   it found; the regime is context for reading it, not a filter on it. */
+.sc-counter{opacity:.55;border-color:rgba(245,132,69,0.35)}
+.sc-counter:hover{opacity:1}
+.chip-counter{background:rgba(245,132,69,0.12);color:var(--amber);border-color:rgba(245,132,69,0.35)}
+.regime-ctx{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin:10px 0 4px;
+  padding:9px 12px;border:1px solid;border-radius:4px;font-size:12px}
+.regime-ctx .rc-label{font-family:var(--display);letter-spacing:2px;font-size:11px}
+.regime-ctx .rc-note{color:var(--muted)}
+.rc-bear{border-color:rgba(232,72,85,0.35);background:rgba(232,72,85,0.07)}
+.rc-bear .rc-label{color:var(--red)}
+.rc-bull{border-color:rgba(46,182,125,0.35);background:rgba(46,182,125,0.07)}
+.rc-bull .rc-label{color:var(--green)}
+.rc-side{border-color:rgba(59,169,238,0.3);background:rgba(59,169,238,0.07)}
+.rc-side .rc-label{color:var(--sky)}
 .chip-amb{background:var(--amber2);color:var(--amber);border-color:rgba(245,132,69,0.3)}
 .sc-bar{height:2px;background:var(--s3);margin:8px 0 0}
 .sc-bar-fill{height:100%;background:var(--sky)}
@@ -481,8 +496,48 @@ function outcomeBadge(s){
   return'';
 }
 
+/* THE REGIME IS CONTEXT, NOT A FILTER.
+   06_push still suppresses by regime before publishing, and the entry gate
+   blocks independently -- two answers to two different questions. What the page
+   adds is the reading: a signal that runs against the prevailing regime is shown
+   and marked, not dropped and not presented as though the regime agreed with it.
+   window._regimeNow is set in render() from the sector heatmap. */
+function regimeBanner(){
+  var r=(window._regimeNow||'').toUpperCase();
+  var cls,label,note;
+  if(r==='BEARISH'){
+    cls='rc-bear'; label='REGIME BEARISH';
+    note='Shorts run with the trend; longs run against it and are marked. '
+        +'ATLAS itself takes neither &mdash; it enters only in a bull regime with '
+        +'positive breadth. These are observations about the market, not instructions.';
+  } else if(r==='BULLISH'){
+    cls='rc-bull'; label='REGIME BULLISH';
+    note='Longs run with the trend; shorts run against it and are marked. '
+        +'ATLAS additionally requires positive same-day breadth before it enters.';
+  } else if(r){
+    cls='rc-side'; label='REGIME '+r;
+    note='Neither side is with or against the trend. ATLAS stays in cash: it '
+        +'enters only in a bull regime with positive breadth, so a signal here '
+        +'is a screener observation and nothing acts on it.';
+  } else {
+    cls='rc-side'; label='REGIME UNKNOWN';
+    note='The market regime could not be read, so no signal below can be placed '
+        +'in context. Treat the direction labels as unqualified.';
+  }
+  return '<div class="regime-ctx '+cls+'"><span class="rc-label">'+label
+        +'</span><span class="rc-note">'+note+'</span></div>';
+}
+
+function counterTrend(dir){
+  var r=(window._regimeNow||'').toUpperCase();
+  if(r==='BEARISH') return dir==='LONG';
+  if(r==='BULLISH') return dir==='SHORT';
+  return false;   /* sideways/mixed favours neither side */
+}
+
 function eodCard(s){
   var isL=s.direction==='LONG';
+  var ctr=counterTrend(s.direction);
   var isBTST=s.trade_type==='BTST';
   var sp=Math.min(100,((s.score||0)/100)*100);
   // The chip states the holding period, not a conviction level. "POTENTIAL
@@ -493,7 +548,8 @@ function eodCard(s){
     ?'<span class="chip" style="background:rgba(245,211,61,0.15);color:#F5D33D;border:1px solid rgba(245,211,61,0.5)">BUY TODAY &middot; SELL TOMORROW</span>'
     :(isL?'<span class="chip chip-neu">SWING</span>':'<span class="chip chip-neu" style="color:var(--red)">Intraday Short</span>');
   var cardBorder=isBTST?'style="border:2px solid rgba(59,169,238,0.5)"':'';
-  return '<div class="sc" data-direction="'+s.direction+'" onclick="openModal('+sj(s)+')" '+cardBorder+'><div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-setup">'+(s.setup_name||'&mdash;')+'</div></div><div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div><div class="sc-levels"><div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val lv-entry">&#8377;'+fmt(entryOf(s))+'</div></div><div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val lv-target">&#8377;'+fmt(s.target_1)+'</div></div><div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val lv-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="sc-body"><div class="sc-chips"><span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+dirLabel(s.direction)+'</span>'+typeChip+'</div><div class="sc-bar"><div class="sc-bar-fill" style="width:'+sp+'%"></div></div><div class="sc-meta" style="margin-top:8px"><span>Score <span>'+(s.score||'&mdash;')+'/100</span></span><span>Risk <span>&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></span></div></div><div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div></div>';
+  return '<div class="sc'+(ctr?' sc-counter':'')+'" data-direction="'+s.direction+'" onclick="openModal('+sj(s)+')" '+cardBorder+'><div class="sc-top"><div><div class="sc-sym">'+s.symbol+'</div><div class="sc-setup">'+(s.setup_name||'&mdash;')+'</div></div><div class="sc-ring '+gc(s.grade)+'">'+(s.grade||'B')+'</div></div><div class="sc-levels"><div class="sc-lv"><div class="sc-lv-label">ENTRY</div><div class="sc-lv-val lv-entry">&#8377;'+fmt(entryOf(s))+'</div></div><div class="sc-lv"><div class="sc-lv-label">TARGET</div><div class="sc-lv-val lv-target">&#8377;'+fmt(s.target_1)+'</div></div><div class="sc-lv"><div class="sc-lv-label">SL</div><div class="sc-lv-val lv-sl">&#8377;'+fmt(s.sl)+'</div></div></div><div class="sc-body"><div class="sc-chips"><span class="chip '+(isL?'chip-long':'chip-short')+'">'+(isL?'&#8593;':'&#8595;')+' '+dirLabel(s.direction)+'</span>'+typeChip
+    +(ctr?'<span class="chip chip-counter">COUNTER-TREND</span>':'')+'</div><div class="sc-bar"><div class="sc-bar-fill" style="width:'+sp+'%"></div></div><div class="sc-meta" style="margin-top:8px"><span>Score <span>'+(s.score||'&mdash;')+'/100</span></span><span>Risk <span>&#8377;'+(s.risk_inr?Math.round(s.risk_inr).toLocaleString('en-IN'):'&mdash;')+'</span></span></div></div><div class="sc-disc">&#9888; Educational only &middot; Not SEBI advice &middot; Tap for details</div></div>';
 }
 function archDayRow(ds,sigs){
   var d=new Date(ds).toLocaleDateString('en-IN',{day:'numeric',month:'short'});
@@ -847,6 +903,7 @@ async function render(){
   // -- not as a proven cause, because the page cannot know why the chain
   // published nothing, only what the regime was.
   var _regime=(sectors&&sectors.length&&sectors[0].market_direction)||'';
+  window._regimeNow=_regime;
   var staleReason=_regime?' &middot; regime '+String(_regime).toLowerCase():'';
 
   var secLabel=isStale?'NO SIGNALS':(isWatchlist?"TOMORROW'S WATCHLIST":"TODAY'S TRADES");
@@ -957,7 +1014,14 @@ async function render(){
     // symbol. Two cards for one symbol is honest; one card wearing the wrong
     // horizon is not. LGEINDIA and OLECTRA on 2026-08-12 are the live example.
     btst.forEach(function(s){cards.push(s);});
-    cards.sort(function(a,b){return(b.score||0)-(a.score||0);});
+    // With-trend first, then score. Counter-trend signals are still listed --
+    // suppressing them would make the page mirror ATLAS's rules instead of
+    // reporting the market -- but they do not lead.
+    cards.sort(function(a,b){
+      var ca=counterTrend(a.direction)?1:0, cb=counterTrend(b.direction)?1:0;
+      if(ca!==cb) return ca-cb;
+      return (b.score||0)-(a.score||0);
+    });
     var bs=isReview?'style="color:var(--amber);border-color:rgba(245,132,69,0.4);background:rgba(245,132,69,0.1)"':'';
     var h='<div class="sec-header"><span class="sec-badge today" '+bs+'>'+label+'</span><span class="sec-date">'+dateLabel+'</span><span class="sec-count">'+cards.length+' SIGNAL'+(cards.length!==1?'S':'')+'</span></div>';
     if(!cards.length){h+='<div class="stay-cash"><h3>STAY CASH</h3><p>No qualifying setups</p></div>';}
@@ -969,6 +1033,8 @@ async function render(){
     if(Object.keys(conf).length)h+='<div style="font-size:10px;color:var(--muted2);padding:6px 0">⚡ '+Object.keys(conf).join(', ')+' removed (direction conflict)</div>';
     return h;
   }
+
+  html+=regimeBanner();
 
   if(isStale){
     // Two separate statements, never one: what was NOT published, and then what

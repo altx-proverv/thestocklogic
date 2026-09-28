@@ -58,6 +58,10 @@ const cases = [
    '2026-10-05', 10 * 60, '2026-09-25', true,  '2026-10-05'],
 ];
 
+global.window = {};
+eval(extract('counterTrend'));
+eval(extract('regimeBanner'));
+
 let ok = true;
 console.log('BATCH FRESHNESS'.padEnd(46) + 'expected     stale');
 console.log('-'.repeat(78));
@@ -68,6 +72,58 @@ for (const [label, today, istMin, batch, wantStale, wantExpected] of cases) {
   console.log('  ' + label.padEnd(44) + v.expected.padEnd(13) +
               String(v.stale).padEnd(7) + (good ? 'ok' : '** WRONG **'));
 }
+
+/* The regime is CONTEXT, not a filter. A counter-trend signal is de-emphasised
+ * and marked, never dropped -- dropping it would make the page mirror ATLAS's
+ * trading rules instead of reporting the market, which is the whole point of
+ * the change. */
+console.log('');
+console.log('REGIME AS CONTEXT'.padEnd(46) + 'LONG ctr  SHORT ctr');
+console.log('-'.repeat(78));
+const regimeCases = [
+  ['bearish',  true,  false],
+  ['BEARISH',  true,  false],   // case-insensitive
+  ['bullish',  false, true ],
+  ['sideways', false, false],   // favours neither
+  ['mixed',    false, false],
+  ['',         false, false],   // unreadable regime marks nothing
+];
+for (const [reg, wantLong, wantShort] of regimeCases) {
+  window._regimeNow = reg;
+  const gl = counterTrend('LONG'), gs = counterTrend('SHORT');
+  const good = gl === wantLong && gs === wantShort;
+  ok = ok && good;
+  console.log('  ' + ("regime '" + reg + "'").padEnd(44) +
+              String(gl).padEnd(10) + String(gs).padEnd(10) +
+              (good ? 'ok' : '** WRONG **'));
+}
+
+console.log('');
+console.log('THE BANNER NAMES THE REGIME AND DISCLAIMS THE INSTRUCTION');
+console.log('-'.repeat(78));
+const bannerCases = [
+  ['bearish',  ['REGIME BEARISH',  'against', 'not instructions']],
+  ['bullish',  ['REGIME BULLISH',  'against']],
+  ['sideways', ['REGIME SIDEWAYS', 'cash']],
+  ['',         ['REGIME UNKNOWN',  'could not be read']],
+];
+for (const [reg, needles] of bannerCases) {
+  window._regimeNow = reg;
+  const html = regimeBanner();
+  const missing = needles.filter(n => !html.includes(n));
+  const good = missing.length === 0;
+  ok = ok && good;
+  console.log('  ' + ("regime '" + reg + "'").padEnd(44) +
+              (good ? 'ok' : '** missing: ' + missing.join(', ') + ' **'));
+}
+// A bearish banner must not imply ATLAS will short.
+window._regimeNow = 'bearish';
+const bear = regimeBanner();
+const noInstruction = bear.includes('ATLAS') && bear.includes('neither');
+ok = ok && noInstruction;
+console.log('  ' + 'bearish banner says ATLAS takes neither side'.padEnd(44) +
+            (noInstruction ? 'ok' : '** IMPLIES AN INSTRUCTION **'));
+
 console.log('-'.repeat(78));
 console.log('SIGNALS BATCH STATE: ' + (ok ? 'correct' : '*** DEFECTIVE ***'));
 process.exit(ok ? 0 : 1);

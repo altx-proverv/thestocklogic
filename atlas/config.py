@@ -212,6 +212,27 @@ ALLOW_SHORT_IN_BEARISH  = True
 # takes zero trades over that period. That is the intent, not a regression.
 ALLOW_SHORT_IN_SIDEWAYS = False
 
+# SHORT ENTRIES ARE OFF, AS A DECISION, IN ONE PLACE.
+#
+# The gate's SHORT branch requires regime == "bull" AND extreme_bearish, and
+# those are individually satisfiable: a context with both passes. They conflict
+# only because build_market._classify cannot emit them together -- extreme_bearish
+# requires `broken` (close < 200DMA x 0.97) and `broken` sets the regime to bear
+# after the bull assignment. So "shorts are unreachable" was a property of the
+# CLASSIFIER, asserted in a comment in the entry gate, and a sweep of all 32
+# regime x hedge x sentiment combinations found the one corner that passes.
+#
+# That is too thin a guarantee now that the screener publishes shorts in a
+# bearish regime and they reach the same table ATLAS reads. A published short is
+# information for the reader, never an instruction to the agent, and the entry
+# path has to enforce that ON ITS OWN rather than inheriting it from the
+# regime classifier two modules away.
+#
+# The mandate is long-term wealth building, a hedge short is not that, and shorts
+# lose money on the measured record. Flipping this to True is how that decision
+# gets reversed -- deliberately, in one greppable place.
+ALLOW_SHORT_ENTRIES = False
+
 # Hedge shorts require the extreme_bearish flag from market.parquet:
 # close < 200DMA-3% AND 50DMA < 200DMA AND VIX > 18. Deliberately rare.
 REQUIRE_EXTREME_BEARISH_FOR_SHORTS = True
