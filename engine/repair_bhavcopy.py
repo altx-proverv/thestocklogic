@@ -185,7 +185,21 @@ def repair(only: str = None, raw_dir: Path = RAW_DIR, fix: bool = False) -> dict
         except Exception as e:
             print(f"    fetch failed: {type(e).__name__}: {str(e)[:120]}")
 
+        # A GAP IS A CLAIM, so it is not made about a session NSE may still be
+        # publishing. BHAVCOPY_READY_IST_HOUR is when the file is normally up, not
+        # a guarantee; on a late evening the newest session can still be absent at
+        # 18:05 without anything being wrong. Recording a gap then would assert
+        # that NSE has no data for today and that tomorrow's signals were computed
+        # without it. For the newest session, a failed re-fetch is reported and
+        # left for the next run; for anything older it is a real gap.
+        newest_session = (d == newest) if newest is not None else False
+
         if not f.exists():
+            if newest_session:
+                print(f"    still absent, and this is the newest session — NOT "
+                      f"recording a gap. NSE may not have published it yet; "
+                      f"re-run later.")
+                continue
             print(f"    still absent — recording a GAP")
             record_gap(d.isoformat(), "NSE served no bhavcopy on re-fetch")
             gaps.append(d)
@@ -193,8 +207,13 @@ def repair(only: str = None, raw_dir: Path = RAW_DIR, fix: bool = False) -> dict
 
         still = is_bad(f)
         if still:
-            print(f"    still not a bhavcopy ({still}) — recording a GAP")
             f.unlink()                  # do not re-cache the junk
+            if newest_session:
+                print(f"    still not a bhavcopy ({still}), and this is the "
+                      f"newest session — NOT recording a gap. Discarded; re-run "
+                      f"later.")
+                continue
+            print(f"    still not a bhavcopy ({still}) — recording a GAP")
             record_gap(d.isoformat(), f"re-fetch returned {still}")
             gaps.append(d)
             continue
