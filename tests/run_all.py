@@ -37,6 +37,7 @@ SUITES = [
     ("fundamentals",    [sys.executable, "tests/test_fundamentals.py"]),
     ("tier1 sources",   [sys.executable, "tests/test_tier1_sources.py"]),
     ("batch & report",  [sys.executable, "tests/test_batch_and_report.py"]),
+    ("page claims",     [sys.executable, "tests/test_page_claims.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

@@ -3,9 +3,24 @@ ATLAS Reporting — Persistent Bot Listener
 ==========================================
 Runs 24/7 as a background process on AWS.
 Listens for Telegram commands at any time.
+
+THE OFFSET IS PERSISTED, AND IT HAS TO BE.
+------------------------------------------
+Telegram's getUpdates holds an update until a LATER offset confirms it, and the
+offset was held only in memory. That was survivable while the process never
+restarted -- which was itself the bug: the watchdog only started the listener
+when it was absent, so a deploy never reached it and it served pre-deploy replies
+for weeks.
+
+Restarting it on every deployed SHA fixes that, and creates this: the last batch
+processed before a kill is confirmed only by the NEXT getUpdates call, so a
+restart at the wrong moment re-delivers it and RE-EXECUTES the directive. A
+replayed /pause is merely startling; a replayed mode change is a silent revert of
+something the operator did on purpose. So the offset is written to disk as each
+update is handled, and read back at startup.
 """
 
-import sys, requests, logging, time, signal as sig_module
+import os, sys, requests, logging, time, signal as sig_module
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -26,6 +41,47 @@ log = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 running = True
+
+# Same directory the market-hours loop uses for its session file.
+STATE_DIR    = Path(os.environ.get("ATLAS_STATE_DIR", "/var/lib/atlas"))
+OFFSET_FILE  = STATE_DIR / "bot_offset"
+
+
+def load_offset():
+    """The next update_id to ask for, or None on a cold start."""
+    try:
+        v = int(OFFSET_FILE.read_text().strip())
+        log.info(f"resuming from update offset {v}")
+        return v
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        # A corrupt offset must not replay the backlog silently.
+        log.error(f"offset file unreadable ({e}) — starting from the live edge "
+                  f"and ACKNOWLEDGING the backlog without acting on it")
+        return -1
+
+
+def save_offset(v: int) -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = OFFSET_FILE.with_suffix(".tmp")
+        tmp.write_text(str(v))
+        tmp.replace(OFFSET_FILE)
+    except Exception as e:
+        log.error(f"could not persist offset {v} ({e}) — a restart may replay "
+                  f"this update")
+
+
+def deployed_sha() -> str:
+    try:
+        import subprocess
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              cwd=Path(__file__).resolve().parent.parent.parent,
+                              capture_output=True, text=True, timeout=10
+                              ).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
 
 def handle_shutdown(signum, frame):
     global running
@@ -111,9 +167,25 @@ def process_update(update: dict) -> bool:
     return True
 
 def run():
-    log.info("ATLAS Bot Listener starting...")
-    send("🤖 <b>ATLAS Bot Listener ONLINE</b>\nListening for directives 24/7\nSend /help for commands.")
-    offset = None
+    sha = deployed_sha()
+    log.info(f"ATLAS Bot Listener starting at {sha}...")
+    offset = load_offset()
+
+    # -1 is the corrupt-offset signal from load_offset: drain whatever Telegram
+    # is holding and confirm it WITHOUT acting, so a lost offset cannot replay a
+    # day of directives.
+    if offset == -1:
+        stale = get_updates(None)
+        if stale:
+            offset = stale[-1]["update_id"] + 1
+            save_offset(offset)
+            log.error(f"discarded {len(stale)} unconfirmed update(s) after an "
+                      f"unreadable offset; they were NOT acted on")
+        else:
+            offset = None
+
+    send(f"🤖 <b>ATLAS Bot Listener ONLINE</b>\nBuild <code>{sha}</code>\n"
+         f"Listening for directives 24/7\nSend /help for commands.")
     consecutive_errors = 0
     while running:
         try:
@@ -121,6 +193,10 @@ def run():
             consecutive_errors = 0
             for update in updates:
                 offset = update["update_id"] + 1
+                # Persisted BEFORE handling: a crash mid-directive must not
+                # replay it on restart. At-most-once is the right bias for an
+                # instruction that changes agent state.
+                save_offset(offset)
                 process_update(update)
         except Exception as e:
             consecutive_errors += 1

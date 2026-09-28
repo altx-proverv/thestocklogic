@@ -97,7 +97,12 @@ def check(signal: dict = None) -> KillSwitchResult:
         return KillSwitchResult(False, f"Agent state unavailable: {e}",
                                 {"data_available": False})
 
-    mode    = state.get("mode", DEFAULT_AGENT_MODE)
+    # normalise_mode keeps a retired mode (AGGRESSIVE and friends) from being
+    # reported as if it still existed. It cannot change the halt decision --
+    # nothing retired was ever in HALT_MODES -- so this is display honesty, not
+    # a safety change.
+    from atlas.reporting.directives import normalise_mode
+    mode    = normalise_mode(state.get("mode", DEFAULT_AGENT_MODE))
     details = {"data_available": True, "mode": mode}
 
     # CHECK 1 — Operator halt
@@ -151,7 +156,8 @@ def status() -> dict:
                 "halted": True,
                 "note": "agent state unreadable — check() will BLOCK all trades"}
 
-    mode = state.get("mode", DEFAULT_AGENT_MODE)
+    from atlas.reporting.directives import normalise_mode
+    mode = normalise_mode(state.get("mode", DEFAULT_AGENT_MODE))
     out  = {"data_available": True, "mode": mode, "halted": mode in HALT_MODES}
 
     # Funds are advisory here, never fatal -- /status must not fail because the

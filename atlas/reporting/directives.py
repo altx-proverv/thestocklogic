@@ -2,7 +2,7 @@
 ATLAS Reporting — Telegram Directive Handler
 =============================================
 Listens for your Telegram commands and updates agent state.
-Commands: /approve /pause /cautious /aggressive /normal /status /help
+Commands: /approve /pause /normal /status /capital /positions /help
 Runs as a polling loop — call once after daily report is sent.
 """
 
@@ -48,13 +48,35 @@ def get_updates(offset=None):
     return []
 
 
+def normalise_mode(mode: str) -> str:
+    """
+    Any mode outside AGENT_MODES becomes NORMAL.
+
+    CAUTIOUS, AGGRESSIVE and DEFENSIVE were retired, but an atlas_state row
+    written before that still carries one. Passing it through would report a mode
+    that no longer exists to /status and the daily report -- and, worse, one the
+    operator might read as still doing something. Only PAUSED halts, so anything
+    unrecognised is NORMAL by definition, not by assumption.
+    """
+    m = (mode or "").strip().upper()
+    if m in AGENT_MODES:
+        return m
+    if m:
+        log.warning(f"atlas_state.mode is {m!r}, which is not one of "
+                    f"{AGENT_MODES} — reporting NORMAL. It was almost certainly "
+                    f"set before the retired modes were removed.")
+    return DEFAULT_AGENT_MODE
+
+
 def get_agent_state():
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/atlas_state?limit=1&order=updated_at.desc",
         headers=_headers()
     )
     if r.status_code == 200 and r.json():
-        return r.json()[0]
+        row = dict(r.json()[0])
+        row["mode"] = normalise_mode(row.get("mode"))
+        return row
     return {"mode": DEFAULT_AGENT_MODE, "id": 1}
 
 
@@ -111,14 +133,24 @@ def handle_directive(text: str) -> str:
             "Send /approve or /normal to resume."
         )
 
-    elif text.lstrip("/") in ("cautious", "aggressive", "normal", "defensive"):
-        target = text.lstrip("/").upper()
-        icon = {"CAUTIOUS": "🟡", "AGGRESSIVE": "🔴",
-                "NORMAL": "🔵", "DEFENSIVE": "🛡"}[target]
-        update_agent_mode(target, f"Set to {target} by directive at {now}")
+    elif text.lstrip("/") == "normal":
+        update_agent_mode("NORMAL", f"Set to NORMAL by directive at {now}")
         return (
-            f"{icon} <b>{target} MODE SET</b>\n"
-            f"Recorded as operator intent. Only PAUSED changes agent behaviour.\n"
+            f"🔵 <b>NORMAL</b>\n"
+            f"Entries enabled. /pause is the only other mode.\n"
+            f"{_rules_line()}"
+        )
+
+    # Retired modes still answer, rather than falling through to "unknown
+    # command": an operator with them in muscle memory needs to be told they are
+    # gone, not left wondering whether the bot heard.
+    elif text.lstrip("/") in ("cautious", "aggressive", "defensive"):
+        gone = text.lstrip("/").upper()
+        return (
+            f"⚠️ <b>{gone} NO LONGER EXISTS</b>\n"
+            f"It changed nothing: position size comes from the ₹3,000 risk "
+            f"budget and the stop distance, and the only limits are entries per "
+            f"day and live broker funds. The modes are NORMAL and PAUSED.\n"
             f"{_rules_line()}"
         )
 
@@ -214,9 +246,7 @@ def handle_directive(text: str) -> str:
             "/approve — proceed with suggested mode\n"
             "/pause — no trading tomorrow\n"
             "/normal — NORMAL mode\n"
-            "/cautious — CAUTIOUS mode\n"
-            "/aggressive — AGGRESSIVE mode\n"
-            "/defensive — DEFENSIVE mode\n"
+
             "/login — generate Zerodha login URL\n"
             "/capital — show capital status\n"
             "/status — current agent status\n"
@@ -263,7 +293,8 @@ def poll(duration_seconds: int = 120):
                 continue
 
             if not text.startswith("/") and text.lower() not in [
-                "approve","pause","cautious","aggressive","normal","defensive","status","help"
+                "approve","pause","normal","cautious","aggressive","defensive",
+                "status","help"
             ]:
                 continue
 

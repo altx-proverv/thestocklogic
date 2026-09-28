@@ -245,14 +245,24 @@ SESSION_AFTERNOON   = (13,30, 14, 30)
 SESSION_POWER_HOUR  = (14,30, 15, 15)
 SESSION_CLOSING     = (15,15, 15, 30)
 
-# Operator-facing mode vocabulary. Only PAUSED changes behaviour -- it halts
-# entries via the kill switch. The others are labels the operator sets to record
-# intent; they no longer carry size_pct / min_conviction / max_trades, because
-# position size now comes solely from the Rs3,000 risk budget and the stop
-# distance, and the only trade limits are MAX_TRADES_PER_DAY and live funds.
-# Keeping fake per-mode multipliers would imply a sizing lever that no longer
-# exists.
-AGENT_MODES = ("NORMAL", "CAUTIOUS", "AGGRESSIVE", "DEFENSIVE", "PAUSED")
+# Operator-facing mode vocabulary. TWO MODES, because only two mean anything.
+#
+# PAUSED halts entries via the kill switch. NORMAL is the absence of that. There
+# is nothing else to express: position size comes solely from the Rs3,000 risk
+# budget and the stop distance, and the only trade limits are
+# MAX_TRADES_PER_DAY and live broker funds.
+#
+# CAUTIOUS, AGGRESSIVE and DEFENSIVE were REMOVED. They once carried
+# size_pct / min_conviction / max_trades; those levers went when capital
+# tracking did, and the modes stayed on as labels that changed nothing. Four
+# labels that do nothing are worse than two that mean something -- an operator
+# who sets AGGRESSIVE and sees it confirmed reasonably believes the agent will
+# behave differently, and it will not.
+#
+# A mode value from before this change (an atlas_state row still reading
+# AGGRESSIVE) is normalised to NORMAL on read, so no interface reports a mode
+# that no longer exists. See directives.get_agent_state.
+AGENT_MODES = ("NORMAL", "PAUSED")
 HALT_MODES  = ("PAUSED",)          # modes in which no new entry may be taken
 DEFAULT_AGENT_MODE = "NORMAL"
 VERSION = "1.0.0"

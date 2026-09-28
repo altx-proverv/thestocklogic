@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""
+Stamp config constants into the static pages.
+=============================================
+
+    python3 tools/stamp_config.py --check     # report drift, exit 1 if any
+    python3 tools/stamp_config.py --write     # rewrite the pages
+
+WHY. Every page here is static and nothing serves config to the browser, so each
+figure was a hand-maintained literal. signals.html carried a comment saying so
+outright -- "if Rule 1 changes in config.py, change it here too. It read Rs5,000
+until 28 Aug 2026 and matched nothing." That is not a lapse, it is the mechanism:
+four operator-facing claims went stale the same way, and the comment shows that
+knowing about it does not prevent it.
+
+So the numbers are stamped from the source of truth, and tests/test_page_claims.py
+runs --check, which fails the suite the moment a page and atlas/config.py
+disagree. The test is the part that matters -- stamping alone just moves the
+hand-maintenance somewhere else.
+
+MARKERS. A stamped span looks like:
+
+    <!--stamp:risk_per_trade-->&#8377;3,000<!--/stamp-->
+
+Everything between the markers is replaced. The markers survive, so stamping is
+idempotent, and a page with no markers is untouched rather than guessed at.
+
+WHAT IS NOT STAMPED. Anything that is a claim rather than a number -- "winners
+are trailed", "SL at structure". A wrong sentence cannot be fixed by
+substitution, and pretending otherwise would give false assurance. Those are
+covered by the assertions in tests/test_page_claims.py instead.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+import argparse
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+PAGES = ("signals.html", "index.html", "waitlist.html", "tsl-dashboard.html",
+         "atlas.html", "admin.html", "performance.html")
+
+MARK = re.compile(r"(<!--stamp:([a-z0-9_]+)-->)(.*?)(<!--/stamp-->)", re.S)
+
+
+def values() -> dict:
+    """The source of truth. Rupee figures use &#8377; so the pages stay ASCII."""
+    from atlas.config import (MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
+                              MAX_TRADES_PER_DAY, MIN_STOP_PCT, MAX_STOP_PCT)
+    from engine.universe import ALL_SYMBOLS
+    try:
+        from engine.zone_entry import MAX_ENTRY_DIST_PCT
+    except Exception:
+        MAX_ENTRY_DIST_PCT = None
+
+    def rupees(n: float) -> str:
+        """Indian digit grouping: 1,00,000 rather than 100,000."""
+        n = int(n)
+        head, last3 = divmod(n, 1000)
+        if not head:
+            return f"&#8377;{last3}"
+        groups = []
+        while head > 99:
+            groups.append(f"{head % 100:02d}")
+            head //= 100
+        groups.append(str(head))
+        return "&#8377;" + ",".join(reversed(groups)) + f",{last3:03d}"
+
+    v = {
+        "risk_per_trade":     rupees(MAX_RISK_PER_TRADE),
+        "max_notional":       rupees(MAX_NOTIONAL_PER_TRADE),
+        "max_trades_per_day": str(MAX_TRADES_PER_DAY),
+        "universe_count":     str(len(ALL_SYMBOLS)),
+        "stop_band":          f"{MIN_STOP_PCT}%&ndash;{MAX_STOP_PCT}%",
+    }
+    if MAX_ENTRY_DIST_PCT is not None:
+        v["entry_distance"] = f"{MAX_ENTRY_DIST_PCT:.2f}%"
+    return v
+
+
+def scan(page: Path, vals: dict) -> list:
+    """[(key, found, expected)] for every stamped span, drifted or not."""
+    if not page.exists():
+        return []
+    out = []
+    for m in MARK.finditer(page.read_text(encoding="utf-8")):
+        key, found = m.group(2), m.group(3)
+        out.append((key, found, vals.get(key)))
+    return out
+
+
+def drifted(vals: dict = None, pages=PAGES) -> list:
+    """[(page, key, found, expected)] for spans that disagree with config."""
+    vals = vals or values()
+    bad = []
+    for name in pages:
+        for key, found, expected in scan(ROOT / name, vals):
+            if expected is None:
+                bad.append((name, key, found, "<UNKNOWN KEY>"))
+            elif found != expected:
+                bad.append((name, key, found, expected))
+    return bad
+
+
+def write(vals: dict = None, pages=PAGES) -> int:
+    vals = vals or values()
+    changed = 0
+    for name in pages:
+        p = ROOT / name
+        if not p.exists():
+            continue
+        src = p.read_text(encoding="utf-8")
+
+        def sub(m):
+            nonlocal changed
+            key, found = m.group(2), m.group(3)
+            want = vals.get(key)
+            if want is None:
+                # An unknown key is left alone and reported, never blanked.
+                print(f"  {name}: unknown stamp key {key!r} — left as-is")
+                return m.group(0)
+            if want != found:
+                changed += 1
+                print(f"  {name}: {key}  {found!r} -> {want!r}")
+            return m.group(1) + want + m.group(4)
+
+        out = MARK.sub(sub, src)
+        if out != src:
+            p.write_text(out, encoding="utf-8")
+    return changed
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--write", action="store_true")
+    a = ap.parse_args()
+    vals = values()
+
+    if a.write:
+        n = write(vals)
+        print(f"stamped {n} value(s) from atlas/config.py")
+        return 0
+
+    bad = drifted(vals)
+    total = sum(len(scan(ROOT / n, vals)) for n in PAGES)
+    print(f"{total} stamped span(s) across {len(PAGES)} page(s)")
+    for k, v in sorted(vals.items()):
+        print(f"  {k:<20}{v}")
+    if not bad:
+        print("\nno drift")
+        return 0
+    print(f"\nDRIFT — {len(bad)} span(s) disagree with atlas/config.py:")
+    for name, key, found, expected in bad:
+        print(f"  {name:<22}{key:<20}page={found!r}  config={expected!r}")
+    print("\nRun: python3 tools/stamp_config.py --write")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

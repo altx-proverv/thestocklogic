@@ -55,6 +55,32 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
+# 3. Config drift — every figure a page states about the trading rules.
+#
+# There is no build step, so each of those was a hand-maintained literal, and
+# four of them outlived the rule they described: a Rs2,000 daily cap that no
+# longer exists, Rs5,000 risk per trade when it was Rs3,000, a flat Rs1L capital
+# basis after the view was rebuilt on real notional, and targets at 2:1/3:1
+# after targets were dropped entirely. signals.html even carried a comment
+# admitting the mechanism, which did not stop it happening three more times.
+#
+# tools/stamp_config.py needs no venv and no third-party packages, so it runs
+# here on whatever python3 exists.
+echo
+echo "=== Config Stamp Check ==="
+if command -v python3 > /dev/null 2>&1; then
+  if ! python3 tools/stamp_config.py --check; then
+    echo
+    echo "A page states a figure that atlas/config.py disagrees with."
+    echo "Run:  python3 tools/stamp_config.py --write"
+    exit 1
+  fi
+else
+  echo "python3 not found — config stamp NOT checked."
+  echo "This is the check that catches a page promising a rule that changed."
+  exit 1
+fi
+
 echo
 echo "Reminder: if this change touched a table, a column or a status value, run"
 echo "  SUPABASE_SERVICE_KEY=... python3 tools/check_schema.py"

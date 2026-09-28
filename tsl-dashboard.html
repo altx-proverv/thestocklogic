@@ -398,11 +398,19 @@ function capOf(dir){
    different statement over Rs1.77Cr of gross turnover than over the cash the
    book actually had to hold at once, and only the second is a rate of return.
    Peak concurrency is the honest denominator: the most positions open on any
-   single session, each sized at the Rs1L notional cap. */
+   single session, each at its REAL notional.
+
+   It said "each sized at the Rs1L notional cap" long after that stopped being
+   true. v_capital_window was rebuilt on real notional in migration
+   20260821201337 -- shorts charged 20% MIS margin -- because sizing is a DUAL
+   cap: Rs3,000 risk OR Rs1,00,000 notional, whichever binds first. A wide stop
+   is capped by RISK and deploys far less than Rs1L (measured: Rs45,000 to
+   Rs97,020 across the sizing cases). The numbers below were already correct;
+   only this caption was still describing the superseded basis. */
 function renderCapital(){
   var T = capOf('TOTAL');
   document.getElementById('capCnt').textContent =
-    'resolved positions only · one position per symbol · each sized at the ₹1L notional cap';
+    'resolved positions only · one position per symbol · each at its real notional';
 
   if(!T){
     document.getElementById('rowCap').innerHTML =
