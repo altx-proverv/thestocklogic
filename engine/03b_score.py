@@ -500,10 +500,14 @@ def process_direction(combined: pd.DataFrame, direction: str,
     qual_mask = df["qualifies"].to_numpy(dtype=bool, copy=True)
     if qual_mask.sum() > 0:
         levels = compute_trade_levels_vectorized(df[qual_mask].copy())
+        # entry_zone_source must be in this list or it never leaves
+        # process_direction: the frame that goes to the parquet and to 06_push is
+        # built from these columns only, so a value written in zone_entry and
+        # omitted here is silently discarded.
         for col in ["entry_ref","entry_low","entry_high","sl","stop_pct",
                     "entry_dist_pct","qty","risk_inr","notional","product",
                     "target_1","target_2","rr_1","rr_2",
-                    "entry_valid","reject_reason","qualifies",
+                    "entry_valid","reject_reason","entry_zone_source","qualifies",
                     "disqualified","disqualify_reason"]:
             if col in levels.columns:
                 df.loc[qual_mask, col] = levels[col].values

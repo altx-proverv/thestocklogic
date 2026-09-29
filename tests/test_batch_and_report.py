@@ -204,6 +204,73 @@ def main() -> int:
     print(f"  {'a side that published stays silent':<50}"
           f"{'ok' if ok_ else '** NOISY **'}")
 
+    print()
+    print("THE ZONE FAMILY FOLLOWS THE TRADE DIRECTION, NOT THE ROW'S TREND")
+    print("-" * 78)
+    # active_zones resolves active_zone_high/low from structure_trend: demand ->
+    # bull_fvg on anything that is not a downtrend. zone_entry used to read that,
+    # so on an UPTREND row the SHORT pass received a DEMAND zone -- below price,
+    # when a short's zone must be above it. 57.7% of short candidates and 21.8%
+    # of long candidates were handed the wrong family, and a wrong-family row
+    # passed validation 0.00% / 0.02% of the time: a guaranteed rejection that
+    # reported itself as "stop too wide".
+    from engine.zone_entry import compute_zone_entries
+    # One uptrend row carrying BOTH families. A demand zone below price and a
+    # supply zone above it, so whichever is picked is unambiguous.
+    row = {
+        "close": 100.0, "structure_trend": "uptrend",
+        "active_demand_ob_high": 96.0, "active_demand_ob_low": 94.0,
+        "active_bull_fvg_high": 95.0,  "active_bull_fvg_low": 93.0,
+        "active_supply_ob_high": 107.0, "active_supply_ob_low": 104.0,
+        "active_bear_fvg_high": 108.0,  "active_bear_fvg_low": 105.0,
+        "last_swing_low": 92.0, "last_swing_high": 109.0,
+        # what the OLD code read: the trend-resolved pair, i.e. the demand zone
+        "active_zone_high": 96.0, "active_zone_low": 94.0,
+        "active_zone_source": "demand_ob",
+    }
+    for direction, want_src, want_side in (("long", "demand_ob", "below"),
+                                           ("short", "supply_ob", "above")):
+        d = pd.DataFrame([dict(row, direction=direction)])
+        out = compute_zone_entries(d)
+        src = out["entry_zone_source"].iloc[0]
+        e = float(out["entry_ref"].iloc[0])
+        sl = float(out["sl"].iloc[0])
+        side = "above" if e > row["close"] else "below"
+        good = src == want_src and side == want_side
+        ok &= good
+        print(f"  {direction + ' uses the ' + want_src + ' family':<50}"
+              f"{src:<12}{'ok' if good else '** ' + src + ' **'}")
+        print(f"      entry {e:.2f} ({side} price {row['close']:.0f}), stop {sl:.2f}")
+        # and the stop must sit on the protective side of the entry
+        prot = (sl < e) if direction == "long" else (sl > e)
+        ok &= prot
+        print(f"      {'stop on the protective side':<44}"
+              f"{'ok' if prot else '** WRONG SIDE **'}")
+
+    # A wrong-side zone is now NAMED rather than surfacing as a stop-width number.
+    ws = pd.DataFrame([dict(row, direction="short",
+                            active_supply_ob_high=float("nan"),
+                            active_supply_ob_low=float("nan"),
+                            active_bear_fvg_high=96.0, active_bear_fvg_low=94.0)])
+    out = compute_zone_entries(ws)
+    r = str(out["reject_reason"].iloc[0])
+    good = "wrong side" in r
+    ok &= good
+    print(f"  {'a supply zone below price is named, not mis-blamed':<50}"
+          f"{'ok' if good else '** ' + r[:24] + ' **'}")
+
+    # Fail CLOSED when the families are absent: falling back to the trend-resolved
+    # column would silently reproduce the bug on an older parquet.
+    bare = pd.DataFrame([{"close": 100.0, "direction": "short",
+                          "active_zone_high": 96.0, "active_zone_low": 94.0,
+                          "last_swing_high": 109.0, "last_swing_low": 92.0}])
+    out = compute_zone_entries(bare)
+    r = str(out["reject_reason"].iloc[0])
+    good = (not bool(out["entry_valid"].iloc[0])) and "re-run 02b" in r
+    ok &= good
+    print(f"  {'missing families reject, never fall back':<50}"
+          f"{'ok' if good else '** ' + r[:24] + ' **'}")
+
     print("-" * 78)
     print("BATCH & REPORT:", "correct" if ok else "*** DEFECTIVE ***")
     return 0 if ok else 1

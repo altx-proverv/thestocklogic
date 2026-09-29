@@ -130,8 +130,30 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
         return (df[name].to_numpy(dtype=float) if name in df.columns
                 else np.full(n, default, dtype=float))
 
-    z_hi = col("active_zone_high")
-    z_lo = col("active_zone_low")
+    # THE ZONE FAMILY IS CHOSEN BY THE TRADE DIRECTION, not by the row's trend.
+    #
+    # This used to read active_zone_high/low, which active_zones resolves from
+    # `structure_trend`: demand_ob -> bull_fvg on anything that is not a
+    # downtrend, supply_ob -> bear_fvg only on a downtrend. The SHORT pass
+    # therefore received a DEMAND zone on every non-downtrend row and treated its
+    # low as a supply edge -- a zone BELOW price, when a short's zone must be
+    # above it. Measured over 232 symbols and 851 sessions: 57.7% of short
+    # candidates and 21.8% of long candidates were handed the wrong family, and a
+    # wrong-family row passed validation 0.00% and 0.02% of the time. It was a
+    # guaranteed rejection that reported itself as "stop too wide".
+    #
+    # The families are already computed and stored by active_zones, so this reads
+    # them directly and applies the same OB-then-FVG ladder per side.
+    fam = ("active_demand_ob_high", "active_demand_ob_low",
+           "active_bull_fvg_high", "active_bull_fvg_low",
+           "active_supply_ob_high", "active_supply_ob_low",
+           "active_bear_fvg_high", "active_bear_fvg_low")
+    have_families = all(c in df.columns for c in fam)
+    d_hi, d_lo = col("active_demand_ob_high"), col("active_demand_ob_low")
+    b_hi, b_lo = col("active_bull_fvg_high"),  col("active_bull_fvg_low")
+    s_hi, s_lo = col("active_supply_ob_high"), col("active_supply_ob_low")
+    r_hi, r_lo = col("active_bear_fvg_high"),  col("active_bear_fvg_low")
+
     sw_lo = col("last_swing_low")
     sw_hi = col("last_swing_high")
 
@@ -149,6 +171,7 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
     entry_dist = np.full(n, np.nan)
     valid      = np.zeros(n, dtype=bool)
     reason     = np.array([""] * n, dtype=object)
+    zsrc       = np.array([""] * n, dtype=object)
 
     for i in range(n):
         c = close[i]
@@ -157,13 +180,42 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
         if not np.isfinite(c) or c <= 0:
             reason[i] = "no close"
             continue
-        if not np.isfinite(z_hi[i]) or not np.isfinite(z_lo[i]):
+
+        # Fail CLOSED when the families are absent. Falling back to
+        # active_zone_high/low would silently reproduce the bug above on an older
+        # parquet, and report it as a stop-width problem.
+        if not have_families:
+            reason[i] = ("zone family columns missing -- re-run 02b "
+                         "(active_zones must write the per-side zones)")
+            continue
+
+        ladder = (((d_hi[i], d_lo[i], "demand_ob"), (b_hi[i], b_lo[i], "bull_fvg"))
+                  if is_long else
+                  ((s_hi[i], s_lo[i], "supply_ob"), (r_hi[i], r_lo[i], "bear_fvg")))
+        zhi = zlo = np.nan
+        for _hi, _lo, _name in ladder:
+            if np.isfinite(_hi) and np.isfinite(_lo):
+                zhi, zlo, zsrc[i] = _hi, _lo, _name
+                break
+        if not np.isfinite(zhi) or not np.isfinite(zlo):
             reason[i] = "no active zone"
             continue
 
         # ENTRY = the edge price must retrace into
-        e = z_hi[i] if is_long else z_lo[i]
-        lo, hi = min(z_lo[i], z_hi[i]), max(z_lo[i], z_hi[i])
+        e = zhi if is_long else zlo
+        lo, hi = min(zlo, zhi), max(zlo, zhi)
+
+        # THE SIDE-OF-PRICE INVARIANT, asserted rather than assumed. A demand
+        # zone sits at or below price and a supply zone at or above it;
+        # active_zones enforces that when building the families. Checked again
+        # here because the whole defect this replaces presented as a stop-width
+        # number, and a wrong-side zone should say what it actually is.
+        if is_long and lo > c:
+            reason[i] = "demand zone above price -- wrong side"
+            continue
+        if (not is_long) and hi < c:
+            reason[i] = "supply zone below price -- wrong side"
+            continue
 
         # STOP = swing extreme, forced outside the zone
         if is_long:
@@ -226,6 +278,11 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
     df["notional"]      = np.round(notional, 2)
     df["entry_valid"]   = valid
     df["reject_reason"] = reason
+    # The family ACTUALLY used, which is not necessarily active_zone_source --
+    # that one is resolved from structure_trend and is what produced the wrong
+    # side. 06_push publishes this so the record says which zone the entry came
+    # from rather than which one the row's trend suggested.
+    df["entry_zone_source"] = zsrc
     df["product"]       = np.where(direction == "short", "MIS", "CNC")
 
     # Explicitly retired as TRADE levels -- open target, trailing exit.

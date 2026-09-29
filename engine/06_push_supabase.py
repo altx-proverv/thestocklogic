@@ -188,7 +188,13 @@ def push_signals(target_date: str = None):
             "entry_dist_pct":   float(row.get("entry_dist_pct", 0)) if row.get("entry_dist_pct") is not None else None,
             "notional":         float(row.get("notional", 0)) if row.get("notional") else None,
             "product":          str(row.get("product", "CNC")),
-            "zone_source":      str(row.get("active_zone_source", "")),
+            # entry_zone_source is the family the ENTRY was computed from,
+            # chosen by trade direction. active_zone_source is resolved from
+            # structure_trend and was what handed shorts a demand zone, so
+            # publishing it would misdescribe the entry. Fall back only if the
+            # newer column is absent.
+            "zone_source":      str(row.get("entry_zone_source")
+                                    or row.get("active_zone_source", "")),
             "qty":              int(row.get("qty", 0)) if row.get("qty") else None,
             "risk_inr":         float(row.get("risk_inr", 0)) if row.get("risk_inr") else None,
             "rsi":              float(row.get("rsi", 0)) if row.get("rsi") else None,
