@@ -94,13 +94,31 @@ def push_signals(target_date: str = None):
         market_dir = regime_data[0]["market_direction"] if regime_data else "mixed"
         log.info(f"Market regime: {market_dir.upper()}")
 
+        # THE COMPOSITION BEFORE THE FILTER, always logged. "suppressed 5 LONG
+        # signals" and "there were no shorts to suppress" are different facts and
+        # the old log could not tell them apart: shorts stopped reaching this
+        # function on 13 Aug 2026 when MAX_ENTRY_DIST_PCT went 8.0 -> 0.30, and
+        # for six weeks the absence looked like the regime filter doing its job.
+        _n_long  = int((day["direction"].astype(str).str.lower() == "long").sum())
+        _n_short = int((day["direction"].astype(str).str.lower() == "short").sum())
+        log.info(f"Qualifying for {d.date()} before the regime filter: "
+                 f"{_n_long} long / {_n_short} short")
+
         before = len(day)
         if market_dir == "bearish":
             day = day[day["direction"] != "long"]
-            log.info(f"Bearish regime: suppressed {before - len(day)} LONG signals")
+            log.info(f"Bearish regime: suppressed {before - len(day)} LONG "
+                     f"signals; {_n_short} SHORT signal(s) kept")
+            if not _n_short:
+                log.warning("No SHORT signals existed to publish in a bearish "
+                            "regime. 03b's report says why -- see its BY "
+                            "DIRECTION table; a short's structural stop is "
+                            "about twice as wide as a long's, so most fail "
+                            "MAX_STOP_PCT at the zone gate.")
         elif market_dir == "bullish":
             day = day[day["direction"] != "short"]
-            log.info(f"Bullish regime: suppressed {before - len(day)} SHORT signals")
+            log.info(f"Bullish regime: suppressed {before - len(day)} SHORT "
+                     f"signals; {_n_long} LONG signal(s) kept")
     except Exception as e:
         log.warning(f"Could not fetch regime — pushing all signals: {e}")
 

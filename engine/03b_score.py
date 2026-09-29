@@ -532,7 +532,7 @@ def build_playbooks(scored: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(all_plays, ignore_index=True)
 
 
-def tally(df: pd.DataFrame, stats: dict, dq_reasons) -> None:
+def tally(df: pd.DataFrame, stats: dict, dq_reasons, direction: str = "") -> None:
     """
     Accumulate report COUNTS from a full scored batch, before it is reduced to
     its qualifying rows.
@@ -554,11 +554,69 @@ def tally(df: pd.DataFrame, stats: dict, dq_reasons) -> None:
     d = (live["disqualified"].fillna(False).astype(bool)
          if "disqualified" in live.columns
          else pd.Series(False, index=live.index))
-    stats["live"] += len(live)
-    stats["qual"] += int(q.sum())
-    stats["dq"]   += int(d.sum())
+    st = stats.setdefault(direction, Counter()) if direction else stats
+
+    def bump(k, v):
+        # .get() rather than += so a plain dict works as well as a Counter --
+        # tally is called both per-direction (Counter) and aggregate (dict).
+        st[k] = st.get(k, 0) + int(v)
+
+    bump("live", len(live))
+    bump("qual", int(q.sum()))
+    bump("dq", int(d.sum()))
+
     if "disqualify_reason" in live.columns:
-        dq_reasons.update(live.loc[d, "disqualify_reason"].dropna().astype(str))
+        reasons = live.loc[d, "disqualify_reason"].dropna().astype(str)
+        bucket = dq_reasons.setdefault(direction, Counter()) if direction else dq_reasons
+        # Zone rejects carry the measured value -- "stop 8.08% too wide (max
+        # 7.0%)" -- so counting them verbatim produces thousands of rows that
+        # differ only in a decimal and buries the reason under its own detail.
+        # Collapsed to the RULE for reporting; the exact per-row reason is
+        # untouched in disqualify_reason and goes to the parquet.
+        bucket.update(reasons.str.replace(r"\d[\d.,]*", "N", regex=True))
+        # WHICH STAGE rejected it. tally() runs after process_direction, so the
+        # zone gate's own reasons are already in disqualify_reason -- separating
+        # them is what turns "35,839 shorts rejected" into "25 reached the zone
+        # gate and every one failed it", which is a different diagnosis.
+        try:
+            from engine.zone_entry import is_zone_reject
+        except ModuleNotFoundError:
+            from zone_entry import is_zone_reject
+        zone = reasons.map(is_zone_reject)
+        bump("zone_rejected", zone.sum())
+        bump("block_rejected", (~zone).sum())
+
+
+def explain_empty_side(side: str, st, reasons, top: int = 3) -> list:
+    """
+    Lines explaining why a direction published nothing, or [] if it published.
+
+    A ZERO MUST EXPLAIN ITSELF. Shorts stopped reaching the signals table on
+    13 Aug 2026 when MAX_ENTRY_DIST_PCT went 8.0 -> 0.30, and six weeks of
+    long-only output looked exactly like a market with no short setups. It was
+    not: the setups existed, reached the zone gate, and were rejected there --
+    a short's structural stop is about twice as wide at the median as a long's,
+    so the median short stop falls outside MAX_STOP_PCT while the median long's
+    sits inside it. Every one of those rejections was already computed per row.
+    Nothing aggregated them by side, so establishing it took a manual trace of
+    something the engine already knew.
+
+    The distinction in the first line is the useful part: rejected AT the zone
+    gate means the setup was valid but unreachable, rejected BEFORE it means
+    there was no setup to begin with. Those call for opposite responses.
+    """
+    if not st or st.get("qual") or not st.get("live"):
+        return []
+    at_zone = st.get("zone_rejected", 0)
+    out = [f"NO {side.upper()} SIGNALS PUBLISHED. Not an absence of setups:"]
+    if at_zone:
+        out.append(f"  {at_zone:,} reached the zone gate and every one failed it")
+    else:
+        out.append("  none reached the zone gate — rejected earlier, in the "
+                   "disqualifier block")
+    for reason, cnt in (reasons or Counter()).most_common(top):
+        out.append(f"    {cnt:>8,}  {reason}")
+    return out
 
 
 def main():
@@ -581,20 +639,24 @@ def main():
     all_qualifying = []
     # Report counts, tallied per batch while the full frame is still in hand.
     # See tally() for why the report cannot be derived from `scored`.
-    stats = {"live": 0, "qual": 0, "dq": 0}
-    dq_reasons = Counter()
+    # Per DIRECTION, because a side going to zero is invisible in a merged total.
+    # Shorts stopped publishing on 13 Aug 2026 when MAX_ENTRY_DIST_PCT went 8.0 ->
+    # 0.30, and establishing that took a trace of the pipeline: every rejection
+    # was already computed per row, and nothing aggregated it by side.
+    stats = {}
+    dq_reasons = {}
 
     for n, total, batch in smc_batches(batch_size):
         log.info(f"Batch {n}/{total}: {batch['symbol'].nunique()} stocks, "
                  f"{len(batch):,} rows")
 
         longs = process_direction(batch, "long", sector_bias, symbol_sector)
-        tally(longs, stats, dq_reasons)
+        tally(longs, stats, dq_reasons, "long")
         longs_q = longs[longs["qualifies"]].copy()
         del longs
 
         shorts = process_direction(batch, "short", sector_bias, symbol_sector)
-        tally(shorts, stats, dq_reasons)
+        tally(shorts, stats, dq_reasons, "short")
         shorts_q = shorts[shorts["qualifies"]].copy()
         del shorts
         del batch
@@ -623,7 +685,10 @@ def main():
     # row; `q` is the surviving qualifying frame and is used only where the rows
     # themselves are needed (score distribution, setups).
     q = scored[~scored["is_warmup"]] if len(scored) else scored
-    n_live, n_q, n_dq = stats["live"], stats["qual"], stats["dq"]
+    tot = Counter()
+    for _d in stats.values():
+        tot.update(_d)
+    n_live, n_q, n_dq = tot["live"], tot["qual"], tot["dq"]
 
     log.info(f"\n{'='*60}")
     log.info("SIGNAL ENGINE REPORT")
@@ -631,6 +696,34 @@ def main():
     log.info(f"  Total stock-days  : {n_live:,}")
     log.info(f"  Qualifying signals: {n_q:,} ({n_q/max(n_live,1)*100:.1f}%)")
     log.info(f"  Disqualified      : {n_dq:,} ({n_dq/max(n_live,1)*100:.1f}%)")
+
+    # ── BY DIRECTION, AND THE TWO STAGES SEPARATELY ───────────────
+    # "reached zone" is what survived the disqualifier block and was handed to
+    # the zone gate; "published" is what came out of it. The gap between them is
+    # the gate's own effect, which is where shorts die: their structural stop is
+    # about twice as wide at the median as a long's, so the median short stop
+    # falls outside MAX_STOP_PCT while the median long's sits inside it.
+    log.info(f"\n  BY DIRECTION")
+    log.info(f"    {'side':<8}{'scanned':>10}{'reached zone':>14}"
+             f"{'published':>11}{'rate':>8}")
+    for side in ("long", "short"):
+        st = stats.get(side) or Counter()
+        reached = st["qual"] + st["zone_rejected"]
+        rate = st["qual"] / reached * 100 if reached else 0.0
+        log.info(f"    {side:<8}{st['live']:>10,}{reached:>14,}"
+                 f"{st['qual']:>11,}{rate:>7.1f}%")
+
+    # A ZERO MUST EXPLAIN ITSELF. Six weeks of long-only output looked identical
+    # to a market with no short setups; it was neither -- the setups existed and
+    # the gate rejected all of them. Naming the dominant reason turns a silence
+    # into a finding.
+    for side in ("long", "short"):
+        lines = explain_empty_side(side, stats.get(side),
+                                   dq_reasons.get(side))
+        if lines:
+            log.info("")
+            for ln in lines:
+                log.info(f"  {ln}")
     # The three must account for every scored row. If they do not, a row was
     # neither qualified nor disqualified and the scoring block has a hole in it.
     if n_live and n_q + n_dq != n_live:
@@ -650,9 +743,14 @@ def main():
         if len(sub):
             log.info(f"    {d}: {len(sub)} signals, avg score {sub['total_score'].mean():.1f}")
 
-    log.info(f"\n  Disqualification breakdown:")
-    for reason, cnt in dq_reasons.most_common():
-        log.info(f"    {reason:<30}: {cnt:,}")
+    log.info(f"\n  Disqualification breakdown (long / short):")
+    _merged = Counter()
+    for _d in dq_reasons.values():
+        _merged.update(_d)
+    _l = dq_reasons.get("long") or Counter()
+    _s = dq_reasons.get("short") or Counter()
+    for reason, cnt in _merged.most_common():
+        log.info(f"    {reason[:44]:<46}{_l[reason]:>9,} /{_s[reason]:>9,}")
 
     log.info(f"\n  Top setups:")
     for setup, cnt in q["setup_name"].value_counts().head(8).items():

@@ -155,6 +155,55 @@ def main() -> int:
     check("qual + dq accounts for every live row",
           stats["qual"] + stats["dq"], stats["live"])
 
+    print()
+    print("A DIRECTION THAT PUBLISHES NOTHING EXPLAINS ITSELF")
+    print("-" * 78)
+    # Shorts stopped reaching the signals table on 13 Aug 2026 when
+    # MAX_ENTRY_DIST_PCT went 8.0 -> 0.30. Six weeks of long-only output looked
+    # exactly like a market with no short setups, and establishing that it was
+    # not took a manual trace -- every rejection was already computed per row,
+    # nothing aggregated it by side.
+    from engine.zone_entry import is_zone_reject
+    check("a zone reject is attributed to the zone gate",
+          is_zone_reject("stop 8.08% too wide (max 7.0%)"), True)
+    check("  and an unreachable entry too",
+          is_zone_reject("entry 5.01% away (max 0.3%) -- unreachable"), True)
+    check("a disqualifier-block reason is not",
+          is_zone_reject("no_recent_bos_choch"), False)
+    check("  nor a screen reject", is_zone_reject("very_low_volume"), False)
+
+    # THE TWO ZEROES MEAN OPPOSITE THINGS and must not read alike: rejected AT
+    # the gate is a valid setup that was unreachable; rejected BEFORE it is no
+    # setup at all.
+    at_gate = s3b.explain_empty_side(
+        "short", Counter({"live": 185185, "qual": 0, "zone_rejected": 25}),
+        Counter({"stop N% too wide (max N%)": 19306}))
+    ok_ = bool(at_gate) and "reached the zone gate" in at_gate[1]
+    ok &= ok_
+    print(f"  {'all short setups failed AT the gate':<50}"
+          f"{'ok' if ok_ else '** WRONG **'}")
+    before = s3b.explain_empty_side(
+        "short", Counter({"live": 1000, "qual": 0, "zone_rejected": 0}),
+        Counter({"no_recent_bos_choch": 900}))
+    ok_ = bool(before) and "rejected earlier" in before[1]
+    ok &= ok_
+    print(f"  {'none reached the gate at all':<50}"
+          f"{'ok' if ok_ else '** WRONG **'}")
+    ok_ = bool(at_gate) and "Not an absence of setups" in at_gate[0]
+    ok &= ok_
+    print(f"  {'the headline denies it was a quiet market':<50}"
+          f"{'ok' if ok_ else '** SILENT **'}")
+    ok_ = any("19,306" in l for l in at_gate)
+    ok &= ok_
+    print(f"  {'and names the dominant reason with its count':<50}"
+          f"{'ok' if ok_ else '** UNNAMED **'}")
+    # a side that DID publish says nothing -- no noise on a healthy run
+    ok_ = s3b.explain_empty_side("long", Counter({"live": 100, "qual": 5}),
+                                 Counter()) == []
+    ok &= ok_
+    print(f"  {'a side that published stays silent':<50}"
+          f"{'ok' if ok_ else '** NOISY **'}")
+
     print("-" * 78)
     print("BATCH & REPORT:", "correct" if ok else "*** DEFECTIVE ***")
     return 0 if ok else 1

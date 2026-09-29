@@ -92,6 +92,30 @@ def _floor_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
     return int(np.floor(n / m) * m)
 
 
+# Every reject this module can emit, by the stable part of its wording. 03b uses
+# these to separate "the disqualifier block rejected it" from "it reached the zone
+# gate and failed there", which is the difference between a setup that was never
+# valid and one that was valid but unreachable. Kept HERE, next to the reasons
+# themselves, so a new reject cannot be added without this list being in view.
+ZONE_REJECT_MARKERS = (
+    "no close",
+    "no active zone",
+    "no structural stop",
+    "stop not below entry",
+    "stop not above entry",
+    "too tight",
+    "too wide",
+    "unreachable",
+    "below min",
+)
+
+
+def is_zone_reject(reason: str) -> bool:
+    """True when `reason` came from this module rather than the 03b block."""
+    r = (reason or "").lower()
+    return any(marker in r for marker in ZONE_REJECT_MARKERS)
+
+
 def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
     """Adds zone-based entry, structural stop, and risk-based qty. Rows that
     fail validation get entry_valid=False and a reject_reason -- they are kept
