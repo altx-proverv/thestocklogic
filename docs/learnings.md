@@ -104,3 +104,49 @@ deliberately, rather than inferring it from a comparison that cannot carry it.
 **Also worth keeping:** the excluded rows were kept, not deleted. They are the
 only evidence either way, and an exclusion that destroys its own justification
 cannot be reviewed later.
+
+---
+
+## A redundancy argument is worth no more than the weaker guard's failure path
+
+`c310594` · 2026-09-30
+
+**The argument.** `06_push` dropped longs in a bearish regime and shorts in a
+bullish one, duplicating a check the entry gate already makes. The case for
+keeping both: they answer different questions, and redundancy is right where one
+side failing open would quietly change behaviour — specifically, a missing
+`market_regime` silently widening what ATLAS sees.
+
+**Why it was wrong.** The publisher's filter sat inside a `try`, and its `except`
+pushed everything:
+
+```python
+except Exception as e:
+    log.warning(f"Could not fetch regime — pushing all signals: {e}")
+```
+
+So in the exact scenario the redundancy was invoked to cover — the regime
+unreadable — the publisher's guard **opened**. Meanwhile the entry gate fails
+*closed* on the same input: `regime == "unknown"` returns False for both sides
+via `DEFAULT_ON_UNKNOWN_REGIME = CASH`. The guard argued as the backstop was the
+only one that failed open in the case it was supposed to back up. It was not
+redundancy; it was one working guard and one that abstained precisely when asked.
+
+**The generalisation.** To claim two guards are redundant, read each one's
+behaviour *under the specific failure you are defending against*, not its happy
+path. A guard's value is entirely determined by what it does when its input is
+missing or wrong — which is the one branch that never runs in normal operation
+and therefore the one nobody has watched. "There are two checks" is not a safety
+property. "Both checks deny by default when the input is absent" is.
+
+**The symmetry with the first entry in this file.** That one was guards that are
+*jointly necessary* being mistaken for redundant — remove either and a path
+opens. This is guards asserted as *redundant* where one fails open. Opposite
+errors, same omission: nobody read the failure path. In both cases the code that
+mattered was a branch that does not execute on a normal day.
+
+**Cheap test that would have caught it.** Assert the denial, not the presence:
+feed each guard the degraded input — absent regime, unreadable file, timed-out
+fetch — and require it to refuse. `test_regime_gate` now does this for the entry
+gate; the publisher's filter never had such a test, which is part of why its
+`except` went unexamined for four months.
