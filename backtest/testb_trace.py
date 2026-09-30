@@ -244,7 +244,7 @@ for direction in ("long", "short"):
     ])
     if bool(r.get("qualifies")):
         print(f"    => QUALIFIES, {r.get('entry_dist_pct')}% from entry "
-              f"(gate is {compute_zone_entries.__globals__['MAX_ENTRY_DIST_PCT']}%)")
+              f"(no distance gate; the loop enters when price reaches the band)")
     else:
         print(f"    => REJECTED: {r.get('disqualify_reason') or r.get('reject_reason')}")
         # Read the entry_* values above with care on a rejected row.

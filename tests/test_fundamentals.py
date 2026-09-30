@@ -474,11 +474,15 @@ def main() -> int:
     print()
     print("A MISSING CACHE IS INFRASTRUCTURE, NOT A DETERIORATED UNIVERSE")
     print("-" * 78)
-    # gate() fails closed, so before the cache is built it blocks EVERY symbol.
-    # That is correct and it is also indistinguishable from a universe that went
-    # bad, unless something separates the two. cache_health() is that separation:
-    # the entry path reports BLOCKED_NO_FUNDAMENTALS when it fails and
-    # SKIPPED_FUNDAMENTALS only when a symbol was actually assessed.
+    # gate() fails closed, so before the cache is built it blocks EVERY symbol,
+    # which is indistinguishable from a universe that went bad unless something
+    # separates the two. cache_health() is that separation.
+    #
+    # NOTE, 2026-10-01: the entry path no longer consults either one -- Gate 0b
+    # was removed. These functions are still built, cached and tested because the
+    # verdicts keep being recorded, so "would this have been vetoed" stays
+    # answerable after the fact. That is the only thing that makes the removal
+    # reversible, so the tests stay.
     for label, cache, want in (
             ("no cache at all", {}, False),
             ("cache from an older parser",

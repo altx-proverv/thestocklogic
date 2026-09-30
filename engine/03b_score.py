@@ -536,50 +536,47 @@ def build_playbooks(scored: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(all_plays, ignore_index=True)
 
 
-def _unreachable_only(df: pd.DataFrame) -> pd.DataFrame:
+def _watchlist(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Rows whose ONLY zone-gate objection was the entry distance.
+    Every row carrying a VALID UNMITIGATED ZONE that is not a published signal.
 
-    Matched on the reject wording rather than by recomputing the gate, so there is
-    one implementation of what "too far" means. zone_entry emits
-    "entry N% away (max N%) -- unreachable" for exactly this case and nothing else
-    uses the word.
+    REDEFINED 2026-10-01, when MAX_ENTRY_DIST_PCT was removed. The old selector
+    matched the reject wording "unreachable" -- rows whose ONLY objection was the
+    entry distance. No reject emits that any more, so the old definition selects
+    nothing and the watchlist would silently empty.
+
+    The new test is structural rather than textual. engine/zone_entry assigns
+    entry / entry_low / entry_high ONLY after a row has cleared, in order:
+
+        a zone resolved from the direction's own family   (not "no active zone")
+        the side-of-price invariant                       (not "wrong side")
+        a structural stop that resolved                   (not "no structural stop")
+        the stop on the correct side of entry             (not "stop not below/above")
+
+    So a finite entry_low AND entry_high IS the definition of "valid unmitigated
+    zone": the zone exists, price has not passed through it, and the trade is
+    geometrically expressible. What such a row may still have failed is the stop
+    CAP, the minimum quantity, or the disqualifier block -- and none of those
+    makes the zone less real, they make the trade unavailable.
+
+    THESE ARE NEVER ENTERED. The disqualifier block is kept, so a watchlist row
+    that the block rejected is information for the page and nothing else;
+    market_open filters entries to publication_kind='signal' for exactly this
+    reason. Publishing them keeps the record describing what the engine saw.
     """
-    if df is None or not len(df) or "reject_reason" not in df.columns:
+    if df is None or not len(df):
         return df.head(0) if df is not None else None
     live = df[~df["is_warmup"]] if "is_warmup" in df.columns else df
-    m = live["reject_reason"].fillna("").astype(str).str.contains(
-        "unreachable", case=False, regex=False)
-    out = live[m].copy()
-    if not len(out):
-        return out
-
-    # AND WITHIN REACH. A candidate 9.85% from its zone -- the 90th percentile --
-    # needs a four-ATR day in one direction; watching it costs a quote every cycle
-    # for an entry that cannot happen. The cut is ATR-relative because it has to be
-    # per symbol: 2% is a normal day for one stock and a shock for another.
-    try:
-        from atlas.config import (CANDIDATE_MAX_ATR_MULTIPLE as MULT,
-                                  CANDIDATE_MAX_DIST_PCT as ABSCAP)
-    except Exception:
-        MULT, ABSCAP = 1.0, 3.0
-    if "atr_pct" in out.columns:
-        reach = pd.to_numeric(out["atr_pct"], errors="coerce")
-    elif {"atr", "close"} <= set(out.columns):
-        reach = (pd.to_numeric(out["atr"], errors="coerce")
-                 / pd.to_numeric(out["close"], errors="coerce") * 100.0)
-    else:
-        # No volatility measure: keep everything rather than silently dropping on
-        # a column that is absent. A wider watchlist is a cost; a quiet one is a
-        # missed trade.
-        log.warning("no atr/atr_pct on the frame — candidate reach not filtered")
-        return out
-    dist = pd.to_numeric(out["entry_dist_pct"], errors="coerce")
-    # BOTH bounds: ATR-relative for reachability per symbol, and an absolute
-    # ceiling so the watchlist does not inherit active_zones' 15%, which exists for
-    # a different reason. See CANDIDATE_MAX_DIST_PCT.
-    keep = (dist <= reach * MULT) & (dist <= ABSCAP)
-    return out[keep.fillna(False)].copy()
+    if not {"entry_low", "entry_high"} <= set(live.columns):
+        log.warning("no entry band columns on the frame — watchlist empty")
+        return live.head(0)
+    lo = pd.to_numeric(live["entry_low"], errors="coerce")
+    hi = pd.to_numeric(live["entry_high"], errors="coerce")
+    has_zone = lo.notna() & hi.notna() & (lo > 0) & (hi > 0)
+    # not already a signal
+    q = (live["qualifies"].fillna(False).astype(bool)
+         if "qualifies" in live.columns else pd.Series(False, index=live.index))
+    return live[has_zone & ~q].copy()
 
 
 def tally(df: pd.DataFrame, stats: dict, dq_reasons, direction: str = "") -> None:
@@ -720,13 +717,13 @@ def main():
 
         longs = process_direction(batch, "long", sector_bias, symbol_sector)
         tally(longs, stats, dq_reasons, "long")
-        candidates.append(_unreachable_only(longs))
+        candidates.append(_watchlist(longs))
         longs_q = longs[longs["qualifies"]].copy()
         del longs
 
         shorts = process_direction(batch, "short", sector_bias, symbol_sector)
         tally(shorts, stats, dq_reasons, "short")
-        candidates.append(_unreachable_only(shorts))
+        candidates.append(_watchlist(shorts))
         shorts_q = shorts[shorts["qualifies"]].copy()
         del shorts
         del batch

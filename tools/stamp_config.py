@@ -52,10 +52,10 @@ def values() -> dict:
     from atlas.config import (MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
                               MAX_TRADES_PER_DAY, MIN_STOP_PCT, MAX_STOP_PCT)
     from engine.universe import ALL_SYMBOLS
-    try:
-        from engine.zone_entry import MAX_ENTRY_DIST_PCT
-    except Exception:
-        MAX_ENTRY_DIST_PCT = None
+    # The entry-distance gate was removed on 2026-10-01. Stamped as "none" rather
+    # than omitted, because a page that simply stops mentioning a threshold reads
+    # as an oversight; one that says there isn't one reads as a decision.
+    MAX_ENTRY_DIST_PCT = None
 
     def rupees(n: float) -> str:
         """Indian digit grouping: 1,00,000 rather than 100,000."""
@@ -77,8 +77,9 @@ def values() -> dict:
         "universe_count":     str(len(ALL_SYMBOLS)),
         "stop_band":          f"{MIN_STOP_PCT}%&ndash;{MAX_STOP_PCT}%",
     }
-    if MAX_ENTRY_DIST_PCT is not None:
-        v["entry_distance"] = f"{MAX_ENTRY_DIST_PCT:.2f}%"
+    v["entry_distance"] = ("none — taken at market when price reaches the zone"
+                           if MAX_ENTRY_DIST_PCT is None
+                           else f"{MAX_ENTRY_DIST_PCT:.2f}%")
     return v
 
 

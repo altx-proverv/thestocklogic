@@ -123,53 +123,27 @@ MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 # Rule 4 — new entries per day. This is now a real limit rather than a
 # secondary guard: with the capital cap gone, it and available broker funds are
 # the only things that stop further entries.
-# ── HOW FAR IS WORTH WATCHING ──────────────────────────────────────
+# ── HOW FAR IS WORTH WATCHING: NOTHING, ANY MORE ──────────────────
 #
-# A candidate is a signal valid in every way except that price was not at its zone
-# at last night's close. The loop re-checks that distance live, so the question is
-# which candidates could PLAUSIBLY close the gap during one session.
+# RETIRED with MAX_ENTRY_DIST_PCT on 2026-10-01. Both of these bounded the
+# WATCHLIST -- how far from its zone a symbol could sit and still be worth a
+# quote each cycle. CANDIDATE_MAX_ATR_MULTIPLE was 1.0 ATR and
+# CANDIDATE_MAX_DIST_PCT was 3.0%, and both were measured and defensible for the
+# question they answered.
 #
-# MEASURED, over 754 sessions and 232 symbols: the median candidate sits 3.14% from
-# its zone and the 90th percentile 9.85%, while ATR is 2.72% of price at the median.
-# A candidate 9.85% away needs a four-ATR day in one direction; watching it costs a
-# quote every cycle and it will never fire.
+# They answer a question that no longer exists. The watchlist is now every symbol
+# carrying a valid unmitigated zone, because there is no entry-distance
+# requirement to be "too far" from: a setup is taken when price reaches the band,
+# and until then the cost of watching it is one quote inside a batched request
+# that is already being made for every other symbol. Reach was a proxy for "could
+# this fire today", and a bound on it only ever discarded setups that might.
 #
-# So the cut is ATR-RELATIVE, not a fixed percentage. One ATR is roughly "a normal
-# day's range", and it is PER SYMBOL, which a percentage cannot be: 2% is routine
-# for a volatile name and impossible for a stable one. At 1.0 ATR the watchlist
-# keeps 44.4% of candidates -- about 30 a session on 232 symbols, or 90 on 706 --
-# and drops only the ones that could not be reached anyway.
-#
-# Raise it to widen the net at the cost of quotes and noise; nothing about the
-# ENTRY standard changes either way, because near_zone still has to pass on the
-# live price.
-CANDIDATE_MAX_ATR_MULTIPLE = 1.0
-
-# AND AN EXPLICIT ABSOLUTE CEILING, so the watchlist does not inherit its outer
-# bound from a constant chosen for something else. active_zones.MAX_ZONE_DIST_PCT
-# is 15% and exists to stop forward-filling a zone price has travelled far past;
-# it was never a considered watchlist threshold, and a stock 12% from its zone is
-# not a candidate.
-#
-# MEASURED on the ATR-filtered set, 754 sessions: p50 1.32%, p90 2.70%, MAX 8.88%.
-# So 15% was already not binding on anything -- the ATR cut does the work -- and
-# the honest numbers for the thresholds asked about are:
-#
-#     cap      kept/session (232 sym)   share    scaled to 706
-#     1.5%              17.5            58.1%         53
-#     2.0%              22.7            75.5%         69
-#     3.0%              28.2            93.8%         86
-#     5.0%              30.0            99.7%         91
-#     8.0%              30.1           100.0%         92   <- a no-op
-#
-# 3.0% is the choice: it is the point where an absolute cap starts to do anything
-# at all (trimming 6%), it sits just above the p90 of 2.70% so it keeps everything
-# ordinary, and it removes the volatile tail -- the 8.88% outlier is a stock whose
-# ATR is nearly 9%, where one ATR of movement is a different event from the one
-# this watchlist is for. 5% and 8% would be decoration; 1.5% and 2% discard
-# reachable setups to no purpose, since the ATR test has already established they
-# are reachable.
-CANDIDATE_MAX_DIST_PCT = 3.0
+# Kept as names at 0.0 so nothing that imports them breaks, and so a reader
+# looking for the old behaviour finds this note rather than a missing symbol.
+# 0.0 is the absence of a bound here, not a bound of zero -- engine/03b_score
+# reads neither.
+CANDIDATE_MAX_ATR_MULTIPLE = 0.0
+CANDIDATE_MAX_DIST_PCT = 0.0
 
 # ── THERE IS NO EXPOSURE CEILING ──────────────────────────────────
 #
@@ -207,24 +181,33 @@ CANDIDATE_MAX_DIST_PCT = 3.0
 # than quietly reinstating a cap.
 MAX_TRADES_PER_DAY = 0
 
-# STOP-DISTANCE BAND — a quality filter on the structural stop. Not one of the
-# numbered rules, but shared by two modules, so it belongs here rather than in
-# each of them: engine/zone_entry.py applies it when PUBLISHING a signal and
-# atlas/risk/position_sizing.py applies it again at ENTRY. They held separate
-# copies, drifted to 7.0 and 6.0, and the gap was live — a signal with a 6-7%
-# stop was published and then refused at entry by the stricter sizer.
+# STOP-DISTANCE BAND -- a cap only, as of 2026-10-01. Shared by two modules, so
+# it belongs here rather than in each: engine/zone_entry.py applies it when
+# PUBLISHING and atlas/risk/position_sizing.py again at ENTRY. They held separate
+# copies, drifted to 7.0 and 6.0, and the gap was live.
 #
-# 7.0 is the measured value and the correct one. Live swing-low distances across
-# 40 symbols cluster 2-9%; the 6.0 ceiling was set by reasoning rather than
-# measurement and was rejecting genuine setups at 6.19-6.93%.
+# THE MINIMUM IS GONE. MIN_STOP_PCT was 1.5 with no recorded derivation -- the
+# audit found it sharing a comment block with the measured 7.0 and borrowing its
+# authority. It cost about 12% of setups on both sides. What it was for was
+# "inside noise", but a structural stop IS the noise boundary: it sits at a swing
+# extreme, so a tight one means the swing is close, not that the stop is
+# arbitrary. 0.0 disables the floor without deleting the name, which several
+# modules import.
+#
+# THE CAP IS 5.0, from 7.0. Measured, and it is a real reduction: on one batch of
+# 100 symbols the 5-7% band held 461 long and 161 short setups, so this is not a
+# trim at the edge. The reason is the R geometry -- 3R arrives before the stop
+# 30-37% of the time from stops under 4%, and 10-18% from stops over 4%, against
+# a 25% breakeven. Above roughly 4-5% a 3R target loses by construction, so a
+# wider stop is not a worse trade, it is a different and unprofitable one.
 #
 # UNITS: PERCENT, not a fraction. zone_entry compares in percent directly.
-# position_sizing compares against abs(entry-stop)/entry, a fraction, and
-# divides by 100 once at import. Feeding 7.0 to a fraction comparison is a 700%
-# ceiling that rejects nothing; feeding 0.07 to a percent one rejects
-# everything. Neither fails loudly, so keep the unit explicit at every use.
-MIN_STOP_PCT = 1.5
-MAX_STOP_PCT = 7.0
+# position_sizing compares against abs(entry-stop)/entry, a fraction, and divides
+# by 100 once at import. Feeding 5.0 to a fraction comparison is a 500% ceiling
+# that rejects nothing; feeding 0.05 to a percent one rejects everything. Neither
+# fails loudly, so keep the unit explicit at every use.
+MIN_STOP_PCT = 0.0
+MAX_STOP_PCT = 5.0
 
 # Rules 1, 2 — agent must NOT place SL or target orders
 # ── EXIT MANAGEMENT. THESE NOW ACTUALLY GATE SOMETHING ────────────

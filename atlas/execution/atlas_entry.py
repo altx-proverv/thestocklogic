@@ -5,15 +5,11 @@ Agent IDENTIFIES and ENTERS. No SL, no target, no exit orders. Exits manual.
 
 GATE STACK
   0. Structural stop present      -- required for risk-based sizing
-  0b. Fundamentals (Tier 1 only)  -- deterioration veto, from a cache, no
-                                     network. Tier 2 is measured and recorded
-                                     on the verdict but NEVER blocks.
-                                     BLOCKED_NO_FUNDAMENTALS = the cache is
-                                     missing or stale, so nothing was assessed.
-                                     SKIPPED_FUNDAMENTALS  = assessed, vetoed.
-                                     The split matters: a cache that has not
-                                     been built yet must not read as a market
-                                     that has turned.
+  0b. (removed)                   -- the Tier 1 fundamentals veto was dropped
+                                     on 2026-10-01. The cache and crons remain,
+                                     so verdicts are still recorded and the
+                                     counterfactual stays answerable; nothing
+                                     blocks on them.
   1. Regime AND sentiment         -- both must hold or ATLAS stays in cash.
                                      REGIME:    close>200DMA and 50DMA>200DMA
                                      SENTIMENT: advances>declines today and
@@ -430,16 +426,56 @@ def get_open_position(symbol: str) -> tuple:
         return False, None
 
 
-def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float) -> tuple:
-    """Enter ONLY if LTP is inside the zone band."""
+def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float,
+                     stop: float = 0.0) -> tuple:
+    """Enter ONLY if LTP is inside the zone band, AND on the right side of it.
+
+    THE SIDE-OF-PRICE INVARIANT, asserted here as well as in market_open.at_zone
+    and engine/zone_entry. Three places is not redundancy by accident: zone_entry
+    checks it against the batch CLOSE, at_zone against the LIVE quote when the
+    loop selects a candidate, and this against the quote the order will actually
+    be priced from. The defect fixed on 30 Sep was a zone on the wrong side of
+    price reported as a stop-width problem, and with MAX_ENTRY_DIST_PCT gone
+    there is no distance bound left to make a wrong-side zone harmless.
+
+    The mitigation test is the load-bearing half. A demand band price has fallen
+    THROUGH is not a discounted setup, it is a failed one, and buying inside the
+    band on the way down is a knife-catch that the old 0.30% bound made
+    impossible by accident rather than by rule.
+    """
     if not ENFORCE_ENTRY_RANGE:
         return True, "range check off"
     if not lo_in or not hi_in or lo_in <= 0 or hi_in <= 0:
         return False, "no entry band defined"
     lo, hi = min(lo_in, hi_in), max(lo_in, hi_in)
+    is_long = str(direction).upper() != "SHORT"
+
+    # MITIGATED -- the zone is spent, whichever side of the band LTP now sits.
+    # Checked BEFORE the band test, because a price below a demand band's low is
+    # both "outside the band" and "the setup is dead", and only the second is
+    # worth reading in a log.
+    if is_long and ltp < lo:
+        return False, (f"demand zone mitigated — LTP Rs{ltp:.1f} below band low "
+                       f"Rs{lo:.1f}; the setup failed rather than cheapened")
+    if (not is_long) and ltp > hi:
+        return False, (f"supply zone mitigated — LTP Rs{ltp:.1f} above band high "
+                       f"Rs{hi:.1f}; the setup failed rather than cheapened")
+
+    # The stop must still be outside the zone on the correct side. size_by_risk
+    # rejects a stop on the wrong side of ENTRY, but not one that price has
+    # already passed, and an entry taken at a price beyond its own stop is a
+    # position that is stopped out before it is filled.
+    if stop > 0:
+        if is_long and ltp <= stop:
+            return False, (f"LTP Rs{ltp:.1f} at or below the stop Rs{stop:.1f} "
+                           f"— already beyond the structural level")
+        if (not is_long) and ltp >= stop:
+            return False, (f"LTP Rs{ltp:.1f} at or above the stop Rs{stop:.1f} "
+                           f"— already beyond the structural level")
+
     if lo <= ltp <= hi:
         return True, f"LTP Rs{ltp:.1f} inside zone Rs{lo:.1f}-Rs{hi:.1f}"
-    return False, f"LTP Rs{ltp:.1f} outside zone Rs{lo:.1f}-Rs{hi:.1f}"
+    return False, f"LTP Rs{ltp:.1f} not yet at zone Rs{lo:.1f}-Rs{hi:.1f}"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -473,38 +509,23 @@ def enter_trade(signal: dict) -> dict:
         return {"status": "REJECTED_NO_STOP",
                 "reason": "no structural stop -- cannot size by risk"}
 
-    # GATE 0b -- FUNDAMENTALS. Tier 1 only; Tier 2 measures and never blocks.
+    # THERE IS NO FUNDAMENTALS GATE. Tier 1 -- pledge, auditor resignation,
+    # promoter exit, rising leverage -- no longer vetoes an entry.
     #
-    # Cache-only, no network, so it is free and sits ahead of every gate that
-    # costs a request. Entry-only by construction: enter_trade is never on an
-    # exit path, so a name that deteriorates while held is a stop-loss question,
-    # not this gate's.
+    # DROPPED BY OPERATOR DECISION, and worth recording what is given up. The
+    # veto was reachable and it did bite: 631 of 706 symbols passed, 72 were
+    # vetoed, 3 unparseable. Those 72 are now tradeable. The layer existed for
+    # the class of loss a technical stop cannot protect against -- a pledge
+    # unwind or an auditor walking gaps through a stop rather than touching it --
+    # and nothing replaces it.
     #
-    # TWO DISTINCT STATUSES, DELIBERATELY. gate() fails closed, so before the
-    # cache is built it blocks EVERYTHING -- correct, and indistinguishable from
-    # a deteriorated universe unless it says so. BLOCKED_NO_FUNDAMENTALS means
-    # the cache is missing, unreadable or stale and NOTHING has been assessed;
-    # SKIPPED_FUNDAMENTALS means this symbol was assessed and Tier 1 vetoed it.
-    # Folded into one status, a missing file would read as the market turning.
-    try:
-        from engine.fundamentals import (load_cache_cached, cache_health,
-                                         gate as fundamentals_gate)
-        fcache = load_cache_cached()
-        cache_ok, cache_why = cache_health(fcache)
-        if not cache_ok:
-            return {"status": "BLOCKED_NO_FUNDAMENTALS", "reason": cache_why,
-                    "infrastructure": True}
-        f_ok, f_why = fundamentals_gate(symbol, cache=fcache)
-        if not f_ok:
-            return {"status": "SKIPPED_FUNDAMENTALS", "reason": f_why}
-    except Exception as e:
-        # An exception here is not permission to trade. The layer exists to stop
-        # names a technical stop cannot protect against, and a broken gate that
-        # defaults to open is worse than no gate, because it looks like one.
-        log.error(f"fundamentals gate raised for {symbol}: {e}")
-        return {"status": "BLOCKED_NO_FUNDAMENTALS",
-                "reason": f"fundamentals gate unavailable ({e}) — failing closed",
-                "infrastructure": True}
+    # What is NOT given up: engine/fundamentals.py, its cache and its crons stay
+    # in place and keep recording verdicts, so the question "would this have been
+    # vetoed" remains answerable after the fact. That is the only reason removing
+    # it is recoverable. If the veto is ever wanted back it is one gate here, not
+    # a rebuild.
+    #
+    # The Tier 2 metrics were never a veto and are unaffected.
 
     # GATE 1 -- regime AND sentiment. Both must hold or ATLAS stays in cash.
     #
@@ -610,7 +631,8 @@ def enter_trade(signal: dict) -> dict:
     # number we already have. Zerodha stays the execution broker; Upstox is the
     # price feed. get_ltp remains the fallback for a one-shot caller.
     ltp = float(signal.get("ltp") or 0) or get_ltp(symbol) or entry_ref
-    in_range, range_reason = check_entry_range(direction, ltp, entry_low, entry_high)
+    in_range, range_reason = check_entry_range(direction, ltp, entry_low,
+                                              entry_high, stop_price)
     if not in_range:
         return {"status": "SKIPPED_RANGE", "reason": range_reason}
 

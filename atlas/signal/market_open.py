@@ -7,7 +7,7 @@ replaces the single 09:37 cron; there is no parallel system.
 EACH CYCLE
   1. live prices for the whole universe from Upstox, one batched request
   2. matched against the nightly zone map, held in memory for the session
-  3. symbols within MAX_ENTRY_DIST_PCT of their zone right now
+  3. symbols whose live price has reached their zone, from the correct side
   4. the full gate stack per candidate, unchanged
   5. enter at market, record to atlas_trades
   6. periodically, reconcile the ledger against the broker
@@ -96,10 +96,10 @@ ALERT_COOLDOWN_SECONDS = 900
 
 MAX_BATCH_AGE_DAYS = 5
 
-try:
-    from engine.zone_entry import MAX_ENTRY_DIST_PCT
-except Exception:                                   # pragma: no cover
-    MAX_ENTRY_DIST_PCT = 0.30
+# MAX_ENTRY_DIST_PCT is gone. There is no entry-distance requirement anywhere:
+# a valid setup is taken at market when price reaches its zone, whatever the
+# distance was at last night's close. at_zone() below carries what the bound was
+# a proxy for -- price in the band, from the correct side.
 
 
 def now_ist() -> datetime:
@@ -413,12 +413,66 @@ def fetch_quotes(symbols: list) -> dict:
         return {}
 
 
-def near_zone(sig: dict, ltp: float) -> bool:
-    """Within MAX_ENTRY_DIST_PCT of the zone edge right now."""
-    ref = float(sig.get("entry_ref") or 0)
-    if ref <= 0 or ltp <= 0:
-        return False
-    return abs(ltp - ref) / ltp * 100.0 <= MAX_ENTRY_DIST_PCT
+def at_zone(sig: dict, ltp: float, direction: str) -> tuple:
+    """(ok, why) -- is the LIVE price positioned to take this zone?
+
+    THIS IS THE SECOND PLACE THE WRONG-ZONE DEFECT LIVED. engine/zone_entry.py
+    was fixed on 30 Sep: it had chosen the zone family from `structure_trend`
+    rather than from the trade direction, handing SHORTs a demand zone below
+    price 57.7% of the time. The fix added an explicit side-of-price invariant --
+    a demand zone sits at or below price, a supply zone at or above it.
+    zone_entry asserts that against the CLOSE, at batch time.
+
+    Nothing asserted it against the LIVE price. This function was:
+
+        return abs(ltp - ref) / ltp * 100.0 <= MAX_ENTRY_DIST_PCT
+
+    abs(), so direction-blind. It could not tell "price is retracing INTO the
+    zone" from "price has broken THROUGH and out the far side". At the old
+    0.30% band that was almost harmless -- 0.3% above or below one edge is the
+    same trade. With the distance requirement removed it is the whole question:
+    every watched symbol is evaluated every cycle, and a demand zone that price
+    has fallen through is a knife to catch, not a setup. Rare became routine,
+    which is exactly what removing the bound does to an unchecked direction.
+
+    So the same invariant is asserted here, against the live quote:
+
+      LONG   the demand band must sit at or below price. Price above the band
+             is a pending retest; price INSIDE it is the entry; price below its
+             LOW means the zone is mitigated and the setup is dead for the day.
+      SHORT  mirrored.
+
+    Distance is deliberately NOT bounded. MAX_ENTRY_DIST_PCT is gone -- a valid
+    setup is taken at market when price reaches the zone, however far it was at
+    last night's close. What replaces the bound is this check plus
+    check_entry_range, which together say "price is in the zone, from the right
+    side", and that is the condition the bound was a crude proxy for.
+    """
+    lo_in = float(sig.get("entry_low") or 0)
+    hi_in = float(sig.get("entry_high") or 0)
+    if ltp <= 0:
+        return False, "no quote"
+    if lo_in <= 0 or hi_in <= 0:
+        return False, "no zone band"
+    lo, hi = min(lo_in, hi_in), max(lo_in, hi_in)
+    is_long = str(direction).upper() != "SHORT"
+
+    # MITIGATED. Price through the far edge means the zone did its work or
+    # failed; either way it is not an entry. Reported rather than silently
+    # dropped, because "the watchlist shrank" and "the setups died" are
+    # different facts about a session.
+    if is_long and ltp < lo:
+        return False, f"demand zone mitigated — LTP {ltp:.1f} below band low {lo:.1f}"
+    if (not is_long) and ltp > hi:
+        return False, f"supply zone mitigated — LTP {ltp:.1f} above band high {hi:.1f}"
+
+    # IN THE BAND is the entry. Above a demand band (or below a supply band) is
+    # a live setup still waiting, which is watched and not entered.
+    if lo <= ltp <= hi:
+        return True, f"LTP {ltp:.1f} in zone {lo:.1f}-{hi:.1f}"
+    return False, (f"LTP {ltp:.1f} not yet at zone {lo:.1f}-{hi:.1f}"
+                   if (is_long and ltp > hi) or ((not is_long) and ltp < lo)
+                   else f"LTP {ltp:.1f} outside zone {lo:.1f}-{hi:.1f}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -590,18 +644,42 @@ def cycle(state: Session) -> dict:
     state.quotes_ok += 1
     state.quotes_last = len(quotes)
 
+    # ENTRIES COME FROM PUBLISHED SIGNALS ONLY. The watchlist is now every
+    # symbol carrying a valid unmitigated zone, which is deliberately wider than
+    # the qualifying set -- it includes symbols the disqualifier block rejected.
+    # Those are information for the page, never entries, because the disqualifier
+    # block is kept. Reading both kinds here would have let a watchlist row be
+    # traded, which is the opposite of keeping the block.
     candidates = []
+    mitigated = waiting = watch_only = 0
     for (sym, direction), sig in state.zone_map.items():
         if (sym, direction) in held:
             continue
+        if str(sig.get("publication_kind", "signal")) != "signal":
+            watch_only += 1
+            continue
         ltp = quotes.get(sym)
-        if ltp and near_zone(sig, ltp):
+        if not ltp:
+            continue
+        ok, why = at_zone(sig, ltp, direction)
+        if ok:
             candidates.append((sym, direction, sig, ltp))
+        elif "mitigated" in why:
+            mitigated += 1
+        else:
+            waiting += 1
 
     out["candidates"] = len(candidates)
+    out["mitigated"] = mitigated
     state.candidates_total += len(candidates)
     if not candidates:
-        log.info(f"cycle {state.cycle_n}: {len(quotes)} quotes, nothing at a zone")
+        # THE BREAKDOWN, not just the absence. "nothing at a zone" was one line
+        # for two different sessions: one where every setup is still waiting for
+        # price, and one where price went through all of them. The second is a
+        # day the engine should have nothing to do; the first is a day it might.
+        log.info(f"cycle {state.cycle_n}: {len(quotes)} quotes — "
+                 f"{waiting} waiting for price, {mitigated} mitigated, "
+                 f"{watch_only} watch-only, 0 at a zone")
         return out
 
     for sym, direction, sig, ltp in candidates:

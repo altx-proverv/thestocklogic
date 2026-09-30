@@ -95,7 +95,6 @@ def main() -> int:
     # 1. TARGETS. zone_entry explicitly drops target_1/target_2/rr_1/rr_2 as
     #    trade levels: "target = NONE. Winners are held and trailed." Any page
     #    promising a 2:1/3:1 target is describing a strategy that was retired.
-    from engine.zone_entry import MAX_ENTRY_DIST_PCT           # noqa: F401
     ze = read("engine/zone_entry.py") or (ROOT / "engine/zone_entry.py").read_text()
     check("zone_entry still drops targets (the premise holds)",
           'for dead in ("target_1", "target_2", "rr_1", "rr_2", "sl_pct")' in ze)

@@ -417,10 +417,11 @@ def main() -> int:
 
     from atlas.config import (CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT,
                               CANDIDATE_MAX_DIST_PCT as ABSCAP)
-    check("candidate reach is ATR-relative", ATRMULT, 1.0)
-    # 3% rather than inheriting active_zones' 15%, which exists to stop
-    # forward-filling a zone price has travelled past -- never a watchlist bound.
-    check("  with an explicit absolute cap, not the inherited 15%", ABSCAP, 3.0)
+    # RETIRED with the entry-distance gate. The watchlist is every symbol with a
+    # valid unmitigated zone, so there is no reach bound to assert -- only that
+    # the retired names still resolve to the absence of one.
+    check("candidate reach is no longer bounded", ATRMULT, 0.0)
+    check("  nor by an absolute distance", ABSCAP, 0.0)
 
     print("-" * 78)
     print("EXITS:", "correct" if ok else "*** DEFECTIVE ***")

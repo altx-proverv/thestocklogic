@@ -66,24 +66,31 @@ from atlas.config import (
 
 STOP_BUFFER = 0.002   # push stop just outside the zone edge
 
-# THE publishing gate. A signal is only worth publishing if price is effectively
-# AT the zone right now.
+# THERE IS NO ENTRY-DISTANCE GATE. Removed 2026-10-01.
 #
-# This was 8.0%, and the consequence was that almost everything published was
-# untradeable: the four GTTs resting on 2026-08-12 sat 4.7%, 6.8%, 4.7% and 7.7%
-# from LTP, and 136 of 154 published signals were unusable. An operator cannot
-# enter at a price the stock is nowhere near, so a "signal" 6% away is not a
-# signal, it is a watchlist entry wearing a signal's clothes.
+# It was 8.0, then 0.30 from 13 Aug 2026, and it was the single most restrictive
+# filter in the pipeline -- 15x more restrictive than everything else combined.
+# At 0.30 a batch of 100 symbols published 1,082 long setups; at 8.0 the same
+# batch published 16,372.
 #
-# At 0.30% price is at the zone, so the trade is a MARKET order taken
-# immediately. There is no resting-order path any more -- see
-# atlas_entry.enter_trade().
+# WHY IT GOES. The measurement that settled it: hit rate is FLAT across the
+# range. 38.0% at 0.30%, 38.4% at 0.50%, 37.8% at 1.00%, on 653 to 1,493
+# resolved outcomes. Expectancy moves 0.018R across a threshold that moves more
+# than threefold. Distance at last night's close was never a quality signal; it
+# was a proxy for "the trade is takeable tomorrow", and the live loop answers
+# that directly by testing the quote against the band.
 #
-# This is expected to publish very few signals per day. Measured on 2026-08-11:
-# of 475 stocks carrying an active zone, ONE was inside it and 59 were within 1%.
-# Few and tradeable is the point. If the count comes out near zero that is
-# information about the market, not a reason to widen this number.
-MAX_ENTRY_DIST_PCT = 0.30
+# WHAT REPLACES IT, and it is not nothing. A setup is taken at market when price
+# is INSIDE the zone band and arriving from the correct side -- asserted in three
+# places now: here against the batch close, market_open.at_zone against the live
+# quote, and atlas_entry.check_entry_range against the quote the order is priced
+# from. The distance bound had been making wrong-side and mitigated zones
+# harmless by accident, because price could never be far enough from a zone for
+# the side to matter. That accident is gone, so the invariant is explicit.
+#
+# entry_dist_pct is still COMPUTED and published. It is the watchlist's sort key
+# and it is how a session reports what it was waiting for; it just does not
+# reject anything.
 
 
 def _floor_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
@@ -105,6 +112,8 @@ ZONE_REJECT_MARKERS = (
     "stop not above entry",
     "too tight",
     "too wide",
+    # "unreachable" is retired with MAX_ENTRY_DIST_PCT -- kept in the list so an
+    # older parquet replayed through 03b still classifies its rejects correctly.
     "unreachable",
     "below min",
 )
@@ -248,9 +257,6 @@ def compute_zone_entries(df: pd.DataFrame) -> pd.DataFrame:
             continue
         if sp > MAX_STOP_PCT:
             reason[i] = f"stop {sp:.2f}% too wide (max {MAX_STOP_PCT}%)"
-            continue
-        if d > MAX_ENTRY_DIST_PCT:
-            reason[i] = f"entry {d:.2f}% away (max {MAX_ENTRY_DIST_PCT}%) -- unreachable"
             continue
 
         risk_per_share = abs(e - s)

@@ -339,10 +339,82 @@ def main() -> int:
         ok = False
         print(f"  ** could not exercise build_market._classify: {e}")
 
+    ok &= test_zone_side_invariant()
+
     print("-" * 92)
     print("ENTRY GATE:", "correct" if ok else "*** DEFECTIVE ***")
     return 0 if ok else 1
 
+
+def test_zone_side_invariant():
+    """The wrong-zone defect, in the second place it lived.
+
+    zone_entry was fixed on 30 Sep: it chose the zone family from structure_trend
+    rather than the trade direction. market_open.near_zone was the same defect --
+    abs(ltp - ref) <= MAX_ENTRY_DIST_PCT, direction-blind -- and the 0.30% bound
+    was the only thing keeping it harmless. With the bound removed the invariant
+    has to be explicit, so it is asserted here against the live quote.
+    """
+    import atlas.signal.market_open as MO
+    from atlas.execution.atlas_entry import check_entry_range
+    print()
+    print("THE ZONE MUST BE ON THE RIGHT SIDE OF THE LIVE PRICE")
+    print("-" * 78)
+    ok = True
+    # demand band 94-96, stop 92.  supply band 104-106, stop 108.
+    LONG  = {"entry_low": 94.0, "entry_high": 96.0, "entry_ref": 96.0}
+    SHORT = {"entry_low": 104.0, "entry_high": 106.0, "entry_ref": 104.0}
+    cases = [
+        ("LONG, price in the band",          LONG,  "LONG",  95.0, True,  ""),
+        ("LONG, price above — still waiting", LONG,  "LONG",  99.0, False, "not yet"),
+        ("LONG, price through the low",      LONG,  "LONG",  93.0, False, "mitigated"),
+        ("LONG, price far below",            LONG,  "LONG",  70.0, False, "mitigated"),
+        ("SHORT, price in the band",         SHORT, "SHORT", 105.0, True,  ""),
+        ("SHORT, price below — still waiting", SHORT, "SHORT", 100.0, False, "not yet"),
+        ("SHORT, price through the high",    SHORT, "SHORT", 107.0, False, "mitigated"),
+    ]
+    for label, sig, d, ltp, want, marker in cases:
+        got, why = MO.at_zone(sig, ltp, d)
+        good = got == want and (marker in why.lower() if marker else True)
+        ok &= good
+        print(f"  {label:<40}{'ENTER' if got else 'no':<7}"
+              f"{'ok' if good else '** WRONG **':<14}{why[:44]}")
+    # and the entry path asserts it independently
+    print()
+    print("  and check_entry_range asserts the same thing, with the stop:")
+    for label, d, ltp, lo, hi, stop, want in (
+            ("long in band, above stop",    "LONG",  95.0, 94.0, 96.0, 92.0, True),
+            ("long in band, AT the stop",   "LONG",  92.0, 94.0, 96.0, 92.0, False),
+            ("long mitigated below band",   "LONG",  93.0, 94.0, 96.0, 92.0, False),
+            ("short in band, below stop",   "SHORT", 105.0, 104.0, 106.0, 108.0, True),
+            ("short mitigated above band",  "SHORT", 107.0, 104.0, 106.0, 108.0, False)):
+        got, why = check_entry_range(d, ltp, lo, hi, stop)
+        good = got == want
+        ok &= good
+        print(f"    {label:<32}{'ENTER' if got else 'no':<7}"
+              f"{'ok' if good else '** WRONG **':<14}{why[:40]}")
+    # no distance gate anywhere
+    print()
+    # Checked on the CODE OBJECT, not the source text. Both modules describe the
+    # removed gate at length in comments and docstrings -- deliberately -- and a
+    # grep for the name cannot tell an explanation from a use.
+    import engine.zone_entry as ZE
+    def names(fn):
+        c = fn.__code__
+        return set(c.co_names) | set(c.co_varnames) | set(
+            n for const in c.co_consts if hasattr(const, "co_names")
+            for n in const.co_names)
+    no_gate = ("MAX_ENTRY_DIST_PCT" not in names(MO.at_zone)
+               and not hasattr(MO, "MAX_ENTRY_DIST_PCT"))
+    ok &= no_gate
+    print(f"  {'the loop has no entry-distance gate':<40}"
+          f"{'confirmed' if no_gate else '** STILL THERE **'}")
+    no_pub = ("MAX_ENTRY_DIST_PCT" not in names(ZE.compute_zone_entries)
+              and not hasattr(ZE, "MAX_ENTRY_DIST_PCT"))
+    ok &= no_pub
+    print(f"  {'nor does the publish gate':<40}"
+          f"{'confirmed' if no_pub else '** STILL THERE **'}")
+    return ok
 
 if __name__ == "__main__":
     sys.exit(main())

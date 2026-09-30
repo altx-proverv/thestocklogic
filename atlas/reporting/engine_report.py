@@ -286,7 +286,8 @@ def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
     out.append(f"  batch      {sess.get('batch_date') or '—'} · "
                f"{sess.get('zones', 0)} signal(s)")
     cand = int(sess.get("candidates_total") or 0)
-    out.append(f"  candidates {cand} came within {MAX_ENTRY_DIST_PCT_STR} of a zone")
+    out.append(f"  at zone    {cand} reached their zone band from the "
+               f"correct side")
     if log_ok and sess and cand != len(rows):
         out.append(f"  ⚠️ {cand} candidates but {len(rows)} logged decisions — "
                    f"decisions are not all reaching atlas_entry_log")
@@ -345,10 +346,12 @@ def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
     return "\n".join(out)
 
 
-MAX_ENTRY_DIST_PCT_STR = "0.30%"
+# The entry-distance gate is gone; nothing here should quote one. Kept as a name
+# only because a removed module-level constant fails at import, not at the line
+# that used it.
+MAX_ENTRY_DIST_PCT_STR = "none"
 try:
-    from engine.zone_entry import MAX_ENTRY_DIST_PCT as _M
-    MAX_ENTRY_DIST_PCT_STR = f"{_M}%"
+    pass
 except Exception:
     pass
 
