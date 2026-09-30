@@ -680,9 +680,115 @@ def enter_trade(signal: dict) -> dict:
     breaker.record_order_ok()
     intent["order_id"] = order.get("order_id")
     recorded = _complete_intent(row_id, intent)
+
+    # ── PROTECTION, IN THIS CYCLE, BEFORE RETURNING ───────────────
+    #
+    # Detecting the fill on the NEXT cycle would leave a minute of unprotected
+    # exposure on every entry in a system nobody is watching, so await_fill
+    # BLOCKS here. A MARKET order fills in well under a second; the wait is
+    # bounded and its timeout is treated as "a position may exist", never as
+    # "no position".
+    # ENABLE_EXIT_MANAGEMENT IS THE SWITCH THAT MAKES ATLAS AUTONOMOUS.
+    #
+    # False is the behaviour ATLAS has always had: it opens a position and leaves
+    # it to a human. That is not a degraded mode, it is the status quo, and it is
+    # the default so that deploying this code does not silently start managing
+    # money. True is the deliberate act.
+    from atlas.config import ENABLE_EXIT_MANAGEMENT
+    if not ENABLE_EXIT_MANAGEMENT:
+        log.warning(f"{symbol}: ENTERED with NO automatic stop — "
+                    f"ENABLE_EXIT_MANAGEMENT is False, so this position is "
+                    f"managed by hand")
+        return {"status": "ENTERED", "recorded": recorded,
+                "exit_managed": False, **intent}
+
+    from atlas.execution import exits as X
+
+    fill = X.await_fill(intent["order_id"])
+    intent["fill"] = fill.get("outcome")
+
+    if fill["outcome"] == "REJECTED":
+        # Nothing was bought or sold. Release rather than leave a phantom row.
+        _release_intent(row_id, f"order rejected: {fill.get('reason')}")
+        breaker.record_order_reject(symbol, str(fill.get("reason")))
+        return {"status": "ORDER_FAILED", "reason": fill.get("reason")}
+
+    if fill["outcome"] == "INDETERMINATE":
+        # The order may still fill. Nothing may be assumed about the position, so
+        # no stop can be sized and none is placed -- the row stays PENDING and
+        # reconcile owns it. This is the one path that can leave an unprotected
+        # position, and it does so because acting on an unknown quantity is worse.
+        log.error(f"{symbol}: fill INDETERMINATE ({fill.get('reason')}) — trade "
+                  f"{row_id} left PENDING, NOT protected. reconcile owns it.")
+        _mark_indeterminate(row_id, f"fill unconfirmed: {fill.get('reason')}")
+        _alert("FILL UNCONFIRMED",
+               f"{symbol} {direction}: {fill.get('reason')}. No stop placed. "
+               f"Trade {row_id} is PENDING and may be a live position.")
+        return {"status": "FILL_UNCONFIRMED", "trade_id": row_id,
+                "reason": fill.get("reason"), **intent}
+
+    filled_qty = int(fill["filled_qty"])
+    avg_price  = float(fill["avg_price"])
+    intent["fill_price"] = round(avg_price, 2)
+    intent["filled_qty"] = filled_qty
+
+    prot = X.protect(symbol=symbol, direction=direction, qty=filled_qty,
+                     product=sizing["product"], fill_price=avg_price,
+                     stop_price=sizing["stop_price"])
+    intent["exit_legs"] = prot.get("legs") or {}
+    intent["exit_mechanism"] = prot.get("mechanism", "")
+    intent["target_price"] = prot.get("target")
+
+    if not prot.get("ok"):
+        # THE STOP COULD NOT BE PLACED. Exit at market, now. An unprotected open
+        # position is an unbounded loss in a system nobody is watching; the bad
+        # exit costs a known amount once. Not a retry -- retrying is how a minute
+        # becomes an afternoon.
+        ex = X.emergency_exit(symbol, direction, filled_qty, sizing["product"],
+                              why=f"stop placement failed: {prot.get('reason')}")
+        if ex.get("ok"):
+            _alert("EXITED UNPROTECTED POSITION",
+                   f"{symbol} {direction} {filled_qty}: stop could not be placed "
+                   f"({prot.get('reason')}), exited at market.")
+            return {"status": "EXITED_NO_STOP", "trade_id": row_id,
+                    "reason": prot.get("reason"), **intent}
+        # The exit failed too. Open, unprotected, and the broker is refusing
+        # orders: halt so nothing else is opened into the same condition.
+        breaker.halt("OPEN_UNPROTECTED",
+                     f"{symbol}: open with no stop — placement failed "
+                     f"({prot.get('reason')}) AND the market exit failed "
+                     f"({ex.get('reason')})")
+        _alert("OPEN AND UNPROTECTED",
+               f"{symbol} {direction} {filled_qty} is OPEN with no stop and the "
+               f"market exit failed. {ex.get('reason')}. Entries halted.")
+        return {"status": "OPEN_UNPROTECTED", "trade_id": row_id,
+                "reason": ex.get("reason"), **intent}
+
+    log.info(f"{symbol}: protected via {prot.get('mechanism')} — "
+             f"stop {prot.get('stop')} target {prot.get('target')}")
+    intent["exit_managed"] = True
     # The order IS placed -- that is the truth, so the status stays ENTERED.
     # `recorded` tells the caller whether the row was promoted out of PENDING.
     return {"status": "ENTERED", "recorded": recorded, **intent}
+
+
+def _alert(kind: str, text: str) -> None:
+    """
+    Telegram, best effort, always logged.
+
+    NOT market_open.alert: market_open imports enter_trade, so importing back
+    would be circular. The throttling there is per-session state this module does
+    not have -- and these alerts are per-position incidents rather than the
+    repeating kind a cooldown exists for.
+    """
+    log.error(f"[{kind}] {text}")
+    try:
+        from atlas.reporting.telegram import send
+        if not send(f"<b>ATLAS — {kind}</b>\n{text}"):
+            log.error(f"ALERT NOT DELIVERED [{kind}] — Telegram send failed or is "
+                      f"unconfigured. This alert exists only in this log.")
+    except Exception as e:
+        log.error(f"ALERT NOT DELIVERED [{kind}] ({e})")
 
 
 def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:

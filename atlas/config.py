@@ -155,12 +155,31 @@ MIN_STOP_PCT = 1.5
 MAX_STOP_PCT = 7.0
 
 # Rules 1, 2 — agent must NOT place SL or target orders
-ALLOW_AUTOMATED_STOP_LOSS = False
-ALLOW_AUTOMATED_TARGET     = False
-
-# Phase switch — exit management (SL/target/trailing/risk) OFF this phase.
-# Scalable seam: flip True in a later phase to enable end-to-end management.
+# ── EXIT MANAGEMENT. THESE NOW ACTUALLY GATE SOMETHING ────────────
+#
+# All three were decorative: nothing in the tree read any of them, so the
+# "scalable seam" was a comment. atlas/execution/exits.py reads them now, which
+# means ENABLE_EXIT_MANAGEMENT is the single switch that turns autonomy on.
+#
+# FALSE IS THE CURRENT BEHAVIOUR, NOT A DEGRADED ONE: ATLAS opens positions and
+# leaves them to a human, which is what it has always done. Flipping it True is
+# what makes it autonomous, and it should be flipped deliberately.
 ENABLE_EXIT_MANAGEMENT = False
+
+# A stop is NOT optional once exit management is on. Kept True to say so: with
+# ENABLE_EXIT_MANAGEMENT True a position that cannot be given a stop is exited at
+# market, so there is no state in which ATLAS holds a position by choice without
+# one. Setting this False would not disable stops, it would just be a lie.
+ALLOW_AUTOMATED_STOP_LOSS = True
+
+# THE TARGET IS OPTIONAL, AND THIS IS THE KNOB FOR IT.
+#   True  -> a 2R target leg is placed alongside the stop.
+#   False -> stop only. Winners are held and trailed, which is what
+#            engine/zone_entry.py describes ("target = NONE. Winners are held and
+#            trailed") and what the mandate of long-term wealth building implies.
+# A fixed 2R exit caps every winner at 2R, so this is a strategy choice rather
+# than a safety one, and it is reversible without touching code.
+ALLOW_AUTOMATED_TARGET = True
 
 # ── MASTER LIVE-TRADING GATE ──────────────────────────────────────
 #
