@@ -429,7 +429,14 @@ async function sbGet(path, useSession){
 
 async function fetchEOD(){
   var s=new Date(); s.setDate(s.getDate()-30);
-  return (await sbGet('/rest/v1/signals?signal_date=gte.'+s.toISOString().split('T')[0]+
+  /* publication_kind=eq.signal KEEPS THIS PAGE AS IT IS.
+     06_push also publishes a WATCHLIST -- valid setups whose price was not at the
+     zone at the close but is within one ATR of it, which the market-hours loop
+     watches and re-tests live. There are roughly 90 of those a session against 3
+     signals. Without this filter they would render here as trades, turning "here
+     are today's signals" into a 90-row list the reader is invited to act on, which
+     is a different product. The watchlist gets its own presentation or none. */
+  return (await sbGet('/rest/v1/signals?publication_kind=eq.signal&signal_date=gte.'+s.toISOString().split('T')[0]+
                       '&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*')).rows;
 }
 async function fetchSectors(){

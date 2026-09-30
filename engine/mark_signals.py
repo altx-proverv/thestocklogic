@@ -69,12 +69,28 @@ def _headers():
 
 
 def fetch_signals() -> pd.DataFrame:
-    """Every published signal. Deduped on the natural key -- 06_push can leave
-    more than one row per (date, symbol, direction) and marks are uniquely keyed
-    on exactly that, so duplicates would upsert over each other."""
+    """Every published ACTIONABLE signal. Deduped on the natural key -- 06_push can
+    leave more than one row per (date, symbol, direction) and marks are uniquely
+    keyed on exactly that, so duplicates would upsert over each other.
+
+    Candidates (publication_kind='candidate') are the loop's watchlist and are NOT
+    scored: see the query below for why that has to be explicit."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/signals"
-        f"?select=signal_date,symbol,direction,setup_name,entry_ref,sl,target_1&limit=20000",
+        # publication_kind=eq.signal EXCLUDES THE WATCHLIST. Candidates are valid
+        # setups the loop watches but that were not actionable at publish time, and
+        # there are roughly 90 a session against 3 signals. Scoring them would
+        # silently change what this record MEASURES -- from "signals we published
+        # as actionable" to "everything we watched" -- and the accuracy number
+        # would move for a reason that has nothing to do with signal quality.
+        #
+        # eq.signal rather than not.eq.candidate on purpose: in SQL a NULL is not
+        # not-equal to anything, so not.eq would drop every row written before the
+        # column existed. The migration defaults and backfills to 'signal' so this
+        # is safe, and it is the same shape as the filter that would have quietly
+        # excluded 443 rows from the wrong-side exclusion.
+        f"?publication_kind=eq.signal"
+        f"&select=signal_date,symbol,direction,setup_name,entry_ref,sl,target_1&limit=20000",
         headers=_headers(), timeout=60)
     if r.status_code != 200:
         log.error(f"signal fetch failed: HTTP {r.status_code} {r.text[:200]}")

@@ -37,7 +37,11 @@ def sb_headers():
 
 def fetch_all_signals():
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/signals?order=signal_date.asc&select=*&limit=5000",
+        # publication_kind=eq.signal: candidates are the loop's watchlist, not
+        # calls, and computing outcomes for them would put ~90 rows a session into
+        # a record that describes published signals.
+        f"{SUPABASE_URL}/rest/v1/signals?publication_kind=eq.signal"
+        f"&order=signal_date.asc&select=*&limit=5000",
         headers=sb_headers()
     )
     return r.json()

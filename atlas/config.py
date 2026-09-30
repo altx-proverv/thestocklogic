@@ -123,6 +123,65 @@ MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 # Rule 4 — new entries per day. This is now a real limit rather than a
 # secondary guard: with the capital cap gone, it and available broker funds are
 # the only things that stop further entries.
+# ── HOW FAR IS WORTH WATCHING ──────────────────────────────────────
+#
+# A candidate is a signal valid in every way except that price was not at its zone
+# at last night's close. The loop re-checks that distance live, so the question is
+# which candidates could PLAUSIBLY close the gap during one session.
+#
+# MEASURED, over 754 sessions and 232 symbols: the median candidate sits 3.14% from
+# its zone and the 90th percentile 9.85%, while ATR is 2.72% of price at the median.
+# A candidate 9.85% away needs a four-ATR day in one direction; watching it costs a
+# quote every cycle and it will never fire.
+#
+# So the cut is ATR-RELATIVE, not a fixed percentage. One ATR is roughly "a normal
+# day's range", and it is PER SYMBOL, which a percentage cannot be: 2% is routine
+# for a volatile name and impossible for a stable one. At 1.0 ATR the watchlist
+# keeps 44.4% of candidates -- about 30 a session on 232 symbols, or 90 on 706 --
+# and drops only the ones that could not be reached anyway.
+#
+# Raise it to widen the net at the cost of quotes and noise; nothing about the
+# ENTRY standard changes either way, because near_zone still has to pass on the
+# live price.
+CANDIDATE_MAX_ATR_MULTIPLE = 1.0
+
+# ── CONCURRENT EXPOSURE CEILING ───────────────────────────────────
+#
+# A DIFFERENT SHAPE FROM THE PER-DAY COUNT THAT WAS REMOVED. That one capped
+# OPPORTUNITY: three entries a day whatever the book already held, so a quiet
+# week and a crowded one were treated alike and the fourth good setup was refused
+# for arithmetic. This caps RISK: how much can be open AT ONCE, which is the thing
+# that actually compounds.
+#
+# THE NUMBER COMES FROM THE MEASURED BOOK, not a preference. Over the 20 sessions
+# to 2026-09-30: peak capital Rs13,81,517 on 2026-09-07, average notional about
+# Rs78,000, which is roughly 18 positions open simultaneously at the peak. Entry
+# rate was 2.55 published signals a session against a 5-day median hold, and
+# 2.55 x 5 = 12.75 predicts the average while the peak runs higher on clustering.
+#
+# So 20. Above the measured peak of ~18, so it does NOT constrain what the book has
+# actually been doing -- a ceiling that binds on normal behaviour is a bug that
+# looks like caution. It bites only on the thing that is new: a watchlist about 45
+# times wider can raise the entry rate, and at a 5-day hold even 13 entries a
+# session compounds to 65 open positions, which is roughly Rs50 lakh at the
+# measured average notional.
+#
+# WHAT 20 MEANS IN THE TWO UNITS THAT MATTER:
+#   aggregate risk   20 x MAX_RISK_PER_TRADE = Rs60,000 if every stop fills on the
+#                    same day. That is the real number to have an opinion about.
+#   capital          20 x Rs78,000 average = about Rs15.6 lakh of longs, or
+#                    Rs20 lakh if every one hit the Rs1,00,000 notional cap.
+#
+# Shorts consume a fifth of a long's capital at MIS margin, so for them the COUNT
+# is the binding constraint rather than funds -- which is the right way round: 20
+# shorts is Rs60,000 of risk whether or not the margin happens to be cheap.
+#
+# Counted from atlas_trades in a BLOCKING status, so a PENDING row whose fill is
+# unconfirmed counts against the ceiling. A position that might exist occupies a
+# slot; assuming it does not is how a cap gets exceeded by exactly the positions
+# nobody is sure about.
+MAX_CONCURRENT_POSITIONS = 20
+
 # RETIRED. Gate 3 is gone: there is no per-day entry count. A count bounded the
 # NUMBER of positions while saying nothing about their size, and each is already
 # bounded to MAX_RISK_PER_TRADE and MAX_NOTIONAL_PER_TRADE. What stops the next

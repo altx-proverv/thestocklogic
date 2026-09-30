@@ -34,6 +34,9 @@ SUPABASE_URL     = os.environ.get("SUPABASE_URL",
                    "https://eibdlcanpudjgmkjxrga.supabase.co")
 SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY", "")
 SIGNALS_FILE     = Path("data/processed/signals_v2/all_scores_v2.parquet")
+# Valid setups whose price was not at the zone at the close, within one ATR of it.
+# The loop watches these; near_zone re-tests the distance live every cycle.
+CANDIDATES_FILE  = Path("data/processed/signals_v2/candidates_v2.parquet")
 # MIN_SCORE removed. 03b retired the score gate ("score is non-predictive per
 # validation -- disqualifiers alone decide qualification"), but this copy
 # survived and was the real filter: it dropped every accumulation setup, which
@@ -154,6 +157,7 @@ def push_signals(target_date: str = None):
 
     records = []
     _skipped = 0
+    kind = "signal"          # this pass publishes the actionable set
     for _, row in day.iterrows():
         # NO fallback to close. That fallback was the original defect.
         entry = row.get("entry_ref")
@@ -182,6 +186,11 @@ def push_signals(target_date: str = None):
             "grade":            str(row.get("grade", "B")),
             "score":            float(row.get("total_score", 0)),
             "setup_name":       str(row.get("setup_name", "")),
+            # 'signal' = actionable and scored; 'candidate' = watched, never
+            # scored. Named in the data because mark_signals filters on it: without
+            # that, ~90 candidates a session would silently change what the
+            # accuracy record measures.
+            "publication_kind": kind,
             "entry_ref":        float(entry) if entry else None,
             "entry_low":        float(row.get("entry_low")) if row.get("entry_low") else None,
             "entry_high":       float(row.get("entry_high")) if row.get("entry_high") else None,
@@ -283,7 +292,8 @@ def push_signals(target_date: str = None):
                       f"Delete ids {old_ids[:10]}{'...' if len(old_ids) > 10 else ''} by hand.")
 
     # Verify
-    ver_url = f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{d.strftime('%Y-%m-%d')}&select=symbol,grade,score"
+    ver_url = (f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{d.strftime('%Y-%m-%d')}"
+               f"&publication_kind=eq.signal&select=symbol,grade,score")
     ver_r = requests.get(ver_url, headers={
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}"
@@ -295,6 +305,20 @@ def push_signals(target_date: str = None):
             log.info(f"  {s['symbol']:<12} {s['grade']} {s['score']}")
     else:
         log.warning("Could not verify — check Supabase dashboard")
+
+    # The watchlist, published separately and AFTER the actionable set. Separate on
+    # purpose: the signal path above works and is load-bearing, and a candidate
+    # genuinely carries fewer fields -- no qty, risk or notional, because sizing
+    # happens after the distance check that candidates fail. Its cleanup is scoped
+    # to publication_kind=candidate so it cannot touch a signal row.
+    try:
+        push_candidates(d, headers, base_url)
+    except Exception as e:
+        # A failed watchlist must not fail the run: the actionable signals are
+        # already in and the loop still works from them, it just watches less.
+        log.error(f"candidate publish failed ({e}) — actionable signals are "
+                  f"published; the loop will watch only those")
+
     return records
 
 
@@ -313,6 +337,86 @@ def notify_atlas(records: list):
     # zeroed it out; with that gate removed it would have routed every signal
     # into retired code. Removed entirely.
     log.info(f"ATLAS: {len(records)} zone-validated signals available for 09:37 entry")
+
+
+
+def push_candidates(d, headers: dict, base_url: str) -> int:
+    """
+    Publish the watchlist for date `d`. -> rows published.
+
+    Candidates are valid setups whose price was not at the zone at the close and
+    which sit within one ATR of it. The loop watches them and near_zone re-tests
+    the distance against the live price every cycle, so the close-time distance is
+    a filter on what is WORTH watching, not on what is tradeable.
+
+    They are marked publication_kind='candidate' and mark_signals ignores them.
+    Without that they would silently change what the accuracy record measures,
+    from "signals we published as actionable" to "everything we watched".
+    """
+    if not CANDIDATES_FILE.exists():
+        log.info("no candidates artifact — run 03b to produce one")
+        return 0
+    cdf = pd.read_parquet(CANDIDATES_FILE)
+    if cdf.empty:
+        log.info("candidates artifact is empty")
+        return 0
+    cdf["date"] = pd.to_datetime(cdf["date"])
+    day = cdf[cdf["date"] == d]
+    if day.empty:
+        log.info(f"no candidates for {d.date()}")
+        return 0
+
+    day_str = d.strftime("%Y-%m-%d")
+    recs = []
+    for _, row in day.iterrows():
+        try:
+            entry = float(row.get("entry_ref"))
+        except (TypeError, ValueError):
+            continue
+        if entry <= 0:
+            continue
+        recs.append({
+            "signal_date":      day_str,
+            "symbol":           str(row.get("symbol", "")),
+            "direction":        str(row.get("direction", "")).upper(),
+            "publication_kind": "candidate",
+            "entry_ref":        entry,
+            "entry_low":        float(row.get("entry_low") or 0) or None,
+            "entry_high":       float(row.get("entry_high") or 0) or None,
+            "sl":               float(row.get("sl") or 0) or None,
+            "stop_pct":         float(row.get("stop_pct") or 0) or None,
+            "entry_dist_pct":   float(row.get("entry_dist_pct") or 0) or None,
+            "setup_name":       str(row.get("setup_name", "")),
+            "zone_source":      str(row.get("entry_zone_source")
+                                    or row.get("active_zone_source", "")),
+            "score":            float(row.get("total_score") or 0),
+            "structure_trend":  str(row.get("structure_trend", "ranging")),
+            "product":          "CNC" if str(row.get("direction", "")).upper() == "LONG" else "MIS",
+            "atr_pct":          float(row.get("atr_pct") or 0) or None,
+        })
+    if not recs:
+        log.info(f"no publishable candidates for {day_str}")
+        return 0
+
+    # Insert BEFORE deleting, same order as the signal path: a failed insert must
+    # leave the previous watchlist intact rather than emptying it.
+    r = requests.post(base_url, headers=headers, json=recs, timeout=60)
+    if r.status_code not in (200, 201):
+        log.error(f"candidate push failed: {r.status_code} — {r.text[:300]}")
+        return 0
+    log.info(f"✓ Published {len(recs)} candidate(s) for {day_str}")
+
+    old = requests.get(
+        f"{base_url}?signal_date=eq.{day_str}&publication_kind=eq.candidate"
+        f"&select=id&order=id.asc", headers=headers, timeout=30)
+    if old.status_code == 200:
+        ids = [x["id"] for x in old.json()][:-len(recs)] if len(old.json()) > len(recs) else []
+        if ids:
+            requests.delete(
+                f"{base_url}?id=in.({','.join(map(str, ids))})"
+                f"&publication_kind=eq.candidate", headers=headers, timeout=30)
+            log.info(f"  removed {len(ids)} superseded candidate row(s)")
+    return len(recs)
 
 
 def main():

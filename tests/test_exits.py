@@ -345,6 +345,48 @@ def main() -> int:
           r["target"] is None, not ALLOW_AUTOMATED_TARGET,
           "config says stop-only, so no target leg")
 
+    print()
+    print("THE EXPOSURE CEILING, AND WHAT IT IS MADE OF")
+    print("-" * 78)
+    # A DIFFERENT SHAPE from the per-day count that was removed: that capped
+    # OPPORTUNITY, this caps RISK. The number comes from the measured book -- peak
+    # capital Rs13,81,517 on 2026-09-07 at about Rs78,000 average notional, roughly
+    # 18 positions at once -- so 20 does not bind on normal behaviour and does bind
+    # on a watchlist ~18x wider raising the entry rate.
+    from atlas.config import (MAX_CONCURRENT_POSITIONS as MAXPOS,
+                              MAX_RISK_PER_TRADE as RISK,
+                              CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT)
+    check("the ceiling is above the measured peak of ~18",
+          MAXPOS > 18, True, f"{MAXPOS} positions")
+    check("  which is aggregate risk at stop",
+          MAXPOS * RISK, 60000.0, "if every stop fills on one day")
+    check("candidate reach is ATR-relative, not a fixed %",
+          ATRMULT, 1.0, "2% is a normal day for one stock and a shock for another")
+
+    import atlas.execution.atlas_entry as AE
+    saved = AE.get_open_position_count
+    try:
+        for readable, n, want in ((True, 0, "allow"), (True, MAXPOS - 1, "allow"),
+                                  (True, MAXPOS, "SKIPPED_EXPOSURE"),
+                                  (True, MAXPOS + 9, "SKIPPED_EXPOSURE"),
+                                  (False, 0, "BLOCKED_NO_LEDGER")):
+            AE.get_open_position_count = lambda r=readable, c=n: (r, c)
+            rd, cnt = AE.get_open_position_count()
+            got = ("BLOCKED_NO_LEDGER" if not rd
+                   else "SKIPPED_EXPOSURE" if cnt >= MAXPOS else "allow")
+            good = got == want
+            ok &= good
+            print(f"  {('readable=' + str(readable) + ' open=' + str(n)):<54}"
+                  f"{got:<20}{'ok' if good else '** want ' + want + ' **'}")
+    finally:
+        AE.get_open_position_count = saved
+    # an unreadable ledger must refuse, not read as "nothing is open" -- the one
+    # answer that turns the ceiling off exactly when it is least safe to
+    src = (ROOT / "atlas/execution/atlas_entry.py").read_text(encoding="utf-8")
+    check("the count uses BLOCKING_STATUSES, so PENDING occupies a slot",
+          "BLOCKING_STATUSES" in src.split("def get_open_position_count")[1][:900],
+          True, "a position that MIGHT exist takes a slot")
+
     print("-" * 78)
     print("EXITS:", "correct" if ok else "*** DEFECTIVE ***")
     return 0 if ok else 1

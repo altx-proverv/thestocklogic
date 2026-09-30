@@ -536,6 +536,47 @@ def build_playbooks(scored: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(all_plays, ignore_index=True)
 
 
+def _unreachable_only(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rows whose ONLY zone-gate objection was the entry distance.
+
+    Matched on the reject wording rather than by recomputing the gate, so there is
+    one implementation of what "too far" means. zone_entry emits
+    "entry N% away (max N%) -- unreachable" for exactly this case and nothing else
+    uses the word.
+    """
+    if df is None or not len(df) or "reject_reason" not in df.columns:
+        return df.head(0) if df is not None else None
+    live = df[~df["is_warmup"]] if "is_warmup" in df.columns else df
+    m = live["reject_reason"].fillna("").astype(str).str.contains(
+        "unreachable", case=False, regex=False)
+    out = live[m].copy()
+    if not len(out):
+        return out
+
+    # AND WITHIN REACH. A candidate 9.85% from its zone -- the 90th percentile --
+    # needs a four-ATR day in one direction; watching it costs a quote every cycle
+    # for an entry that cannot happen. The cut is ATR-relative because it has to be
+    # per symbol: 2% is a normal day for one stock and a shock for another.
+    try:
+        from atlas.config import CANDIDATE_MAX_ATR_MULTIPLE as MULT
+    except Exception:
+        MULT = 1.0
+    if "atr_pct" in out.columns:
+        reach = pd.to_numeric(out["atr_pct"], errors="coerce")
+    elif {"atr", "close"} <= set(out.columns):
+        reach = (pd.to_numeric(out["atr"], errors="coerce")
+                 / pd.to_numeric(out["close"], errors="coerce") * 100.0)
+    else:
+        # No volatility measure: keep everything rather than silently dropping on
+        # a column that is absent. A wider watchlist is a cost; a quiet one is a
+        # missed trade.
+        log.warning("no atr/atr_pct on the frame — candidate reach not filtered")
+        return out
+    keep = pd.to_numeric(out["entry_dist_pct"], errors="coerce") <= reach * MULT
+    return out[keep.fillna(False)].copy()
+
+
 def tally(df: pd.DataFrame, stats: dict, dq_reasons, direction: str = "") -> None:
     """
     Accumulate report COUNTS from a full scored batch, before it is reduced to
@@ -650,17 +691,37 @@ def main():
     stats = {}
     dq_reasons = {}
 
+    # ── CANDIDATES: valid in every way EXCEPT that price was not at the zone ──
+    #
+    # A candidate is a row the zone gate rejected with "unreachable" and nothing
+    # else: it has an active zone, a structural stop inside the band, and computed
+    # levels -- only the DISTANCE failed. That distance was measured at last
+    # night's CLOSE, and market_open.near_zone re-measures it against the live
+    # price every cycle, so a candidate is a signal whose one failing test the
+    # loop is about to redo on better information.
+    #
+    # Everything else the zone gate rejects is NOT a candidate: no active zone
+    # means there is nothing to enter against, and a stop outside 1.5-7% cannot be
+    # sized at all. Those are not "watch and see", they are no trade.
+    #
+    # Levels are already on these rows -- zone_entry assigns entry/stop/stop_pct
+    # before it checks the band and the distance -- but qty is not, because sizing
+    # happens after. That is correct: enter_trade re-sizes from the live price.
+    candidates = []
+
     for n, total, batch in smc_batches(batch_size):
         log.info(f"Batch {n}/{total}: {batch['symbol'].nunique()} stocks, "
                  f"{len(batch):,} rows")
 
         longs = process_direction(batch, "long", sector_bias, symbol_sector)
         tally(longs, stats, dq_reasons, "long")
+        candidates.append(_unreachable_only(longs))
         longs_q = longs[longs["qualifies"]].copy()
         del longs
 
         shorts = process_direction(batch, "short", sector_bias, symbol_sector)
         tally(shorts, stats, dq_reasons, "short")
+        candidates.append(_unreachable_only(shorts))
         shorts_q = shorts[shorts["qualifies"]].copy()
         del shorts
         del batch
@@ -676,6 +737,14 @@ def main():
     del all_qualifying
     log.info(f"Total qualifying: {len(scored):,}")
     scored.to_parquet(SIGNALS_DIR / "all_scores_v2.parquet", index=False)
+
+    # The candidate artifact, written even when empty so a consumer can tell
+    # "nothing was watchable" from "03b did not get this far".
+    cand = (pd.concat([c for c in candidates if c is not None], ignore_index=True)
+            if any(c is not None and len(c) for c in candidates)
+            else scored.head(0))
+    cand.to_parquet(SIGNALS_DIR / "candidates_v2.parquet", index=False)
+    log.info(f"Candidates (valid but not at the zone at close): {len(cand):,}")
 
         # Build playbooks
     log.info("\n── Step 3: Building playbooks ──")

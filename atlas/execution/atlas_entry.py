@@ -78,7 +78,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    BLOCKING_STATUSES,
+    BLOCKING_STATUSES, MAX_CONCURRENT_POSITIONS, MAX_RISK_PER_TRADE,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
     ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
     DEFAULT_ON_UNKNOWN_REGIME,
@@ -377,6 +377,33 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
 # decision time via atlas/risk/funds.py, which also nets off resting GTTs.
 
 
+def get_open_position_count() -> tuple:
+    """
+    (readable, count) of positions occupying a slot right now.
+
+    BLOCKING_STATUSES, MAX_CONCURRENT_POSITIONS, MAX_RISK_PER_TRADE, not just OPEN: a PENDING row is a fill we could not confirm,
+    so it may be a live position. A position that MIGHT exist occupies a slot --
+    assuming otherwise is how a ceiling gets exceeded by exactly the positions
+    nobody is sure about.
+
+    FAILS CLOSED. An unreadable ledger returns readable=False and the caller
+    refuses the entry. Returning 0 would read as "nothing is open", which is the
+    one answer that turns the ceiling off at the moment it is least safe to.
+    """
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/atlas_trades"
+            f"?status=in.({','.join(BLOCKING_STATUSES)})&select=id",
+            headers={**_headers(), "Prefer": "count=exact"}, timeout=15)
+        if r.status_code != 200:
+            log.error(f"open position count failed: HTTP {r.status_code}")
+            return False, 0
+        return True, len(r.json() or [])
+    except Exception as e:
+        log.error(f"open position count failed: {e}")
+        return False, 0
+
+
 def get_today_entry_count() -> int:
     """New LIVE entries recorded today."""
     today = datetime.now(IST).date().isoformat()
@@ -529,7 +556,27 @@ def enter_trade(signal: dict) -> dict:
             return {"status": "SKIPPED_MARKET_WAIT",
                     "reason": f"opening range is {mkt_dir} -- hedge short needs SHORT"}
 
-    # GATE 3 IS GONE. There is no per-day entry count.
+    # GATE 3 -- CONCURRENT EXPOSURE. Not a per-day count; a ceiling on what can
+    # be open at once. See MAX_CONCURRENT_POSITIONS: the number is the measured
+    # peak of the book plus headroom, so it does not bind on normal behaviour and
+    # does bind on a watchlist 45x wider raising the entry rate.
+    #
+    # Fails closed: an unreadable ledger refuses the entry rather than treating
+    # "cannot count" as "nothing is open".
+    slots_ok, open_now = get_open_position_count()
+    if not slots_ok:
+        return {"status": "BLOCKED_NO_LEDGER",
+                "reason": "cannot count open positions — refusing to add to an "
+                          "exposure I cannot measure"}
+    if open_now >= MAX_CONCURRENT_POSITIONS:
+        return {"status": "SKIPPED_EXPOSURE",
+                "reason": (f"{open_now}/{MAX_CONCURRENT_POSITIONS} positions "
+                           f"already open (~Rs{open_now * MAX_RISK_PER_TRADE:,.0f} "
+                           f"of risk at stop)")}
+
+    # THE PER-DAY COUNT IS STILL GONE. A count of entries TODAY bounded the
+    # number of positions while saying nothing about their size, and refused the
+    # fourth good setup for arithmetic.
     #
     # A count was never a risk control -- it bounded the NUMBER of positions while
     # saying nothing about their size, and each one is already bounded to Rs3,000

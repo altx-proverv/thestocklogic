@@ -281,9 +281,21 @@ def get_signals(batch_date: str) -> list:
     # atlas_trades.order_id. The sector comes from universe.SYMBOL_SECTOR_MAP
     # instead, which is where it actually lives and costs no query at all.
     r = requests.get(
+        # BOTH KINDS, deliberately unfiltered on publication_kind.
+        #
+        # This is the one consumer that SHOULD see the watchlist. A signal is one
+        # whose price was within 0.30% of its zone at last night's CLOSE; a
+        # candidate is valid in every other way and within one ATR of its zone. The
+        # loop re-tests the distance against the LIVE price every cycle via
+        # near_zone, so the close-time test was throwing away symbols the live test
+        # would have caught -- it watched 3 of 706 for a whole session.
+        #
+        # Nothing about the entry standard changes: a candidate still has to reach
+        # its zone, pass the fundamentals gate, the exposure ceiling, sizing and
+        # live funds. It just gets looked at.
         f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{batch_date}"
         f"&select=symbol,direction,entry_ref,entry_low,entry_high,sl,stop_pct,"
-        f"setup_name,zone_source,score,grade,structure_trend",
+        f"setup_name,zone_source,score,grade,structure_trend,publication_kind",
         headers=_headers(), timeout=30)
     if r.status_code != 200:
         raise RuntimeError(f"signal fetch failed: HTTP {r.status_code} "
@@ -335,7 +347,20 @@ def load_zone_map(state: Session) -> bool:
         for r in rows if r.get("symbol")
     }
     state.batch_date = batch_date
-    log.info(f"zone map loaded: {len(state.zone_map)} zones from batch {batch_date}")
+    # The split is logged because it is the difference between "the engine is
+    # watching 3 symbols" and "the engine is watching 90". A session that scans
+    # almost nothing should say so in its first line, not be inferred from
+    # 87 cycles of "nothing at a zone".
+    n_sig = sum(1 for r in rows
+                if str(r.get("publication_kind", "signal")) == "signal")
+    n_cand = len(state.zone_map) - n_sig
+    log.info(f"zone map loaded: {len(state.zone_map)} zones from batch "
+             f"{batch_date} — {n_sig} at-zone signal(s), {n_cand} candidate(s) "
+             f"being watched")
+    if not n_cand:
+        log.warning("no candidates in this batch: the loop is watching only "
+                    "symbols that were already at their zone at the close. Run "
+                    "03b/06_push to publish a watchlist.")
     return True
 
 

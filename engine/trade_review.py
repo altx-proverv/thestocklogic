@@ -31,7 +31,10 @@ def fetch_signals():
     """Fetch all signals from Supabase."""
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/signals?order=signal_date.asc&select=*&limit=2000",
+        # Actionable signals only; the watchlist is not something to review as a
+        # trade that was or was not taken.
+        f"{SUPABASE_URL}/rest/v1/signals?publication_kind=eq.signal"
+        f"&order=signal_date.asc&select=*&limit=2000",
         headers=headers
     )
     return r.json()
