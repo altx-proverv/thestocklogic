@@ -369,13 +369,51 @@ def main() -> int:
           "SKIPPED_EXPOSURE" in code, False)
     # What DOES stop the next entry, and the one check that must stay
     check("what stops an entry is broker funds, read live",
-          "can_afford" in code, True, "kite.margins(), net of resting GTTs")
+          "available_funds()" in code, True, "kite.margins() less resting GTTs")
     check("  and it fails closed on an unreadable balance",
-          "BLOCKED_NO_FUNDS" in code or "SKIPPED_FUNDS" in code, True)
+          "BLOCKED_NO_FUNDS" in code and "SKIPPED_FUNDS" in code, True)
+    # the kill switch keeps its own independent read -- one gate reusing a figure
+    # read moments earlier is fine; both gates trusting a single read is not
+    ks = (ROOT / "atlas/risk/kill_switch.py").read_text(encoding="utf-8")
+    check("  and the kill switch still reads the balance itself",
+          "can_afford" in ks, True, "an independent fail-closed authority")
     # per-trade bounds are untouched; only the aggregate went
     check("per-trade risk cap still applies", CFG.MAX_RISK_PER_TRADE, 3000.0)
     check("per-trade notional cap still applies",
           CFG.MAX_NOTIONAL_PER_TRADE, 100000.0)
+
+    # ── THE SIZER IS TOLD WHAT THE ACCOUNT HOLDS ──────────────────────
+    # This branch was dead for the life of the module: size_by_risk() accepted
+    # available_funds and no caller passed it, so a CNC long always sized to the
+    # Rs1,00,000 notional cap and Gate 6 then refused it. Recorded live on
+    # 2026-08-14: "need Rs101,486 ... available Rs38,395". Asserted here because
+    # the failure mode is a caller that silently stops passing it again.
+    from atlas.risk.position_sizing import size_by_risk as SBR
+    src = (ROOT / "atlas/execution/atlas_entry.py").read_text(encoding="utf-8")
+    check("Gate 5 passes the balance to the sizer",
+          "available_funds=spendable" in src, True,
+          "without it Gate 6 declines trades ATLAS priced for itself")
+    check("  and reads the balance once, before sizing",
+          src.index("_funds = available_funds()") < src.index("need_buffered > float"), True,
+          "Gate 6 compares against that read instead of making a second one")
+    check("  so enter_trade holds exactly one balance read",
+          src.count("available_funds()"), 1)
+    check("  failing closed on an unreadable balance",
+          "except FundsUnavailable" in src, True)
+
+    # a Rs38,395 account takes the same trade at a smaller size
+    r = SBR(entry_price=1000.0, stop_price=970.0, direction="LONG",
+            available_funds=38395.0 / 1.02)
+    ok &= r["qty"] > 0
+    print(f"  {'Rs38,395 account, Rs1,000 stock':<54}"
+          f"{str(r['qty']) + ' sh':<20}{'ok' if r['qty'] > 0 else '** refused **'}")
+    check("  binding cap is the balance, not the notional", r.get("binding_cap"), "funds")
+    check("  and real risk is reported, not assumed Rs3,000",
+          r["risk_actual"] < 3000.0, True, f"Rs{r['risk_actual']:,.0f} at {r['qty']} shares")
+    # and it still refuses when even the minimum lot is unaffordable
+    tiny = SBR(entry_price=1000.0, stop_price=970.0, direction="LONG",
+               available_funds=4000.0 / 1.02)
+    check("  a balance below one lot still refuses", tiny["qty"], 0)
 
     from atlas.config import (CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT,
                               CANDIDATE_MAX_DIST_PCT as ABSCAP)

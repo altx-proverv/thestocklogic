@@ -79,14 +79,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
     BLOCKING_STATUSES,
-    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
+    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO, FUNDS_SAFETY_BUFFER_PCT,
     ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
 from atlas.risk.position_sizing import size_by_risk
 from atlas.risk.kill_switch import check as kill_switch_check
 from atlas.risk import breaker
-from atlas.risk.funds import can_afford
+from atlas.risk.funds import available_funds, FundsUnavailable
 from atlas.execution.broker import place_order, get_ltp, order_margin
 
 log = logging.getLogger("ATLAS-ENTRY")
@@ -614,13 +614,50 @@ def enter_trade(signal: dict) -> dict:
     if not in_range:
         return {"status": "SKIPPED_RANGE", "reason": range_reason}
 
-    # GATE 5 -- sizing. Rs3,000 risk / Rs1,00,000 notional, qty a multiple of 5.
-    sizing = size_by_risk(entry_price=ltp, stop_price=stop_price, direction=direction)
+    # GATE 5 -- sizing. Rs3,000 risk / Rs1,00,000 notional, qty a multiple of 5,
+    # AND capped by what the account can actually pay for.
+    #
+    # THE SIZER'S FUNDS PATH WAS DEAD. size_by_risk() has taken an
+    # `available_funds` argument since it was written -- it reduces qty to fit,
+    # sets binding="funds", and says so in the log -- and NO caller has ever
+    # passed it. The consequence was not a missed optimisation, it was Gate 6
+    # refusing trades ATLAS had priced for itself: a CNC long blocks its FULL
+    # notional, sizing ran to the Rs1,00,000 cap regardless of the balance, and
+    # then the funds check declined it. The live record has this verbatim --
+    # 2026-08-14, "insufficient funds: need Rs101,486 (Rs99,496 + 2% buffer),
+    # available Rs38,395". Nothing was wrong with the trade. A Rs38,395 account
+    # can carry it at 380 shares instead of 1,000.
+    #
+    # So the floor for taking ANY long was an idle Rs1,02,000, set by
+    # MAX_NOTIONAL_PER_TRADE rather than by risk, while MAX_RISK_PER_TRADE says
+    # the trade risks Rs3,000. Those two numbers were describing different
+    # systems.
+    #
+    # READ ONCE, HERE, AND REUSE IT. Gate 6 below needs the same figure, so
+    # taking it here costs nothing and removes a second kite.margins() +
+    # get_gtts() round trip per candidate per cycle.
+    #
+    # FAILS CLOSED, unchanged: an unreadable balance blocks. Sizing against an
+    # assumed balance is exactly the stored-capital ledger this module deleted.
+    try:
+        _funds = available_funds()
+        spendable = float(_funds["available"]) / (1.0 + FUNDS_SAFETY_BUFFER_PCT)
+    except FundsUnavailable as e:
+        return {"status": "BLOCKED_NO_FUNDS_DATA",
+                "reason": f"broker funds unreadable: {e}"}
+
+    sizing = size_by_risk(entry_price=ltp, stop_price=stop_price, direction=direction,
+                          available_funds=spendable)
     if sizing.get("qty", 0) <= 0:
         return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
+    if sizing.get("binding_cap") == "funds":
+        log.info(f"{symbol}: sized to the balance — {sizing['qty']} shares, "
+                 f"Rs{sizing['capital_required']:,.0f} of Rs{spendable:,.0f} spendable "
+                 f"(risk Rs{sizing['risk_actual']:,.0f}, under the Rs3,000 budget)")
 
-    # GATE 6 -- live broker funds, net of resting GTTs. FAIL CLOSED: can_afford
-    # returns False both when funds are short and when they cannot be read.
+    # GATE 6 -- live broker funds, net of resting GTTs. FAILS CLOSED at Gate 5,
+    # where the balance is read: unreadable means BLOCKED_NO_FUNDS_DATA before a
+    # quantity exists. What is left here is the comparison.
     # THE BROKER'S MARGIN, NOT OUR ESTIMATE. sizing["capital_required"] is
     # notional for a CNC long and notional x SHORT_MARGIN_PCT_ESTIMATE (0.20) for
     # an MIS short. With no cap on the number of trades, that 0.20 is the only
@@ -630,7 +667,9 @@ def enter_trade(signal: dict) -> dict:
     # A failed lookup falls back to the estimate and says so. Refusing every trade
     # because the margin endpoint is unreachable would be a different failure, not
     # a safer one -- and can_afford still fails closed on unreadable FUNDS, which
-    # is the check that actually protects the account.
+    # is the check that actually protects the account. The kill switch at Gate 7
+    # still calls can_afford() itself and remains the independent fail-closed
+    # authority on the balance.
     need = sizing["capital_required"]
     marg = order_margin(symbol=symbol, direction=direction, qty=sizing["qty"],
                         product=sizing["product"], order_type="MARKET")
@@ -647,11 +686,20 @@ def enter_trade(signal: dict) -> dict:
                     f"({marg.get('reason')})")
         sizing["margin_source"] = "estimate"
 
-    funds_ok, funds_reason, funds_detail = can_afford(need)
-    if not funds_ok:
-        status = ("BLOCKED_NO_FUNDS_DATA"
-                  if funds_detail.get("data_available") is False else "SKIPPED_FUNDS")
-        return {"status": status, "reason": funds_reason}
+    # THE SAME BALANCE THE SIZER WAS GIVEN, not a second read. can_afford() would
+    # re-fetch kite.margins() and get_gtts() here, and acting on the FIRST of two
+    # reads while the second decides is worse than one read used for both: sizing
+    # and the check would be answering different questions about the same account.
+    # Semantics are unchanged -- the buffer still applies, an unreadable balance
+    # still blocked, above at Gate 5, before any sizing happened.
+    need_buffered = need * (1.0 + FUNDS_SAFETY_BUFFER_PCT)
+    if need_buffered > float(_funds["available"]):
+        return {"status": "SKIPPED_FUNDS",
+                "reason": (f"insufficient funds: need Rs{need_buffered:,.0f} "
+                           f"(Rs{need:,.0f} + {FUNDS_SAFETY_BUFFER_PCT*100:.0f}% buffer), "
+                           f"available Rs{_funds['available']:,.0f} (broker "
+                           f"Rs{_funds['margin']:,.0f} less Rs{_funds['gtt_committed']:,.0f} "
+                           f"resting GTTs)")}
 
     # GATE 7 -- kill switch
     signal["capital_required"] = need
