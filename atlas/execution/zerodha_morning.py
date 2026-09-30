@@ -18,7 +18,7 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
     ZERODHA_API_KEY, ZERODHA_API_SECRET, ZERODHA_USER_ID,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, MAX_TRADES_PER_DAY,
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
 )
 from atlas.reporting.telegram import send
 from atlas.execution.zerodha_login import (
@@ -119,7 +119,7 @@ def run():
             f"Time: {now}\n"
             f"Risk/trade ₹{MAX_RISK_PER_TRADE:,.0f} · "
             f"Max notional ₹{MAX_NOTIONAL_PER_TRADE:,.0f}\n"
-            f"Max {MAX_TRADES_PER_DAY} new entries/day · "
+            f"Entries bounded by live broker funds · "
             f"funds read live from the broker\n"
             f"Market opens in 45 minutes."
         )

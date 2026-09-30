@@ -123,7 +123,17 @@ MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 # Rule 4 — new entries per day. This is now a real limit rather than a
 # secondary guard: with the capital cap gone, it and available broker funds are
 # the only things that stop further entries.
-MAX_TRADES_PER_DAY = 3
+# RETIRED. Gate 3 is gone: there is no per-day entry count. A count bounded the
+# NUMBER of positions while saying nothing about their size, and each is already
+# bounded to MAX_RISK_PER_TRADE and MAX_NOTIONAL_PER_TRADE. What stops the next
+# entry is the absence of funds to pay for it, read live from the broker at Gate 6.
+#
+# Kept at 0 rather than deleted because several readers imported it, and a name
+# that disappears takes its history with it. 0 is not a limit of zero -- nothing
+# reads it as one; it is the absence of a limit, and any code that starts
+# comparing against it again will block everything immediately and loudly rather
+# than quietly reinstating a cap.
+MAX_TRADES_PER_DAY = 0
 
 # STOP-DISTANCE BAND — a quality filter on the structural stop. Not one of the
 # numbered rules, but shared by two modules, so it belongs here rather than in
@@ -212,30 +222,35 @@ ALLOW_SHORT_IN_BEARISH  = True
 # takes zero trades over that period. That is the intent, not a regression.
 ALLOW_SHORT_IN_SIDEWAYS = False
 
-# SHORT ENTRIES ARE OFF, AS A DECISION, IN ONE PLACE.
+# WHICH SIDES MAY BE OPENED AT ALL. The direction for a given day comes from
+# atlas_entry.allowed_side (the regime x sentiment matrix); these two are the
+# master switches above it, so a side can be taken off the table without
+# reasoning about market state.
 #
-# The gate's SHORT branch requires regime == "bull" AND extreme_bearish, and
-# those are individually satisfiable: a context with both passes. They conflict
-# only because build_market._classify cannot emit them together -- extreme_bearish
-# requires `broken` (close < 200DMA x 0.97) and `broken` sets the regime to bear
-# after the bull assignment. So "shorts are unreachable" was a property of the
-# CLASSIFIER, asserted in a comment in the entry gate, and a sweep of all 32
-# regime x hedge x sentiment combinations found the one corner that passes.
+# Shorts were False while the mandate was long-only. They are True now: ATLAS
+# takes the side the matrix names, shorts included, MIS and intraday.
 #
-# That is too thin a guarantee now that the screener publishes shorts in a
-# bearish regime and they reach the same table ATLAS reads. A published short is
-# information for the reader, never an instruction to the agent, and the entry
-# path has to enforce that ON ITS OWN rather than inheriting it from the
-# regime classifier two modules away.
-#
-# The mandate is long-term wealth building, a hedge short is not that, and shorts
-# lose money on the measured record. Flipping this to True is how that decision
-# gets reversed -- deliberately, in one greppable place.
-ALLOW_SHORT_ENTRIES = False
+# ALLOW_SHORT_ENTRIES is still checked FIRST and unconditionally in the SHORT
+# branch, ahead of any market reading. It was added because the previous
+# guarantee was emergent -- SHORT required bull AND extreme_bearish, two
+# individually satisfiable conditions that conflicted only because
+# build_market._classify cannot emit them together. That is not a guarantee, it
+# is an invariant in another module, and a sweep found the corner where it held.
+# The switch stays for the same reason it was added: so the answer is local.
+ALLOW_LONG_ENTRIES  = True
+ALLOW_SHORT_ENTRIES = True
 
-# Hedge shorts require the extreme_bearish flag from market.parquet:
-# close < 200DMA-3% AND 50DMA < 200DMA AND VIX > 18. Deliberately rare.
-REQUIRE_EXTREME_BEARISH_FOR_SHORTS = True
+# SUPERSEDED BY THE MATRIX, and set False rather than deleted so its absence is
+# the visible change. Shorts used to require extreme_bearish -- close < 200DMA-3%,
+# 50DMA < 200DMA, VIX > 18 -- which made them a rare hedge. The direction is now
+# decided by regime x sentiment in atlas_entry.allowed_side, where a bear regime
+# with bearish breadth is sufficient. Leaving this True would have kept shorts
+# unreachable while the config claimed they were enabled.
+#
+# extreme_bearish is still computed by build_market and still worth having: it is
+# a much stronger condition than "bear regime", and it is the natural knob if
+# shorts turn out to need one.
+REQUIRE_EXTREME_BEARISH_FOR_SHORTS = False
 
 # The Nifty opening-range gate is an INTRADAY directional check. It applies to
 # hedge shorts only. Applied to accumulation longs it blocked entries on flat

@@ -21,7 +21,9 @@ GATE STACK
                                      Blocked side is reported as
                                      SKIPPED_REGIME or SKIPPED_SENTIMENT.
   2. Opening range                -- SHORTS ONLY (intraday directional check)
-  3. New entries today            -- MAX_TRADES_PER_DAY
+  3. (removed -- there is no per-day entry count. Size is bounded per trade
+      by Rs3,000 risk / Rs1,00,000 notional, and total exposure by live broker
+      funds at Gate 6. Nothing caps simultaneous capital deployed.)
   3b. Already holding symbol      -- hard skip. No scale-in: the risk and
                                      notional caps are per-entry, so a second
                                      fill behind the same stop doubles both.
@@ -41,7 +43,7 @@ institutions accumulate and retail stops watching.
 CAPITAL IS NO LONGER TRACKED. The open-position limit and the deployed-capital
 cap are both gone, along with the atlas_trades-derived exposure ledger that fed
 them -- it was a second copy of the broker's balance and nothing reconciled the
-two. The binding constraints are now MAX_TRADES_PER_DAY, one-position-per-symbol
+two. The binding constraints are now one-position-per-symbol
 (Gate 3b), and whether the broker actually has the cash, read live at decision
 time. See atlas/risk/funds.py.
 
@@ -76,10 +78,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    MAX_TRADES_PER_DAY, BLOCKING_STATUSES,
-    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO, ALLOW_SHORT_ENTRIES,
-    ALLOW_LONG_IN_BULLISH,
-    ALLOW_SHORT_IN_BEARISH, REQUIRE_EXTREME_BEARISH_FOR_SHORTS,
+    BLOCKING_STATUSES,
+    ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
+    ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
 from atlas.risk.position_sizing import size_by_risk
@@ -236,6 +237,29 @@ def sentiment_ok(ctx: dict) -> tuple:
     supply these at all, so "unknown" has to mean no -- otherwise the gate opens
     precisely when it knows least.
     """
+    state, reason = sentiment_state(ctx)
+    return state == "bullish", reason
+
+
+def sentiment_state(ctx: dict) -> tuple:
+    """
+    (state, reason) where state is bullish / bearish / mixed / unknown.
+
+    THREE-VALUED, because the direction matrix now needs a bearish reading and
+    not merely the absence of a bullish one. Both legs must agree:
+
+        bullish   advances > declines  AND  Nifty above its 20DMA
+        bearish   declines > advances  AND  Nifty below its 20DMA
+        mixed     the two legs disagree -- breadth says one thing and the
+                  index the other. Not a direction; ATLAS stays in cash.
+        unknown   an input is missing. Never a direction either.
+
+    "mixed" is deliberately NOT folded into bearish. Under the old boolean,
+    anything that was not bullish read as "no long", which was safe because the
+    only consequence was inaction. Now the same reading would be a licence to
+    SHORT, and "breadth is positive but the index is below its 20DMA" is not a
+    bearish market -- it is an unclear one.
+    """
     adv, dec = ctx.get("advance_count"), ctx.get("decline_count")
     close, ma20 = ctx.get("nifty_close"), ctx.get("nifty_20dma")
 
@@ -243,108 +267,104 @@ def sentiment_ok(ctx: dict) -> tuple:
                               ("nifty_close", close), ("nifty_20dma", ma20))
                if v is None]
     if missing:
-        return False, (f"sentiment unevaluable from {ctx.get('source', '?')} "
-                       f"-- missing {', '.join(missing)}")
+        return "unknown", (f"sentiment unevaluable from {ctx.get('source', '?')} "
+                           f"-- missing {', '.join(missing)}")
 
-    breadth_ok = adv > dec
+    breadth_up = adv > dec
     above_20   = close > ma20
-    if not breadth_ok and not above_20:
-        return False, (f"breadth negative ({adv:.0f} adv / {dec:.0f} dec) "
-                       f"AND Nifty {close:.0f} below 20DMA {ma20:.0f}")
-    if not breadth_ok:
-        return False, f"breadth negative ({adv:.0f} adv / {dec:.0f} dec)"
-    if not above_20:
-        return False, f"Nifty {close:.0f} below 20DMA {ma20:.0f}"
-    return True, (f"breadth {adv:.0f}/{dec:.0f}, Nifty {close:.0f} "
-                  f"above 20DMA {ma20:.0f}")
+    legs = (f"breadth {adv:.0f}/{dec:.0f}, Nifty {close:.0f} "
+            f"{'above' if above_20 else 'below'} 20DMA {ma20:.0f}")
+    if breadth_up and above_20:
+        return "bullish", legs
+    if (not breadth_up) and (not above_20):
+        return "bearish", legs
+    return "mixed", (f"{legs} -- breadth and index disagree")
+
+
+def allowed_side(ctx: dict) -> tuple:
+    """
+    (side, reason, blocked_by) -- the ONE direction ATLAS may open right now, or
+    None for cash. side is "LONG", "SHORT" or None.
+
+    THE MATRIX, and it is a matrix rather than a pair of independent tests
+    because regime and sentiment can disagree and the disagreement is itself an
+    answer:
+
+        regime    sentiment   ->  side
+        bull      bullish         LONG
+        bear      bearish         SHORT
+        sideways  bullish         LONG     follow sentiment
+        sideways  bearish         SHORT    follow sentiment
+        bull      bearish         cash     structure and participation conflict
+        bear      bullish         cash     same, other way round
+        any       mixed           cash     breadth and index disagree
+        unknown   any             cash     DEFAULT_ON_UNKNOWN_REGIME
+        any       unknown         cash     an unreadable input is never a side
+
+    ONE SIDE AT A TIME, never both. The matrix returns a single direction, so a
+    long and a short can never be opened on the same evaluation cycle. Positions
+    already held are NOT affected by a change here -- see the note in
+    enter_trade. This function only decides what may be OPENED.
+
+    Replaces the previous shape, where LONG required bull-and-bullish and SHORT
+    was unreachable by construction. Shorts are now reachable, which is why
+    ALLOW_SHORT_ENTRIES and the extreme-bearish requirement had to be revisited
+    rather than left as flags that happened to block.
+    """
+    regime = str(ctx.get("regime", "unknown")).lower()
+    if regime not in ("bull", "bear", "sideways"):
+        return (None, f"regime {regime}/stale ({ctx.get('source','?')}) "
+                      f"-> {DEFAULT_ON_UNKNOWN_REGIME}", "REGIME")
+
+    sent, sreason = sentiment_state(ctx)
+    if sent == "unknown":
+        return None, sreason, "SENTIMENT"
+    if sent == "mixed":
+        return None, f"sentiment mixed: {sreason}", "SENTIMENT"
+
+    if regime == "bull" and sent == "bullish":
+        return "LONG", f"bull regime; {sreason}", None
+    if regime == "bear" and sent == "bearish":
+        return "SHORT", f"bear regime; {sreason}", None
+    if regime == "sideways":
+        side = "LONG" if sent == "bullish" else "SHORT"
+        return side, f"sideways regime following {sent} sentiment; {sreason}", None
+
+    # bull+bearish or bear+bullish: structure and participation point opposite
+    # ways. Neither side is taken -- this is the case the AND-gate existed for.
+    #
+    # blocked_by is CONFLICT, not REGIME or SENTIMENT. Attributing a disagreement
+    # to either half would be arbitrary and would destroy the thing blocked_by
+    # exists for: counting WHY ATLAS sat out, from atlas_entry_log, without
+    # parsing prose. "The trend is there and nobody is buying it" is a distinct
+    # market state from "there is no trend", and over a long flat stretch the
+    # split between them is the interesting number.
+    return (None, f"{regime} regime against {sent} sentiment -- no side "
+                  f"({sreason})", "CONFLICT")
 
 
 def regime_allows_side(ctx: dict, direction: str) -> tuple:
     """
-    ATLAS trades only when BOTH hold. -> (ok, reason, blocked_by)
-
-        REGIME     close above 200DMA AND 50DMA above 200DMA
-        SENTIMENT  advancing > declining today AND Nifty above its 20DMA
-
-    Either fails, stay in cash.
-
-    REGIME IS market_regime == "bull" BY DEFINITION. build_market._classify
-    sets bull on exactly `above200 & stacked`, which is the same pair of
-    conditions, so this reads the classification rather than recomputing it
-    from the DMAs -- one definition, in the module that owns the series.
-
-    SIDEWAYS NO LONGER QUALIFIES, and that is the substance of this change.
-    Accumulation used to run in bull AND sideways on the argument that a quiet
-    market is the setup rather than a reason to stand aside. The regime has
-    been sideways throughout the live history, so on this rule ATLAS takes no
-    trades over that period. Long stretches with no entries are the intended
-    behaviour of this gate, not a fault in it.
-
-    `blocked_by` is returned separately from the prose so the caller can put it
-    in atlas_entry_log.status and the REGIME / SENTIMENT split stays countable
-    rather than needing the reason text parsed.
+    (ok, reason, blocked_by) for ONE direction. Thin wrapper over allowed_side so
+    the matrix lives in exactly one place.
     """
-    d = direction.upper()
-    regime = ctx.get("regime", "unknown")
+    d = (direction or "").upper()
+    if d not in ("LONG", "SHORT"):
+        return False, f"unknown direction {d}", "CONFIG"
 
-    if regime == "unknown":
-        return (False, f"regime unknown/stale ({ctx.get('source','?')}) "
-                       f"-> {DEFAULT_ON_UNKNOWN_REGIME}", "REGIME")
+    if d == "SHORT" and not ALLOW_SHORT_ENTRIES:
+        return (False, "short entries are disabled (ALLOW_SHORT_ENTRIES)",
+                "CONFIG")
+    if d == "LONG" and not ALLOW_LONG_ENTRIES:
+        return (False, "long entries are disabled (ALLOW_LONG_ENTRIES)", "CONFIG")
 
-    # ── SENTIMENT ────────────────────────────────────────────────
-    # Checked for both sides and before the per-side logic: it is a statement
-    # about whether the market is being bought today, and it does not become
-    # truer for one direction than the other.
-    sent_ok, sent_why = sentiment_ok(ctx)
-
-    if d == "LONG":
-        if regime != "bull":
-            return (False, f"regime {regime} -- long needs bull "
-                           f"(close>200DMA and 50DMA>200DMA)", "REGIME")
-        if not ALLOW_LONG_IN_BULLISH:
-            return False, "longs disabled", "CONFIG"
-        if not sent_ok:
-            return False, sent_why, "SENTIMENT"
-        return True, f"bull regime; {sent_why}", None
-
-    if d == "SHORT":
-        # SHORTS ARE UNREACHABLE HERE, AND THAT IS THE INTENT.
-        #
-        # REGIME requires bull; extreme_bearish requires close < 200DMA - 3%.
-        # The two cannot hold at once, so no short can pass this gate. That is
-        # a decision, not an oversight:
-        #
-        #   the mandate is long-term wealth building, and a hedge short is not
-        #   that;
-        #   shorts lose money on the measured record;
-        #   regime has blocked them throughout the live history anyway, so
-        #   nothing is being given up that was ever taken.
-        #
-        # The branch is kept rather than deleted so the reason survives with
-        # it, and so a future regime change makes the consequence visible
-        # instead of silently re-enabling a side nobody decided to re-enable.
-        # FIRST, AND UNCONDITIONALLY. Everything below is kept for the record of
-        # what the rule was, but this line is what makes a short unreachable, and
-        # it does so without depending on any other module's classification. The
-        # two conditions below are individually satisfiable -- a bull +
-        # extreme_bearish context passes both -- so they were never the guarantee
-        # they read as. See ALLOW_SHORT_ENTRIES in atlas/config.
-        if not ALLOW_SHORT_ENTRIES:
-            return (False, "short entries are disabled -- a published short is "
-                           "information for the reader, not an instruction",
-                    "CONFIG")
-        if regime != "bull":
-            return (False, f"regime {regime} -- entries require bull", "REGIME")
-        if REQUIRE_EXTREME_BEARISH_FOR_SHORTS and not ctx.get("extreme_bearish"):
-            return (False, "hedge shorts require extreme_bearish "
-                           "(200DMA-3%, 50<200DMA, VIX>18)", "REGIME")
-        if not ALLOW_SHORT_IN_BEARISH:
-            return False, "shorts disabled", "CONFIG"
-        if not sent_ok:
-            return False, sent_why, "SENTIMENT"
-        return True, f"extreme bearish; {sent_why}", None
-
-    return False, f"unknown direction {d}", "CONFIG"
+    side, reason, blocked = allowed_side(ctx)
+    if side is None:
+        return False, reason, blocked
+    if side != d:
+        return (False, f"{reason} -- {side} is the permitted side today, "
+                       f"not {d}", "REGIME")
+    return True, reason, None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -484,8 +504,9 @@ def enter_trade(signal: dict) -> dict:
     # GATE 1 -- regime AND sentiment. Both must hold or ATLAS stays in cash.
     #
     # The status carries the split so it is countable in atlas_entry_log
-    # without parsing prose: SKIPPED_REGIME means the market structure is not
-    # bull, SKIPPED_SENTIMENT means it is but today's participation is not.
+    # without parsing prose: SKIPPED_REGIME means the structure gives no side,
+    # SKIPPED_SENTIMENT means participation is unclear or unreadable, and
+    # SKIPPED_CONFLICT means the two point opposite ways.
     # Knowing which one holds the agent out, over a long flat stretch, is the
     # difference between "the trend is not there" and "the trend is there and
     # nobody is buying it".
@@ -508,12 +529,21 @@ def enter_trade(signal: dict) -> dict:
             return {"status": "SKIPPED_MARKET_WAIT",
                     "reason": f"opening range is {mkt_dir} -- hedge short needs SHORT"}
 
-    # GATE 3 -- new entries today. With the capital cap gone this and available
-    # broker funds are the only things that stop further entries.
-    todays = get_today_entry_count()
-    if todays >= MAX_TRADES_PER_DAY:
-        return {"status": "SKIPPED_LIMIT",
-                "reason": f"entries today {todays}/{MAX_TRADES_PER_DAY}"}
+    # GATE 3 IS GONE. There is no per-day entry count.
+    #
+    # A count was never a risk control -- it bounded the NUMBER of positions while
+    # saying nothing about their size, and each one is already bounded to Rs3,000
+    # of risk and Rs1,00,000 of notional by the sizing rule. Three entries of
+    # Rs3k risk and thirty are different exposures, but the thing that should stop
+    # the thirtieth is the absence of funds to pay for it, which Gate 6 reads live
+    # from the broker net of resting GTTs.
+    #
+    # THE CONSEQUENCE, STATED: broker funds are now the ONLY bound on total
+    # exposure. There is no maximum simultaneous capital deployed --
+    # MAX_CAPITAL_DEPLOYED and get_exposure() were removed when capital tracking
+    # went. get_today_entry_count() is kept and still logged for the daily report,
+    # because how many entries a day produced is worth knowing even when nothing
+    # limits it.
 
     # GATE 3b -- already holding this symbol. HARD SKIP, never a scale-in.
     #

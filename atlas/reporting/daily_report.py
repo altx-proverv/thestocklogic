@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
-    DEFAULT_AGENT_MODE, MAX_RISK_PER_TRADE, MAX_TRADES_PER_DAY,
+    DEFAULT_AGENT_MODE,
     OPEN_STATUSES,
 )
 from atlas.reporting.telegram import send

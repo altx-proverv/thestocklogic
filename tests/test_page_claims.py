@@ -192,15 +192,30 @@ def main() -> int:
     # A short on the screener is information. The page must not read as a
     # short instruction, and the entry path must be unable to take one --
     # that half is proved in tests/test_regime_gate.py.
-    from atlas.config import ALLOW_SHORT_ENTRIES
-    check("short ENTRIES are disabled in config", ALLOW_SHORT_ENTRIES is False)
-    from atlas.execution.atlas_entry import regime_allows_side
-    worst = {"regime": "bull", "extreme_bearish": True, "source": "market.parquet",
-             "advance_count": 1500, "decline_count": 500,
-             "nifty_close": 25000, "nifty_20dma": 24000}
-    allowed, why, blocked = regime_allows_side(worst, "SHORT")
-    check("  and the most permissive context still blocks a short",
-          allowed is False, f"blocked_by={blocked}")
+    # SHORTS ARE LIVE NOW. This asserted they were disabled, which was true while
+    # the mandate was long-only. What must still hold is that the PAGE does not
+    # describe a policy the agent no longer follows -- the banner used to say
+    # "ATLAS itself takes neither", which became false the moment shorts shipped.
+    from atlas.config import ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES
+    check("both sides are enabled in config",
+          ALLOW_SHORT_ENTRIES and ALLOW_LONG_ENTRIES, True)
+    check("the page no longer claims ATLAS takes neither side",
+          "takes neither" not in signals, True)
+    check("  and says which side it opens in a bearish regime",
+          "opens SHORTS here" in signals, True)
+    check("  and that a disagreement means cash",
+          "disagree" in signals, True)
+    # ONE side at a time, from the matrix, whatever the market
+    from atlas.execution.atlas_entry import allowed_side, regime_allows_side
+    both = []
+    for reg in ("bull", "bear", "sideways", "unknown"):
+        for a, d, c_, m_ in ((1200, 800, 25000, 24500), (800, 1200, 24000, 24500),
+                             (1200, 800, 24000, 24500)):
+            cx = {"regime": reg, "advance_count": a, "decline_count": d,
+                  "nifty_close": c_, "nifty_20dma": m_, "source": "market.parquet"}
+            if regime_allows_side(cx, "LONG")[0] and regime_allows_side(cx, "SHORT")[0]:
+                both.append(reg)
+    check("no market state permits both sides at once", not both, str(both))
 
     print()
     print("THE DEPLOY CAN REACH THE RUNNING LISTENER")

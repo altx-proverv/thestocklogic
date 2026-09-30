@@ -15,7 +15,7 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     AGENT_MODES, DEFAULT_AGENT_MODE, HALT_MODES,
-    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, MAX_TRADES_PER_DAY,
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
 )
 from atlas.reporting.telegram import send
 
@@ -98,9 +98,12 @@ def update_agent_mode(mode: str, notes: str = "") -> bool:
 
 def _rules_line() -> str:
     """The complete rule set, rendered from config. Nothing hardcoded."""
+    # No per-day entry count any more: Gate 3 is gone and the only bound on
+    # total exposure is live broker funds. Printing "max 0 entries/day" from the
+    # retired constant would be worse than printing nothing.
     return (f"Risk/trade ₹{MAX_RISK_PER_TRADE:,.0f} · "
             f"max notional ₹{MAX_NOTIONAL_PER_TRADE:,.0f} · "
-            f"max {MAX_TRADES_PER_DAY} entries/day")
+            f"entries bounded by live broker funds")
 
 
 def handle_directive(text: str) -> str:
@@ -113,7 +116,7 @@ def handle_directive(text: str) -> str:
 
     # Mode replies no longer quote per-mode sizing or conviction. Position size
     # comes solely from the Rs3,000 risk budget and the stop distance, and the
-    # only trade limits are MAX_TRADES_PER_DAY and live broker funds -- so
+    # only bound on entries is live broker funds -- so
     # "Position size: 70% of normal" described a lever that does not exist.
     if text in ["/approve", "approve"]:
         state = get_agent_state()

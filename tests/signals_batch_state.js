@@ -116,13 +116,24 @@ for (const [reg, needles] of bannerCases) {
   console.log('  ' + ("regime '" + reg + "'").padEnd(44) +
               (good ? 'ok' : '** missing: ' + missing.join(', ') + ' **'));
 }
-// A bearish banner must not imply ATLAS will short.
+/* The bearish banner must name the side ATLAS opens -- it SHORTS here now -- and
+ * still not read as an instruction to the reader. It used to say ATLAS "takes
+ * neither", which was true while the mandate was long-only and became false the
+ * moment shorts shipped; asserting the old wording would have kept a stale claim
+ * passing. What is invariant is that the page states the agent's behaviour
+ * accurately AND disclaims it as instruction. */
 window._regimeNow = 'bearish';
 const bear = regimeBanner();
-const noInstruction = bear.includes('ATLAS') && bear.includes('neither');
-ok = ok && noInstruction;
-console.log('  ' + 'bearish banner says ATLAS takes neither side'.padEnd(44) +
-            (noInstruction ? 'ok' : '** IMPLIES AN INSTRUCTION **'));
+const states = bear.includes('ATLAS') && bear.includes('opens SHORTS');
+const disclaims = bear.includes('not instructions');
+const hedged = bear.includes('disagree');   // cash when the legs conflict
+ok = ok && states && disclaims && hedged;
+console.log('  ' + 'bearish banner names the side ATLAS opens'.padEnd(44) +
+            (states ? 'ok' : '** SILENT OR STALE **'));
+console.log('  ' + '  and still disclaims it as instruction'.padEnd(44) +
+            (disclaims ? 'ok' : '** READS AS ADVICE **'));
+console.log('  ' + '  and says a disagreement means cash'.padEnd(44) +
+            (hedged ? 'ok' : '** OVERSTATES **'));
 
 console.log('-'.repeat(78));
 console.log('SIGNALS BATCH STATE: ' + (ok ? 'correct' : '*** DEFECTIVE ***'));

@@ -70,10 +70,26 @@ def main() -> int:
     case("bull + breadth + above 20DMA", ctx(), "LONG", True, None)
     case("bull, breadth NEGATIVE", ctx(adv=700, dec=1300), "LONG", False, "SENTIMENT")
     case("bull, Nifty BELOW 20DMA", ctx(close=24000, ma20=24500), "LONG", False, "SENTIMENT")
-    case("bull, both sentiment legs fail", ctx(adv=700, dec=1300, close=24000, ma20=24500),
-         "LONG", False, "SENTIMENT")
-    case("SIDEWAYS, sentiment fine", ctx(regime="sideways"), "LONG", False, "REGIME")
-    case("BEAR, sentiment fine", ctx(regime="bear"), "LONG", False, "REGIME")
+    # bull structure against bearish participation is a CONFLICT, not a sentiment
+    # failure: attributing a disagreement to one half would be arbitrary, and the
+    # split is what makes a long flat stretch legible.
+    case("bull structure vs bearish participation",
+         ctx(adv=700, dec=1300, close=24000, ma20=24500),
+         "LONG", False, "CONFLICT")
+    # SIDEWAYS NOW FOLLOWS SENTIMENT. This asserted cash, which was the rule
+    # until the direction matrix landed: a sideways regime takes the side
+    # sentiment names rather than standing aside.
+    case("SIDEWAYS + bullish sentiment -> long", ctx(regime="sideways"),
+         "LONG", True, None)
+    case("SIDEWAYS + bearish sentiment -> short",
+         ctx(regime="sideways", adv=700, dec=1300, close=24000),
+         "SHORT", True, None)
+    # bear structure with bullish participation is the mirror conflict.
+    case("bear structure vs bullish participation", ctx(regime="bear"),
+         "LONG", False, "CONFLICT")
+    # and the side a bear regime DOES take, when participation agrees
+    case("bear + bearish sentiment -> short",
+         ctx(regime="bear", adv=700, dec=1300, close=24000), "SHORT", True, None)
     case("unknown regime", ctx(regime="unknown"), "LONG", False, "REGIME")
 
     for label, got, blocked, good, reason in rows:
@@ -82,18 +98,24 @@ def main() -> int:
 
     # An AND that has become an OR still passes every case above except these.
     print()
-    print("THE AND IS AN AND")
+    print("NEITHER INPUT DECIDES ALONE")
     print("-" * 92)
-    regime_only, _, _ = regime_allows_side(ctx(adv=700, dec=1300), "LONG")
-    sent_only, _, _ = regime_allows_side(ctx(regime="sideways"), "LONG")
-    anded = (not regime_only) and (not sent_only)
-    ok &= anded
-    print(f"  {'regime passes, sentiment fails':<34}"
-          f"{'ENTER' if regime_only else 'cash':<7}"
-          f"{'ok' if not regime_only else '** OR, not AND **'}")
-    print(f"  {'sentiment passes, regime fails':<34}"
-          f"{'ENTER' if sent_only else 'cash':<7}"
-          f"{'ok' if not sent_only else '** OR, not AND **'}")
+    # This asserted a plain AND, with "regime fails" represented by SIDEWAYS.
+    # Sideways is a valid cell now -- it follows sentiment -- so the property has
+    # to be restated: each input can still veto on its own, and an UNREADABLE one
+    # always does. A missing half is never carried by the half that is present.
+    for label, c in (
+            ("bull regime, mixed sentiment", ctx(adv=700, dec=1300)),
+            ("bull regime, bearish sentiment", ctx(adv=700, dec=1300, close=24000)),
+            ("bullish breadth, regime unknown", ctx(regime="unknown")),
+            ("bull regime, sentiment unreadable",
+             ctx(adv=None, dec=None, close=None, ma20=None)),
+            ("sideways, sentiment unreadable",
+             ctx(regime="sideways", adv=None, dec=None, close=None, ma20=None))):
+        got, why, blk = regime_allows_side(c, "LONG")
+        ok &= not got
+        print(f"  {label:<40}{'ENTER' if got else 'cash':<7}"
+              f"{'ok' if not got else '** ENTERED **':<18}{str(blk)}")
 
     print()
     print("MISSING INPUT IS A NO, NEVER A PASS")
@@ -123,13 +145,25 @@ def main() -> int:
     print()
     print("THE SPLIT IS COUNTABLE, NOT JUST READABLE")
     print("-" * 92)
-    _, _, b_regime = regime_allows_side(ctx(regime="sideways"), "LONG")
-    _, _, b_sent = regime_allows_side(ctx(adv=700, dec=1300), "LONG")
-    distinct = b_regime == "REGIME" and b_sent == "SENTIMENT" and b_regime != b_sent
+    # THREE reasons to sit out now, and they must stay distinguishable in
+    # atlas_entry_log.status: no side from the structure, participation unclear or
+    # unreadable, and the two pointing opposite ways. Over a long flat stretch the
+    # split between the last two is the interesting number -- "the trend is there
+    # and nobody is buying it" is not "there is no trend".
+    _, _, b_regime = regime_allows_side(ctx(regime="unknown"), "LONG")
+    _, _, b_sent   = regime_allows_side(
+        ctx(adv=None, dec=None, close=None, ma20=None), "LONG")
+    # close must drop below the 20DMA too, or this is MIXED rather than bearish --
+    # breadth alone is not a bearish reading, which is the point of three values.
+    _, _, b_conf   = regime_allows_side(ctx(adv=700, dec=1300, close=24000), "LONG")
+    got = (b_regime, b_sent, b_conf)
+    distinct = got == ("REGIME", "SENTIMENT", "CONFLICT") and len(set(got)) == 3
     ok &= distinct
-    print(f"  regime block -> SKIPPED_{b_regime}")
-    print(f"  sentiment block -> SKIPPED_{b_sent}")
-    print(f"  {'distinguishable in atlas_entry_log.status:':<44}"
+    for lbl, b in (("regime gives no side", b_regime),
+                   ("sentiment unreadable", b_sent),
+                   ("the two disagree", b_conf)):
+        print(f"  {lbl:<34}-> SKIPPED_{b}")
+    print(f"  {'three distinct statuses:':<44}"
           f"{'ok' if distinct else '** COLLAPSED **'}")
 
     # build_market owns `bull`; the gate trusts it. Pin them together so a
@@ -173,66 +207,90 @@ def main() -> int:
         print(f"  ** could not verify against build_market: {type(e).__name__}: {e}")
 
     print()
-    print("NO SHORT CAN PASS THE ENTRY GATE, FROM ANY CONTEXT")
+    print("THE DIRECTION MATRIX: ONE SIDE, OR CASH")
     print("-" * 92)
-    # The screener publishes shorts in a bearish regime -- 06_push suppresses
-    # LONGS there and keeps shorts -- so shorts now reach the signals table and
-    # the page. ATLAS reads that same table. This section is the proof that a
-    # published short is information and not an instruction, and it had NO
-    # coverage before: the property was asserted only in a comment.
-    #
-    # Swept rather than sampled. Every combination of regime, the extreme-bearish
-    # hedge flag and sentiment must block, so a future edit cannot open one
-    # corner of the space unnoticed.
-    short_fails = []
-    for regime in ("bull", "sideways", "bear", "unknown"):
-        for extreme in (False, True):
-            for adv, dec in ((1200, 800), (800, 1200)):
-                for close, ma20 in ((25000, 24500), (24000, 24500)):
-                    c = ctx(regime=regime, adv=adv, dec=dec, close=close,
-                            ma20=ma20, extreme=extreme)
-                    got, reason, blocked = regime_allows_side(c, "SHORT")
-                    if got:
-                        short_fails.append((regime, extreme, adv > dec,
-                                            close > ma20, reason))
-    ok &= not short_fails
-    print(f"  {'all 32 regime x hedge x sentiment combinations block':<58}"
-          f"{'ok' if not short_fails else '** ' + str(len(short_fails)) + ' ALLOWED **'}")
-    for f in short_fails[:6]:
-        print(f"      ALLOWED: regime={f[0]} extreme={f[1]} breadth+={f[2]} "
-              f"above20={f[3]} — {f[4][:40]}")
+    # Shorts are REACHABLE now. The old section here asserted the opposite and was
+    # right to at the time: the mandate was long-only, ALLOW_SHORT_ENTRIES was
+    # False, and a sweep of all 32 combinations proved no short could pass. The
+    # policy changed, so the assertion has to change with it -- what must not
+    # change is that the sweep is exhaustive rather than a sample.
+    from atlas.execution.atlas_entry import allowed_side
 
-    # THE CASE I EXPECTED TO BE REACHABLE, and the reason this is a test and not
-    # a reading. A bear market bouncing is an ordinary configuration: price well
-    # under the 200DMA so extreme_bearish holds, but above its 20DMA on the day
-    # with positive breadth, so SENTIMENT passes. Reading the SHORT branch it
-    # looked as though only extreme_bearish gated it, which would have let this
-    # through. A second guard -- regime != "bull" -- is what actually stops it.
-    bounce = ctx(regime="bear", extreme=True, adv=1200, dec=800,
-                 close=21000, ma20=20800)
-    got, reason, blocked = regime_allows_side(bounce, "SHORT")
-    # blocked_by is CONFIG, not REGIME: ALLOW_SHORT_ENTRIES fires ahead of the
-    # regime test on purpose, so the log says "we do not take shorts" rather
-    # than "the regime was wrong today" -- which would imply a different regime
-    # could make it right.
-    good = (not got) and blocked == "CONFIG"
-    ok &= good
-    print(f"  {'bear bounce: extreme_bearish + positive sentiment':<58}"
-          f"{'ok' if good else '** ' + ('ALLOWED' if got else 'blocked_by=' + str(blocked)) + ' **'}"
-          f"  {reason[:34]}")
+    def mctx(regime, sent):
+        if sent == "bullish":   a_, d_, c_, m_ = 1200, 800, 25000, 24500
+        elif sent == "bearish": a_, d_, c_, m_ = 800, 1200, 24000, 24500
+        elif sent == "mixed":   a_, d_, c_, m_ = 1200, 800, 24000, 24500
+        else:                   a_, d_, c_, m_ = None, None, None, None
+        return {"regime": regime, "advance_count": a_, "decline_count": d_,
+                "nifty_close": c_, "nifty_20dma": m_,
+                "source": "market.parquet", "extreme_bearish": False}
 
-    # WHICH GUARD IS LOAD-BEARING, stated rather than assumed. These are
-    # complementary, not redundant: the regime guard is the only thing stopping
-    # an extreme-bearish short, and the extreme_bearish guard is the only thing
-    # stopping a short on an ordinary bear day. Deleting either opens a real
-    # corner, so both are named here for whoever reads this next.
-    got_a, _, _ = regime_allows_side(ctx(regime="bear", extreme=True), "SHORT")
-    got_b, _, blk_b = regime_allows_side(ctx(regime="bull", extreme=False), "SHORT")
-    ok &= (not got_a) and (not got_b)
-    print(f"  {'  regime!=bull blocks the extreme-bearish short':<58}"
-          f"{'ok' if not got_a else '** OPEN **'}")
-    print(f"  {'  extreme_bearish blocks the ordinary bull-day short':<58}"
-          f"{'ok' if not got_b else '** OPEN **'}  blocked_by={blk_b}")
+    MATRIX = {
+        ("bull", "bullish"): "LONG",   ("bull", "bearish"): None,
+        ("bull", "mixed"):   None,     ("bull", "unknown"): None,
+        ("bear", "bullish"): None,     ("bear", "bearish"): "SHORT",
+        ("bear", "mixed"):   None,     ("bear", "unknown"): None,
+        ("sideways", "bullish"): "LONG", ("sideways", "bearish"): "SHORT",
+        ("sideways", "mixed"):   None,   ("sideways", "unknown"): None,
+        ("unknown", "bullish"): None,  ("unknown", "bearish"): None,
+        ("unknown", "mixed"):   None,  ("unknown", "unknown"): None,
+    }
+    bad = []
+    for (regime, sent), want in MATRIX.items():
+        c = mctx(regime, sent)
+        got, why, blk = allowed_side(c)
+        lo = regime_allows_side(c, "LONG")[0]
+        sh = regime_allows_side(c, "SHORT")[0]
+        if got != want or lo != (want == "LONG") or sh != (want == "SHORT"):
+            bad.append((regime, sent, want, got, lo, sh))
+        # NEVER BOTH SIDES on one evaluation. A matrix returning a single value
+        # makes this structural, but it is the property that matters most: two
+        # opposing positions opened on the same cycle is not a hedge, it is the
+        # gate having no opinion.
+        if lo and sh:
+            bad.append((regime, sent, want, "BOTH", lo, sh))
+    ok &= not bad
+    print(f"  {'all 16 regime x sentiment cells match the matrix':<58}"
+          f"{'ok' if not bad else '** ' + str(len(bad)) + ' WRONG **'}")
+    for r_, s_, want, got, lo, sh in bad[:6]:
+        print(f"      {r_}+{s_}: want {want}, got {got} (long={lo} short={sh})")
+
+    # the four cells that DO take a side, named individually so a policy change
+    # cannot pass by editing the table above alone
+    for regime, sent, side in (("bull", "bullish", "LONG"),
+                               ("bear", "bearish", "SHORT"),
+                               ("sideways", "bullish", "LONG"),
+                               ("sideways", "bearish", "SHORT")):
+        got = allowed_side(mctx(regime, sent))[0]
+        good = got == side
+        ok &= good
+        print(f"  {regime + ' + ' + sent + ' -> ' + side:<58}"
+              f"{'ok' if good else '** ' + str(got) + ' **'}")
+
+    # a disagreement is its own countable status, not attributed to either half
+    for regime, sent in (("bull", "bearish"), ("bear", "bullish")):
+        blk = allowed_side(mctx(regime, sent))[2]
+        good = blk == "CONFLICT"
+        ok &= good
+        print(f"  {regime + ' vs ' + sent + ' is blocked_by CONFLICT':<58}"
+              f"{'ok' if good else '** ' + str(blk) + ' **'}")
+
+    # the master switches still override the matrix, checked before any market
+    # reading, so a side can be taken off the table without reasoning about state
+    import atlas.execution.atlas_entry as AE
+    for flag, side in (("ALLOW_SHORT_ENTRIES", "SHORT"),
+                       ("ALLOW_LONG_ENTRIES", "LONG")):
+        regime, sent = ("bear", "bearish") if side == "SHORT" else ("bull", "bullish")
+        saved = getattr(AE, flag)
+        setattr(AE, flag, False)
+        try:
+            got, why, blk = regime_allows_side(mctx(regime, sent), side)
+        finally:
+            setattr(AE, flag, saved)
+        good = (not got) and blk == "CONFIG"
+        ok &= good
+        print(f"  {flag + '=False blocks its side outright':<58}"
+              f"{'ok' if good else '** ALLOWED **'}")
 
     print()
     print("AND NO REAL MARKET ROW CAN CLAIM bull AND extreme_bearish AT ONCE")

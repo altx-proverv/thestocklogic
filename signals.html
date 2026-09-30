@@ -508,17 +508,21 @@ function regimeBanner(){
   if(r==='BEARISH'){
     cls='rc-bear'; label='REGIME BEARISH';
     note='Shorts run with the trend; longs run against it and are marked. '
-        +'ATLAS itself takes neither &mdash; it enters only in a bull regime with '
-        +'positive breadth. These are observations about the market, not instructions.';
+        +'ATLAS opens SHORTS here when the day\'s breadth is also negative, and '
+        +'nothing when breadth and the index disagree. These remain observations '
+        +'about the market, not instructions: the screener reports what it found '
+        +'and sizing, stops and exits are the agent\'s own.';
   } else if(r==='BULLISH'){
     cls='rc-bull'; label='REGIME BULLISH';
     note='Longs run with the trend; shorts run against it and are marked. '
-        +'ATLAS additionally requires positive same-day breadth before it enters.';
+        +'ATLAS opens LONGS here when the day\'s breadth is also positive, and '
+        +'nothing when breadth and the index disagree. Not instructions.';
   } else if(r){
     cls='rc-side'; label='REGIME '+r;
-    note='Neither side is with or against the trend. ATLAS stays in cash: it '
-        +'enters only in a bull regime with positive breadth, so a signal here '
-        +'is a screener observation and nothing acts on it.';
+    note='Neither side is with or against the trend, so nothing is marked '
+        +'counter-trend. ATLAS follows the day\'s breadth here &mdash; long if '
+        +'positive, short if negative, cash if breadth and the index disagree. '
+        +'Not instructions.';
   } else {
     cls='rc-side'; label='REGIME UNKNOWN';
     note='The market regime could not be read, so no signal below can be placed '
