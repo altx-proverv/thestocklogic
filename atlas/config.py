@@ -186,13 +186,27 @@ MAX_TRADES_PER_DAY = 0
 # PUBLISHING and atlas/risk/position_sizing.py again at ENTRY. They held separate
 # copies, drifted to 7.0 and 6.0, and the gap was live.
 #
-# THE MINIMUM IS GONE. MIN_STOP_PCT was 1.5 with no recorded derivation -- the
+# THE MINIMUM IS 0.5, down from 1.5. The 1.5 had no recorded derivation -- the
 # audit found it sharing a comment block with the measured 7.0 and borrowing its
-# authority. It cost about 12% of setups on both sides. What it was for was
-# "inside noise", but a structural stop IS the noise boundary: it sits at a swing
-# extreme, so a tight one means the swing is close, not that the stop is
-# arbitrary. 0.0 disables the floor without deleting the name, which several
-# modules import.
+# authority -- and it cost about 12% of setups on both sides.
+#
+# A floor is still wanted for a reason the old number did not state: below about
+# half a percent the stop is inside the spread and the slippage, so it is not a
+# structural level, it is noise, and a "stop" there is a coin toss on the tick.
+#
+# THE SIZING HALF OF THAT ARGUMENT DOES NOT WORK, AND THE ARITHMETIC IS WORTH
+# HAVING HERE. Risk-based sizing binds only while the stop is wider than
+# MAX_RISK_PER_TRADE / MAX_NOTIONAL_PER_TRADE = Rs3,000 / Rs1,00,000 = 3.00%.
+# Below 3% the notional cap is the smaller of the two quantities, so the NOTIONAL
+# cap sizes the trade and actual risk falls below Rs3,000. The measured median
+# published stop is 2.08%, so that is already true of most trades -- it is not a
+# consequence of lowering this floor from 1.5 to 0.5, and no floor short of 3.0
+# would change it.
+#
+# So 0.5 is justified by the spread, not by sizing. What the arithmetic actually
+# says is that MAX_RISK_PER_TRADE stopped being the binding risk control some
+# time ago, and MAX_NOTIONAL_PER_TRADE has been doing that job on any stop under
+# 3%. That is a separate decision from this one and is left alone.
 #
 # THE CAP IS 5.0, from 7.0. Measured, and it is a real reduction: on one batch of
 # 100 symbols the 5-7% band held 461 long and 161 short setups, so this is not a
@@ -206,7 +220,7 @@ MAX_TRADES_PER_DAY = 0
 # by 100 once at import. Feeding 5.0 to a fraction comparison is a 500% ceiling
 # that rejects nothing; feeding 0.05 to a percent one rejects everything. Neither
 # fails loudly, so keep the unit explicit at every use.
-MIN_STOP_PCT = 0.0
+MIN_STOP_PCT = 0.5
 MAX_STOP_PCT = 5.0
 
 # Rules 1, 2 — agent must NOT place SL or target orders
