@@ -153,7 +153,8 @@ def main() -> int:
     print("LONGS ARE PROTECTED BY GTT, WHICH SURVIVES THE CLOSE")
     print("-" * 78)
     k = FakeKite()
-    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k)
+    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
+                  place_target=True)
     check("two-leg OCO is preferred", r["mechanism"], "GTT_OCO")
     check("  and reports ok", r["ok"], True)
     check("  target is 2R", r["target"], 110.0)
@@ -164,7 +165,8 @@ def main() -> int:
           all(o["product"] == "CNC" for o in g["orders"]), True)
     # If the account has no two-leg GTT the fallback must still protect
     k = FakeKite(gtt_two_leg=False)
-    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k)
+    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
+                  place_target=True)
     check("no two-leg on the account -> two single GTTs",
           r["mechanism"], "GTT_SINGLE")
     check("  still protected", r["ok"], True)
@@ -174,7 +176,8 @@ def main() -> int:
     print("SHORTS ARE PROTECTED BY SL-M, AND STAY MIS")
     print("-" * 78)
     k = FakeKite()
-    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k)
+    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
+                  place_target=True)
     check("mechanism is SL-M, not GTT", r["mechanism"], "SLM")
     check("  ok", r["ok"], True)
     check("  target is 2R below the fill", r["target"], 90.0)
@@ -193,14 +196,17 @@ def main() -> int:
     print("A STOP THAT WILL NOT PLACE MEANS THE POSITION LEAVES")
     print("-" * 78)
     k = FakeKite(fail=("slm",))
-    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k)
+    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
+                  place_target=True)
     check("SL-M refused -> protect() reports NOT ok", r["ok"], False)
     k = FakeKite(fail=("gtt",))
-    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k)
+    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
+                  place_target=True)
     check("every GTT refused -> NOT ok", r["ok"], False)
     # A TARGET failure is not an escalation: the position is protected.
     k = FakeKite(fail=("limit",))
-    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k)
+    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
+                  place_target=True)
     check("stop placed but target refused -> still ok", r["ok"], True,
           "downside is covered; the upside leg is a missed convenience")
     check("  and it says so", "target" in r["reason"].lower(), True)
@@ -327,6 +333,11 @@ def main() -> int:
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0,
                   kite=FakeKite(fail=("gtt",)), place_target=False)
     check("stop-only, stop refused -> NOT ok", r["ok"], False)
+    # the DEFAULT follows config, which is the deployed decision
+    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=FakeKite())
+    check("default (no arg) follows ALLOW_AUTOMATED_TARGET",
+          r["target"] is None, not ALLOW_AUTOMATED_TARGET,
+          "config says stop-only, so no target leg")
 
     print("-" * 78)
     print("EXITS:", "correct" if ok else "*** DEFECTIVE ***")

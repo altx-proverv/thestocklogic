@@ -37,6 +37,13 @@ REP_SRC="$REPO/deploy/atlas-engine-report.service"
 REP_DST=/etc/systemd/system/atlas-engine-report.service
 REPT_SRC="$REPO/deploy/atlas-engine-report.timer"
 REPT_DST=/etc/systemd/system/atlas-engine-report.timer
+# The MIS square-off closes intraday positions at 15:15, before Zerodha does it
+# at 15:20. Its own timer on purpose: a crashed market-hours loop must not be able
+# to strand a short into broker liquidation.
+SQ_SRC="$REPO/deploy/atlas-mis-squareoff.service"
+SQ_DST=/etc/systemd/system/atlas-mis-squareoff.service
+SQT_SRC="$REPO/deploy/atlas-mis-squareoff.timer"
+SQT_DST=/etc/systemd/system/atlas-mis-squareoff.timer
 STAMP="$(date -u +%Y%m%d%H%M%S)"
 BACKUP_DIR="/var/backups/atlas"
 CRON_USER="${ATLAS_CRON_USER:-ubuntu}"
@@ -55,7 +62,8 @@ fi
 if [[ ! -d "$REPO" ]]; then
   say "repo not found at $REPO — set ATLAS_REPO"; exit 1
 fi
-if [[ ! -f "$UNIT_SRC" || ! -f "$TIMER_SRC" || ! -f "$REP_SRC" || ! -f "$REPT_SRC" ]]; then
+if [[ ! -f "$UNIT_SRC" || ! -f "$TIMER_SRC" || ! -f "$REP_SRC" || ! -f "$REPT_SRC" \
+      || ! -f "$SQ_SRC" || ! -f "$SQT_SRC" ]]; then
   say "unit or timer file missing under $REPO/deploy"; exit 1
 fi
 
@@ -173,7 +181,8 @@ step "3. install the unit and timer (NOT started, timer NOT enabled)"
 # reports things like a missing User on a non-running system, and a check that
 # cries wolf gets ignored.
 if command -v systemd-analyze >/dev/null 2>&1; then
-  VERIFY_OUT="$(systemd-analyze verify "$UNIT_SRC" "$TIMER_SRC" "$REP_SRC" "$REPT_SRC" 2>&1 || true)"
+  VERIFY_OUT="$(systemd-analyze verify "$UNIT_SRC" "$TIMER_SRC" "$REP_SRC" \
+                  "$REPT_SRC" "$SQ_SRC" "$SQT_SRC" 2>&1 || true)"
   FATAL="$(printf '%s\n' "$VERIFY_OUT" | grep -iE "unknown key|unknown lvalue|invalid|failed to parse" || true)"
   if [[ -n "$FATAL" ]]; then
     say "   unit validation FAILED:"
@@ -194,6 +203,8 @@ if (( APPLY )); then
   install -o root -g root -m 644 "$TIMER_SRC" "$TIMER_DST"
   install -o root -g root -m 644 "$REP_SRC" "$REP_DST"
   install -o root -g root -m 644 "$REPT_SRC" "$REPT_DST"
+  install -o root -g root -m 644 "$SQ_SRC" "$SQ_DST"
+  install -o root -g root -m 644 "$SQT_SRC" "$SQT_DST"
   systemctl daemon-reload
 
   # The service used to carry WantedBy=multi-user.target, so an earlier run of
@@ -212,7 +223,11 @@ if (( APPLY )); then
   say "   service : $(systemctl is-active atlas-market-hours.service 2>&1) / $(systemctl is-enabled atlas-market-hours.service 2>&1 || echo 'timer-activated')"
   say "   timer   : $(systemctl is-enabled atlas-market-hours.timer 2>&1 || echo disabled)  <- disabled is correct until the first session is watched"
   systemctl enable atlas-engine-report.timer >/dev/null 2>&1 || true
+  # Safe to enable now and worth enabling before exit management goes on: it
+  # closes MIS positions whoever opened them, and does nothing when none are open.
+  systemctl enable atlas-mis-squareoff.timer >/dev/null 2>&1 || true
   say "   report  : $(systemctl is-enabled atlas-engine-report.timer 2>&1 || echo disabled) (safe to enable now -- it only reads and sends)"
+  say "   squareoff: $(systemctl is-enabled atlas-mis-squareoff.timer 2>&1 || echo disabled) (15:15 IST; closes MIS positions before the broker does)"
 else
   would "install $UNIT_DST, $TIMER_DST, $REP_DST, $REPT_DST, daemon-reload"
   would "enable atlas-engine-report.timer (read-only, never trades)"

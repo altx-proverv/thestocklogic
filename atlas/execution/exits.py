@@ -374,7 +374,47 @@ def emergency_exit(symbol: str, direction: str, qty: int, product: str,
 # SIBLING RECONCILIATION — driven by broker quantity, never by our record
 # ══════════════════════════════════════════════════════════════════
 
-def reconcile_exits(trades: list, kite=None, positions=None, orders=None) -> dict:
+def discover_legs(symbol: str, orders: list, atlas_gtts: list) -> dict:
+    """
+    The resting exit legs for `symbol`, found at the BROKER rather than in our row.
+
+    TWO SOURCES, because the two mechanisms are recognisable in different ways:
+
+      regular orders  their TAG survives in the order book, so ATLAS_SL and
+                      ATLAS_TGT identify our MIS legs directly.
+      GTTs            Kite's get_gtts() OMITS the tag field entirely, so a GTT can
+                      only be recognised via atlas_trades.gtt_trigger_id --
+                      gtt.list_atlas_gtts() does that join, and its output is what
+                      `atlas_gtts` must be. NEVER infer ownership of a GTT from the
+                      symbol alone: the account may hold that stock for reasons
+                      that have nothing to do with ATLAS, and cancelling a human's
+                      stop is worse than leaving our own orphan.
+
+    Nothing is persisted per-leg deliberately. The broker is the authority for what
+    is resting, and a record of legs written before a fill is exactly the record
+    that goes stale when something closes the position another way.
+    """
+    legs = {}
+    for o in orders or []:
+        if str(o.get("tradingsymbol")) != str(symbol):
+            continue
+        if str(o.get("status", "")).upper() in ("COMPLETE", "CANCELLED", "REJECTED"):
+            continue
+        tag = str(o.get("tag") or "")
+        if tag == "ATLAS_SL":
+            legs["stop_order_id"] = o.get("order_id")
+        elif tag == "ATLAS_TGT":
+            legs["target_order_id"] = o.get("order_id")
+    for g in atlas_gtts or []:
+        cond = g.get("condition") or {}
+        if str(cond.get("tradingsymbol") or g.get("tradingsymbol")) != str(symbol):
+            continue
+        legs["stop_trigger_id"] = g.get("id")
+    return legs
+
+
+def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
+                    atlas_gtts=None) -> dict:
     """
     For each protected position, cancel the leg that is now orphaned.
 
@@ -424,7 +464,11 @@ def reconcile_exits(trades: list, kite=None, positions=None, orders=None) -> dic
             # unreadable book is handled above and a missing symbol after a
             # closed session is normal.
             held = 0
-        legs = {k: v for k, v in (t.get("exit_legs") or {}).items() if v}
+        # Prefer what the BROKER is showing; fall back to whatever the caller
+        # passed. A restart loses our in-memory legs and must still reconcile.
+        legs = discover_legs(sym, book, atlas_gtts or [])
+        if not legs:
+            legs = {k: v for k, v in (t.get("exit_legs") or {}).items() if v}
         if held != 0:
             # Still open. If one leg has already filled, the other must be
             # REDUCED to what remains rather than cancelled -- cancelling would

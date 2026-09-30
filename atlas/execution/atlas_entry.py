@@ -87,7 +87,7 @@ from atlas.risk.position_sizing import size_by_risk
 from atlas.risk.kill_switch import check as kill_switch_check
 from atlas.risk import breaker
 from atlas.risk.funds import can_afford
-from atlas.execution.broker import place_order, get_ltp
+from atlas.execution.broker import place_order, get_ltp, order_margin
 
 log = logging.getLogger("ATLAS-ENTRY")
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -601,7 +601,32 @@ def enter_trade(signal: dict) -> dict:
 
     # GATE 6 -- live broker funds, net of resting GTTs. FAIL CLOSED: can_afford
     # returns False both when funds are short and when they cannot be read.
+    # THE BROKER'S MARGIN, NOT OUR ESTIMATE. sizing["capital_required"] is
+    # notional for a CNC long and notional x SHORT_MARGIN_PCT_ESTIMATE (0.20) for
+    # an MIS short. With no cap on the number of trades, that 0.20 is the only
+    # thing deciding how many shorts fit: five of them occupy one long's capital
+    # at 20%, and if the true requirement is 30% the fifth is unfunded. So ask.
+    #
+    # A failed lookup falls back to the estimate and says so. Refusing every trade
+    # because the margin endpoint is unreachable would be a different failure, not
+    # a safer one -- and can_afford still fails closed on unreadable FUNDS, which
+    # is the check that actually protects the account.
     need = sizing["capital_required"]
+    marg = order_margin(symbol=symbol, direction=direction, qty=sizing["qty"],
+                        product=sizing["product"], order_type="MARKET")
+    if marg.get("ok"):
+        broker_need = float(marg["total"])
+        if broker_need > need:
+            log.info(f"{symbol}: broker margin Rs{broker_need:,.0f} exceeds the "
+                     f"estimate Rs{need:,.0f} — gating on the broker's number")
+        need = max(need, broker_need)
+        sizing["capital_required"] = need
+        sizing["margin_source"] = "broker"
+    else:
+        log.warning(f"{symbol}: using ESTIMATED margin Rs{need:,.0f} "
+                    f"({marg.get('reason')})")
+        sizing["margin_source"] = "estimate"
+
     funds_ok, funds_reason, funds_detail = can_afford(need)
     if not funds_ok:
         status = ("BLOCKED_NO_FUNDS_DATA"
@@ -767,6 +792,27 @@ def enter_trade(signal: dict) -> dict:
     log.info(f"{symbol}: protected via {prot.get('mechanism')} — "
              f"stop {prot.get('stop')} target {prot.get('target')}")
     intent["exit_managed"] = True
+
+    # PERSIST THE GTT TRIGGER ID. This is not bookkeeping: Kite's get_gtts()
+    # OMITS the tag field entirely, so a GTT cannot be recognised as ours from the
+    # broker side. atlas_trades.gtt_trigger_id is the only link, and
+    # gtt.list_atlas_gtts() reads exactly that column -- an unrecorded trigger is
+    # invisible to ATLAS while resting live at the broker, which is what happened
+    # to GTT 331263278 on GRASIM. Reconciliation would then either ignore our own
+    # orphan or, far worse, act on a human's GTT.
+    #
+    # Regular orders are different: their tag SURVIVES in the order book, so MIS
+    # short legs are discoverable by tag and need no column.
+    trig = (prot.get("legs") or {}).get("stop_trigger_id") \
+        or (prot.get("legs") or {}).get("oco_trigger_id")
+    if trig:
+        if not _patch_trade(row_id, {"gtt_trigger_id": str(trig),
+                                     "trigger_price": prot.get("stop")},
+                            "record gtt"):
+            _alert("GTT UNRECORDED",
+                   f"{symbol}: stop GTT {trig} is live at the broker but could "
+                   f"not be recorded on trade {row_id}. It is invisible to "
+                   f"list_atlas_gtts and will not be reconciled. Record it by hand.")
     # The order IS placed -- that is the truth, so the status stays ENTERED.
     # `recorded` tells the caller whether the row was promoted out of PENDING.
     return {"status": "ENTERED", "recorded": recorded, **intent}

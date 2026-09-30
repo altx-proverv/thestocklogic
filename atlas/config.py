@@ -179,7 +179,13 @@ ALLOW_AUTOMATED_STOP_LOSS = True
 #            trailed") and what the mandate of long-term wealth building implies.
 # A fixed 2R exit caps every winner at 2R, so this is a strategy choice rather
 # than a safety one, and it is reversible without touching code.
-ALLOW_AUTOMATED_TARGET = True
+#
+# FALSE, decided. "Automatic targets" meant "do not make me manage exits by hand",
+# not "exit at 2R" -- and stop-only with trailing does the first without giving up
+# the second. It also restores what zone_entry already documented: target = NONE,
+# winners are held and trailed. A single resting stop has the side benefit of
+# having no sibling to orphan.
+ALLOW_AUTOMATED_TARGET = False
 
 # ── MASTER LIVE-TRADING GATE ──────────────────────────────────────
 #
@@ -279,9 +285,19 @@ SHORT_PRODUCT_TYPE      = "MIS"          # rule 10 — shorts intraday only
 ALLOW_OVERNIGHT_SHORT   = False
 DEFAULT_ON_UNKNOWN_REGIME = "CASH"       # unknown/stale regime → no trade
 
-# Rule 16 — short margin. ~20% of notional for MIS intraday, but NEVER
-# treat as guaranteed — always prefer broker's live margin check when available.
-SHORT_MARGIN_PCT_ESTIMATE = 0.20         # estimate only; broker value wins
+# Rule 16 — short margin. A FALLBACK ONLY, and it is now genuinely the fallback:
+# broker.order_margin() asks Kite what the order actually requires and Gate 6
+# checks that, not this.
+#
+# It mattered because can_afford() gated on this number while nothing capped the
+# number of trades, so an underestimate opens more shorts than the funds support:
+# at 20% a short consumes a fifth of a long's capital, and five shorts fit where
+# one long did. If the real requirement is 30% the fifth short is unfunded.
+#
+# Still here because the broker call can fail, and a sizing path that raises when
+# the margin API is unreachable would refuse every trade for a reason unrelated to
+# the trade. When it is used, it is logged as an estimate.
+SHORT_MARGIN_PCT_ESTIMATE = 0.20         # fallback; the broker's number wins
 
 # Entry-range gate — enter ONLY if live price is within the signal's
 # [entry_low, entry_high] band. Applies to LONG and SHORT. No chasing.

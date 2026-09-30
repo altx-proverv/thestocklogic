@@ -363,6 +363,54 @@ def place_sl_order(
         return {"success": False, "reason": str(e)}
 
 
+def order_margin(symbol: str, direction: str, qty: int, product: str,
+                 price: float = 0, order_type: str = "MARKET") -> dict:
+    """
+    What the BROKER says this order requires. -> {"ok", "total", "reason"}
+
+    WHY THIS EXISTS. capital_required was computed from
+    SHORT_MARGIN_PCT_ESTIMATE = 0.20 and Gate 6 gated on that number. With no cap
+    on trades, an underestimate does not merely mis-report: a short consumes a
+    fifth of a long's capital at 20%, so five shorts fit where one long did, and if
+    the real requirement is 30% the fifth is unfunded. Asking the broker removes
+    the guess from the only check that stands between ATLAS and an over-committed
+    account.
+
+    ok=False means "could not ask", never "no margin needed". The caller falls back
+    to the estimate and logs that it did -- refusing every trade because the margin
+    endpoint is unreachable would be a different failure, not a safer one.
+    """
+    kite = get_kite()
+    if not kite:
+        return {"ok": False, "total": None, "reason": "kite unavailable"}
+    d = str(direction).upper()
+    req = [{
+        "exchange": "NSE", "tradingsymbol": symbol,
+        "transaction_type": "BUY" if d == "LONG" else "SELL",
+        "variety": "regular", "product": str(product).upper(),
+        "order_type": str(order_type).upper(), "quantity": int(qty),
+        "price": float(price or 0), "trigger_price": 0.0,
+    }]
+    try:
+        res = kite.order_margins(req)
+    except Exception as e:
+        log.warning(f"order_margins failed for {symbol}: {e}")
+        _note_broker_error(e)
+        return {"ok": False, "total": None, "reason": f"order_margins failed: {e}"}
+    try:
+        row = (res or [])[0]
+        total = float(row.get("total"))
+    except Exception as e:
+        return {"ok": False, "total": None,
+                "reason": f"unreadable order_margins response ({e}): {str(res)[:120]}"}
+    if total <= 0:
+        # Zero required margin is not a real answer for an equity order.
+        return {"ok": False, "total": None,
+                "reason": f"order_margins returned total={total}"}
+    log.info(f"{symbol} {d} {qty} {product}: broker margin Rs{total:,.0f}")
+    return {"ok": True, "total": total, "reason": "broker order_margins"}
+
+
 def cancel_order(order_id: str) -> bool:
     """Cancel an open order."""
     kite = get_kite()

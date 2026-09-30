@@ -1,0 +1,32 @@
+# 15:15 IST, five minutes before Zerodha's own square-off at 15:20.
+#
+#   sudo systemctl enable --now atlas-mis-squareoff.timer
+#
+# ITS OWN TIMER, NOT PART OF THE MARKET-HOURS LOOP. The loop stops at 15:20, and a
+# crashed loop must not be able to strand an intraday short into broker
+# liquidation. This is the one job that has to happen even when the process that
+# opened the position is dead, so it fires independently of it.
+#
+# Mon-Fri; the runner checks the NSE calendar and exits quietly on a holiday.
+#
+# Persistent=FALSE, deliberately, and this is the one timer where that is right.
+# A missed 15:15 cannot be made up: by the time the box is back the exchange has
+# already squared the position off at 15:20, and running then would place a
+# closing order for a position that no longer exists. Every other ATLAS timer sets
+# Persistent=true because a late report beats none; a late square-off is not a
+# square-off, it is a new trade.
+#
+# Needs systemd 252+ for the timezone suffix; the box is 259.
+
+[Unit]
+Description=Close ATLAS MIS positions at 15:15 IST, before the broker does
+Requires=atlas-mis-squareoff.service
+
+[Timer]
+OnCalendar=Mon-Fri 15:15 Asia/Kolkata
+AccuracySec=10s
+Persistent=false
+Unit=atlas-mis-squareoff.service
+
+[Install]
+WantedBy=timers.target

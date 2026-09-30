@@ -70,6 +70,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED, BLOCKING_STATUSES,
+    OPEN_STATUSES,
 )
 from atlas.execution.atlas_entry import enter_trade
 from atlas.execution import reconcile
@@ -399,6 +400,30 @@ def near_zone(sig: dict, ltp: float) -> bool:
 # WHAT IS ALREADY COMMITTED — one query, every cycle
 # ══════════════════════════════════════════════════════════════════
 
+def open_positions_for_reconcile() -> list:
+    """
+    Open ATLAS rows, with what reconcile_exits needs to identify legs.
+
+    Returns [] on a read failure rather than raising. That is safe HERE and only
+    here: an empty list means "reconcile nothing this cycle", which leaves legs
+    resting exactly as they were. It is the opposite of committed_today(), where an
+    empty set would read as "nothing is held" and permit a duplicate entry.
+    """
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/atlas_trades"
+            f"?status=in.({','.join(OPEN_STATUSES)})"
+            f"&select=id,symbol,direction,qty,product,gtt_trigger_id",
+            headers=_headers(), timeout=15)
+        if r.status_code != 200:
+            log.error(f"open positions read failed: HTTP {r.status_code}")
+            return []
+        return r.json() or []
+    except Exception as e:
+        log.error(f"open positions read failed: {e}")
+        return []
+
+
 def committed_today() -> tuple:
     """
     (readable, {(symbol, direction)}) already committed.
@@ -499,6 +524,33 @@ def cycle(state: Session) -> dict:
         out["error"] = "ledger unreadable"
         return out
     breaker.record_read(True, "atlas_trades")
+
+    # ── RECONCILE RESTING EXIT LEGS, before looking for new entries ──
+    #
+    # Ahead of the entry search on purpose: an orphaned trigger can RE-ENTER a
+    # symbol that is already closed, and leaving it resting for another cycle
+    # while we hunt for candidates gets the order of risks backwards.
+    #
+    # Gated with the rest of exit management. When it is off nothing has placed a
+    # leg, so there is nothing to reconcile and calling it would only add broker
+    # requests.
+    from atlas.config import ENABLE_EXIT_MANAGEMENT
+    if ENABLE_EXIT_MANAGEMENT:
+        try:
+            from atlas.execution import exits as X
+            from atlas.execution.gtt import list_atlas_gtts
+            rec = X.reconcile_exits(open_positions_for_reconcile(),
+                                    atlas_gtts=list_atlas_gtts())
+            state.exit_cancelled = getattr(state, "exit_cancelled", 0) + rec["cancelled"]
+            out["exits_reconciled"] = rec["checked"]
+            out["exits_cancelled"] = rec["cancelled"]
+            for a in rec.get("alerts", []):
+                alert("EXIT RECONCILE", a, key=a[:48])
+        except Exception as e:
+            log.exception("exit reconciliation raised")
+            alert("EXIT RECONCILE FAILED",
+                  f"{type(e).__name__}: {e} — resting legs were not checked this "
+                  f"cycle; an orphan can re-enter a closed position", key="recon")
 
     symbols = sorted({s for s, _ in state.zone_map})
     quotes = fetch_quotes(symbols)
