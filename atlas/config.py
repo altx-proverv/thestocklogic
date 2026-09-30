@@ -161,10 +161,21 @@ MAX_STOP_PCT = 7.0
 # "scalable seam" was a comment. atlas/execution/exits.py reads them now, which
 # means ENABLE_EXIT_MANAGEMENT is the single switch that turns autonomy on.
 #
-# FALSE IS THE CURRENT BEHAVIOUR, NOT A DEGRADED ONE: ATLAS opens positions and
-# leaves them to a human, which is what it has always done. Flipping it True is
-# what makes it autonomous, and it should be flipped deliberately.
-ENABLE_EXIT_MANAGEMENT = False
+# TRUE since 2026-09-30. ATLAS now places its own stop on every fill and exits at
+# market if it cannot. LIVE_TRADING_ENABLED is also True, so this is real money
+# with no human in the loop.
+#
+# Turned on by operator instruction. The two supervised trades I had asked for --
+# one long, one short, watched -- had NOT happened when this was flipped, and no
+# part of this path has ever reached a real broker: kiteconnect is absent in
+# development, so every order, GTT, margin lookup and cancellation in the tests
+# went to an injected fake. In particular kite.order_margins' response shape is
+# coded to the documentation and has never been observed.
+#
+# Set False to hand exits back to a human. That is not a degraded mode -- it is
+# what ATLAS did until today -- and it is the fastest way to stop the agent
+# managing positions without stopping it trading.
+ENABLE_EXIT_MANAGEMENT = True
 
 # A stop is NOT optional once exit management is on. Kept True to say so: with
 # ENABLE_EXIT_MANAGEMENT True a position that cannot be given a stop is exited at

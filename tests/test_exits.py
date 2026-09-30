@@ -307,8 +307,14 @@ def main() -> int:
     entry_src = (ROOT / "atlas/execution/atlas_entry.py").read_text(encoding="utf-8")
     check("enter_trade reads ENABLE_EXIT_MANAGEMENT",
           "ENABLE_EXIT_MANAGEMENT" in entry_src, True)
-    check("  and it is OFF until deliberately flipped",
-          ENABLE_EXIT_MANAGEMENT, False)
+    # The GATE is asserted, not its setting. Pinning the deployed value here would
+    # break the suite on every deliberate flip, which trains whoever flips it to
+    # edit the test -- and a test that gets edited to pass is not a test. The
+    # value is printed so a run says plainly which mode is deployed.
+    check("  the early return exists when it is off",
+          "if not ENABLE_EXIT_MANAGEMENT:" in entry_src, True)
+    print(f"  {'DEPLOYED: exit management is ' + ('ON' if ENABLE_EXIT_MANAGEMENT else 'OFF'):<54}"
+          f"{'ATLAS places its own stops' if ENABLE_EXIT_MANAGEMENT else 'exits are manual'}")
     check("a stop is not optional when management is on",
           ALLOW_AUTOMATED_STOP_LOSS, True,
           "False would not disable stops, it would just be a lie")
