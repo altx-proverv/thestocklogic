@@ -271,6 +271,41 @@ def main() -> int:
     print(f"  {'missing families reject, never fall back':<50}"
           f"{'ok' if good else '** ' + r[:24] + ' **'}")
 
+    print()
+    print("THE PUBLISHER DOES NOT DECIDE WHAT IS TRADEABLE")
+    print("-" * 78)
+    # 06_push used to drop longs in a bearish regime and shorts in a bullish one.
+    # On 2026-09-29 it logged "6 long / 0 short" and then "No qualifying signals":
+    # six findings withheld from the product because the AGENT would not have
+    # traded them. Asserted at source because push_signals needs a service key and
+    # a network, and the property worth protecting is that the suppression does not
+    # come back -- it was removed once before and reappeared.
+    push = (ROOT / "engine/06_push_supabase.py").read_text(encoding="utf-8")
+    code = "\n".join(l for l in push.splitlines()
+                      if not l.lstrip().startswith("#"))
+    for pat in ('day["direction"] != "long"', "day['direction'] != 'long'",
+                'day["direction"] != "short"', "day['direction'] != 'short'"):
+        gone = pat not in code
+        ok &= gone
+        print(f"  {'no suppression: ' + pat:<52}"
+              f"{'ok' if gone else '** REINSTATED **'}")
+    kept = "_n_long" in code and "_n_short" in code
+    ok &= kept
+    print(f"  {'the by-direction composition is still logged':<52}"
+          f"{'ok' if kept else '** LOST **'}")
+
+    # And the gate that DOES decide is unchanged and still refuses both sides
+    # outside a bull regime. This is the reason removing the filter is safe.
+    from atlas.execution.atlas_entry import regime_allows_side
+    bear = {"regime": "bear", "extreme_bearish": False, "source": "market.parquet",
+            "advance_count": 1500, "decline_count": 500,
+            "nifty_close": 21000, "nifty_20dma": 20500}
+    for side in ("LONG", "SHORT"):
+        allowed, why, _ = regime_allows_side(bear, side)
+        ok &= not allowed
+        print(f"  {'entry gate still refuses a ' + side + ' in a bear regime':<52}"
+              f"{'ok' if not allowed else '** ALLOWED **'}")
+
     print("-" * 78)
     print("BATCH & REPORT:", "correct" if ok else "*** DEFECTIVE ***")
     return 0 if ok else 1

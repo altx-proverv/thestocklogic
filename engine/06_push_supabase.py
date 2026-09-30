@@ -83,8 +83,9 @@ def push_signals(target_date: str = None):
         (df["qualifies"] == True)
     ].copy()
 
-    # REGIME-AWARE FILTER
-    # Fetch current market regime from Supabase sector_heatmap
+    # REGIME, RECORDED AND LOGGED -- NOT A FILTER.
+    # Read so the run states the market context it published into. It does not
+    # decide what gets published; see the note below the composition log.
     try:
         r_regime = requests.get(
             f"{SUPABASE_URL}/rest/v1/sector_heatmap?order=signal_date.desc&limit=1",
@@ -94,33 +95,45 @@ def push_signals(target_date: str = None):
         market_dir = regime_data[0]["market_direction"] if regime_data else "mixed"
         log.info(f"Market regime: {market_dir.upper()}")
 
-        # THE COMPOSITION BEFORE THE FILTER, always logged. "suppressed 5 LONG
-        # signals" and "there were no shorts to suppress" are different facts and
-        # the old log could not tell them apart: shorts stopped reaching this
-        # function on 13 Aug 2026 when MAX_ENTRY_DIST_PCT went 8.0 -> 0.30, and
-        # for six weeks the absence looked like the regime filter doing its job.
+        # THE COMPOSITION BY DIRECTION, always logged. It was added when
+        # "suppressed 5 LONG signals" could not be told apart from "there were no
+        # shorts to suppress": shorts stopped reaching this function on 13 Aug 2026
+        # when MAX_ENTRY_DIST_PCT went 8.0 -> 0.30, and for six weeks the absence
+        # looked like the regime filter doing its job. The filter is gone now and
+        # the line stays, because what the screener found by side is worth knowing
+        # whether or not anything acts on it.
         _n_long  = int((day["direction"].astype(str).str.lower() == "long").sum())
         _n_short = int((day["direction"].astype(str).str.lower() == "short").sum())
-        log.info(f"Qualifying for {d.date()} before the regime filter: "
-                 f"{_n_long} long / {_n_short} short")
+        log.info(f"Qualifying for {d.date()}: {_n_long} long / {_n_short} short")
 
-        before = len(day)
-        if market_dir == "bearish":
-            day = day[day["direction"] != "long"]
-            log.info(f"Bearish regime: suppressed {before - len(day)} LONG "
-                     f"signals; {_n_short} SHORT signal(s) kept")
-            if not _n_short:
-                log.warning("No SHORT signals existed to publish in a bearish "
-                            "regime. 03b's report says why -- see its BY "
-                            "DIRECTION table; a short's structural stop is "
-                            "about twice as wide as a long's, so most fail "
-                            "MAX_STOP_PCT at the zone gate.")
-        elif market_dir == "bullish":
-            day = day[day["direction"] != "short"]
-            log.info(f"Bullish regime: suppressed {before - len(day)} SHORT "
-                     f"signals; {_n_long} LONG signal(s) kept")
+        # NOTHING IS SUPPRESSED HERE ANY MORE. The screener publishes what it
+        # found and the page presents it against the regime; the decision about
+        # whether to TRADE a side belongs to the entry gate, which is where it is
+        # enforced and tested.
+        #
+        # This used to drop longs in a bearish regime and shorts in a bullish one.
+        # On 2026-09-29 it logged "Qualifying before the regime filter: 6 long / 0
+        # short" and then "No qualifying signals" -- six findings the screener had
+        # made, withheld from the product because the agent would not have traded
+        # them. Those are different questions and only the second is the agent's.
+        #
+        # NOTHING BECOMES TRADEABLE THAT WAS NOT. atlas_entry Gate 1 refuses a
+        # long outside a bull regime with positive breadth, and ALLOW_SHORT_ENTRIES
+        # is False, checked first and unconditionally in the SHORT branch. Both are
+        # swept in tests/test_regime_gate.py across all 32 regime x hedge x
+        # sentiment combinations. The publisher was never the thing keeping ATLAS
+        # out of a trade -- and it FAILED OPEN on a regime-fetch exception, which
+        # made it the weaker of the two barriers anyway.
+        log.info(f"Regime {market_dir.upper()}: publishing all {len(day)} "
+                 f"qualifying signal(s) unfiltered. The entry gate, not the "
+                 f"publisher, decides what is tradeable.")
     except Exception as e:
-        log.warning(f"Could not fetch regime — pushing all signals: {e}")
+        # Everything is published regardless, so an unreadable regime costs only
+        # the log line that would have named it. It is NOT a permissive fallback
+        # any more -- there is nothing to fall back from.
+        log.warning(f"Could not read the market regime ({e}) — publishing "
+                    f"unfiltered, as always; the context line is missing from "
+                    f"this run's log")
 
     if day.empty:
         log.warning(f"No qualifying signals for {d.date()}")
