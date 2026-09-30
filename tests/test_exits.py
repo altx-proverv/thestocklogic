@@ -349,43 +349,57 @@ def main() -> int:
     print("THE EXPOSURE CEILING, AND WHAT IT IS MADE OF")
     print("-" * 78)
     # A DIFFERENT SHAPE from the per-day count that was removed: that capped
-    # OPPORTUNITY, this caps RISK. The number comes from the measured book -- peak
-    # capital Rs13,81,517 on 2026-09-07 at about Rs78,000 average notional, roughly
-    # 18 positions at once -- so 20 does not bind on normal behaviour and does bind
-    # on a watchlist ~18x wider raising the entry rate.
-    from atlas.config import (MAX_CONCURRENT_POSITIONS as MAXPOS,
-                              MAX_RISK_PER_TRADE as RISK,
-                              CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT)
-    check("the ceiling is above the measured peak of ~18",
-          MAXPOS > 18, True, f"{MAXPOS} positions")
-    check("  which is aggregate risk at stop",
-          MAXPOS * RISK, 60000.0, "if every stop fills on one day")
-    check("candidate reach is ATR-relative, not a fixed %",
-          ATRMULT, 1.0, "2% is a normal day for one stock and a shock for another")
+    # OPPORTUNITY, this caps CAPITAL. In rupees rather than positions, because a
+    # count treats a Rs20,000 short and a Rs1,00,000 long as one unit of exposure
+    # when one ties up five times the cash.
+    from atlas.config import (MAX_CONCURRENT_EXPOSURE as CEIL,
+                              SHORT_MARGIN_PCT_ESTIMATE as MARG,
+                              CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT,
+                              CANDIDATE_MAX_DIST_PCT as ABSCAP)
+    check("the ceiling is denominated in rupees", CEIL, 400000.0)
+    # Recorded because it is NOT obvious from the number: measured peak deployed
+    # was Rs13,81,517 and the average Rs7,09,526, so this sits BELOW the average
+    # the book has been running and will bind on ordinary behaviour, not only on
+    # the wider watchlist.
+    print(f"  {'  = ~' + str(round(CEIL/78000,1)) + ' longs at the measured Rs78k notional':<54}"
+          f"or ~{round(CEIL/(78000*MARG))} shorts at MIS margin")
+    print(f"  {'  measured peak deployed was Rs13,81,517':<54}"
+          f"so this ceiling binds on normal behaviour too")
+    check("candidate reach is ATR-relative", ATRMULT, 1.0)
+    # 3% rather than inheriting active_zones' 15%, which exists to stop
+    # forward-filling a zone price has travelled past -- never a watchlist bound.
+    check("  with an explicit absolute cap, not the inherited 15%", ABSCAP, 3.0)
 
     import atlas.execution.atlas_entry as AE
-    saved = AE.get_open_position_count
+    saved = AE.get_open_exposure
     try:
-        for readable, n, want in ((True, 0, "allow"), (True, MAXPOS - 1, "allow"),
-                                  (True, MAXPOS, "SKIPPED_EXPOSURE"),
-                                  (True, MAXPOS + 9, "SKIPPED_EXPOSURE"),
-                                  (False, 0, "BLOCKED_NO_LEDGER")):
-            AE.get_open_position_count = lambda r=readable, c=n: (r, c)
-            rd, cnt = AE.get_open_position_count()
+        for readable, spent, want in (
+                (True, 0.0, "allow"),
+                (True, CEIL - 100000, "allow"),
+                (True, CEIL, "SKIPPED_EXPOSURE"),
+                (True, CEIL + 50000, "SKIPPED_EXPOSURE"),
+                (False, 0.0, "BLOCKED_NO_LEDGER")):
+            AE.get_open_exposure = lambda r=readable, c=spent: (r, c, 3)
+            rd, amt, cnt = AE.get_open_exposure()
             got = ("BLOCKED_NO_LEDGER" if not rd
-                   else "SKIPPED_EXPOSURE" if cnt >= MAXPOS else "allow")
+                   else "SKIPPED_EXPOSURE" if amt >= CEIL else "allow")
             good = got == want
             ok &= good
-            print(f"  {('readable=' + str(readable) + ' open=' + str(n)):<54}"
+            print(f"  {('readable=' + str(readable) + ' committed=Rs' + format(spent, ',.0f')):<54}"
                   f"{got:<20}{'ok' if good else '** want ' + want + ' **'}")
     finally:
-        AE.get_open_position_count = saved
-    # an unreadable ledger must refuse, not read as "nothing is open" -- the one
-    # answer that turns the ceiling off exactly when it is least safe to
+        AE.get_open_exposure = saved
+
     src = (ROOT / "atlas/execution/atlas_entry.py").read_text(encoding="utf-8")
-    check("the count uses BLOCKING_STATUSES, so PENDING occupies a slot",
-          "BLOCKING_STATUSES" in src.split("def get_open_position_count")[1][:900],
-          True, "a position that MIGHT exist takes a slot")
+    body = src.split("def get_open_exposure")[1][:1400]
+    check("exposure counts BLOCKING_STATUSES, so PENDING commits cash",
+          "BLOCKING_STATUSES" in body, True)
+    check("  and charges MIS shorts at margin, not full notional",
+          "SHORT_MARGIN_PCT_ESTIMATE" in body, True)
+    # the exact check must know THIS trade's requirement, or the ceiling is
+    # crossed by the entry that tests it
+    check("the exact check adds this trade's own capital_required",
+          "open_exposure + float(sizing[" in src, True)
 
     print("-" * 78)
     print("EXITS:", "correct" if ok else "*** DEFECTIVE ***")

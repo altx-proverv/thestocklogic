@@ -107,6 +107,23 @@ nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-f
 /* A counter-trend card is DE-EMPHASISED, never hidden. The screener reports what
    it found; the regime is context for reading it, not a filter on it. */
 .sc-counter{opacity:.55;border-color:rgba(245,132,69,0.35)}
+/* THE WATCHLIST IS A TABLE, NOT CARDS, on purpose. The visual grammar has to say
+   "different kind of thing" before the words do: cards are what a call looks like
+   on this page, so a candidate must not get one. */
+.wl-wrap{margin:14px 0 4px}
+.wl-btn{width:100%;background:none;border:1px solid var(--line);color:var(--muted);
+  font-family:var(--display);font-size:11px;letter-spacing:2px;padding:9px;
+  border-radius:4px;cursor:pointer}
+.wl-btn:hover{color:var(--fg);border-color:var(--muted2)}
+.wl-note{font-size:11px;color:var(--muted);line-height:1.5;padding:9px 2px 2px}
+.wl-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+.wl-tbl th{text-align:left;font-family:var(--display);font-size:10px;
+  letter-spacing:1px;color:var(--muted2);border-bottom:1px solid var(--line);
+  padding:6px 8px}
+.wl-tbl td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.04)}
+.wl-tbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.wl-dir-l{color:var(--green)}
+.wl-dir-s{color:var(--red)}
 .sc-counter:hover{opacity:1}
 .chip-counter{background:rgba(245,132,69,0.12);color:var(--amber);border-color:rgba(245,132,69,0.35)}
 .regime-ctx{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;margin:10px 0 4px;
@@ -429,16 +446,25 @@ async function sbGet(path, useSession){
 
 async function fetchEOD(){
   var s=new Date(); s.setDate(s.getDate()-30);
-  /* publication_kind=eq.signal KEEPS THIS PAGE AS IT IS.
-     06_push also publishes a WATCHLIST -- valid setups whose price was not at the
-     zone at the close but is within one ATR of it, which the market-hours loop
-     watches and re-tests live. There are roughly 90 of those a session against 3
-     signals. Without this filter they would render here as trades, turning "here
-     are today's signals" into a 90-row list the reader is invited to act on, which
-     is a different product. The watchlist gets its own presentation or none. */
+  /* ACTIONABLE SIGNALS ONLY in this fetch. The watchlist is fetched separately by
+     fetchWatchlist() and rendered in its own section -- never merged into this
+     list, because a candidate is not a call. Mixing them would turn "here are
+     today's signals" into a list the reader is invited to act on. */
   return (await sbGet('/rest/v1/signals?publication_kind=eq.signal&signal_date=gte.'+s.toISOString().split('T')[0]+
                       '&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*')).rows;
 }
+async function fetchWatchlist(){
+  /* Candidates the market-hours loop is watching: valid setups whose price was not
+     at the entry zone at the close, within one ATR of it and within 3%. near_zone
+     re-tests the distance against the live price every cycle, so these are what
+     ATLAS is able to act on today -- not what it recommends.
+     Nearest-first, because distance is the only thing that says whether a row is
+     plausibly live. */
+  var r = await sbGet('/rest/v1/signals?publication_kind=eq.candidate'
+    + '&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*&limit=400');
+  return r.rows || [];
+}
+
 async function fetchSectors(){
   var data=(await sbGet('/rest/v1/sector_heatmap?order=signal_date.desc,rank.asc&limit=22')).rows;
   if(!data.length) return data;
@@ -794,8 +820,8 @@ function renderSentimentPanel(sectors){
 }
 
 async function render(){
-  var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices()]);
-  var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4];
+  var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices(),fetchWatchlist()]);
+  var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4],watchAll=res[5];
   var priceMap={};
   (prices||[]).forEach(function(p){priceMap[p.symbol]=p;});
   var outcomeMap={};
@@ -1010,6 +1036,39 @@ async function render(){
   }
 
   // Watchlist section builder
+  function buildWatchlist(rows, batchDate){
+    /* A SEPARATE SECTION, COLLAPSED, AND A TABLE. Three rules, each load-bearing:
+       never one list with the signals above (separate count, separate grammar);
+       collapsed by default, because an open 90-row table IS the page; and no
+       score, grade or target column -- those are the fields that make a row look
+       like a recommendation, and a candidate has not passed the test that makes it
+       one. Distance is shown because it is the only column that tells a reader
+       whether a row is plausibly live today. */
+    var day = (rows || []).filter(function(r){ return r.signal_date === batchDate; });
+    if(!day.length) return '';
+    var body = day.map(function(r){
+      var isL = String(r.direction||'').toUpperCase() === 'LONG';
+      var d = (r.entry_dist_pct===null||r.entry_dist_pct===undefined)
+              ? '&mdash;' : parseFloat(r.entry_dist_pct).toFixed(2)+'%';
+      return '<tr><td><span class="'+(isL?'wl-dir-l':'wl-dir-s')+'">'
+        +(isL?'&#8593;':'&#8595;')+' '+r.symbol+'</span></td>'
+        +'<td class="num">'+d+'</td>'
+        +'<td>&#8377;'+fmt(r.entry_ref)+'</td>'
+        +'<td>'+(r.setup_name||'&mdash;')+'</td></tr>';
+    }).join('');
+    return '<div class="wl-wrap">'
+      +'<button class="wl-btn" id="wlBtn" onclick="toggleWatchlist()">'
+      +'WATCHING '+day.length+' MORE &#9656;</button>'
+      +'<div id="wlBody" style="display:none">'
+      +'<div class="wl-note">Valid setups whose price is not at the entry zone yet. '
+      +'ATLAS watches these and acts only if price reaches the zone during the '
+      +'session. <strong>They are not calls</strong>, and they are not counted in '
+      +'the accuracy record.</div>'
+      +'<table class="wl-tbl"><thead><tr><th>SYMBOL</th>'
+      +'<th class="num">TO ZONE</th><th>ZONE</th><th>SETUP</th></tr></thead>'
+      +'<tbody>'+body+'</tbody></table></div></div>';
+  }
+
   function buildSection(sigs,liveSigs,label,dateLabel,isReview){
     var em={};sigs.forEach(function(s){em[s.symbol]=s;});
     var conf={};
@@ -1064,6 +1123,8 @@ async function render(){
   } else {
     html+=buildSection(watchlistEOD,todayLive,secLabel,secDate,false);
   }
+  // Below the signals, never inside them.
+  html+=buildWatchlist(watchAll, batchDate);
 
   // Live signals date map for archive
   window.byLiveDate={};
@@ -1084,6 +1145,14 @@ async function render(){
   }
   document.getElementById('signalContainer').innerHTML=html;
 }
+function toggleWatchlist(){
+  var b=document.getElementById('wlBody'), t=document.getElementById('wlBtn');
+  if(!b||!t) return;
+  var open=b.style.display!=='none';
+  b.style.display=open?'none':'';
+  t.innerHTML=t.innerHTML.replace(open?'&#9662;':'&#9656;', open?'&#9656;':'&#9662;');
+}
+
 function toggleSeeMore(){var el=document.getElementById('seeMoreDiv');var btn=document.getElementById('seeMoreBtn');if(!el)return;if(el.style.display==='none'){el.style.display='block';btn.innerHTML='SHOW LESS &#9650;';}else{el.style.display='none';btn.innerHTML='SEE '+el.querySelectorAll('.sc').length+' MORE &#9660;';}}
 function toggleArch(){document.getElementById('archBody').classList.toggle('open');document.getElementById('archIcon').classList.toggle('open');}
 // ── SUPABASE AUTH ─────────────────────────────────────────────

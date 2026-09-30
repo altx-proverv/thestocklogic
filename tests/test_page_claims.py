@@ -218,6 +218,39 @@ def main() -> int:
     check("no market state permits both sides at once", not both, str(both))
 
     print()
+    print("THE WATCHLIST IS PRESENTED AS A WATCHLIST, NOT AS CALLS")
+    print("-" * 78)
+    # ~86 candidates a session against ~3 signals. Merged into one list the page
+    # stops saying "here are today's signals" and starts offering 89 rows to act on.
+    check("the page fetches candidates separately",
+          "fetchWatchlist" in signals)
+    check("  the signal fetch excludes them",
+          "publication_kind=eq.signal" in signals)
+    check("  and the watchlist fetch asks only for them",
+          "publication_kind=eq.candidate" in signals)
+    check("rendered in its own section, below the signals",
+          "buildWatchlist" in signals)
+    # a table, not cards: the visual grammar says "different thing" before the words
+    check("  as a table, not cards", "wl-tbl" in signals)
+    check("  collapsed by default", 'id="wlBody" style="display:none"' in signals,
+          "an open 90-row table IS the page")
+    check("  and it says plainly they are not calls",
+          "not calls" in signals)
+    check("  and that they are outside the accuracy record",
+          "accuracy record" in signals)
+    # no score, grade or target column -- the fields that make a row look like a
+    # recommendation, which a candidate has not earned
+    wl = signals[signals.index("function buildWatchlist"):
+                 signals.index("function buildSection")]
+    for field in ("score", "grade", "target"):
+        absent = field not in wl.lower().replace("wl-", "")
+        ok &= absent
+        print(f"  {'no ' + field + ' column on a candidate row':<52}"
+              f"{'ok' if absent else '** PRESENTS AS A CALL **'}")
+    check("distance to zone IS shown", "TO ZONE" in wl,
+          "the only column that says whether a row is plausibly live")
+
+    print()
     print("THE DEPLOY CAN REACH THE RUNNING LISTENER")
     print("-" * 78)
     wd = read("scripts/bot_watchdog.sh")

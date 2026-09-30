@@ -559,9 +559,10 @@ def _unreachable_only(df: pd.DataFrame) -> pd.DataFrame:
     # for an entry that cannot happen. The cut is ATR-relative because it has to be
     # per symbol: 2% is a normal day for one stock and a shock for another.
     try:
-        from atlas.config import CANDIDATE_MAX_ATR_MULTIPLE as MULT
+        from atlas.config import (CANDIDATE_MAX_ATR_MULTIPLE as MULT,
+                                  CANDIDATE_MAX_DIST_PCT as ABSCAP)
     except Exception:
-        MULT = 1.0
+        MULT, ABSCAP = 1.0, 3.0
     if "atr_pct" in out.columns:
         reach = pd.to_numeric(out["atr_pct"], errors="coerce")
     elif {"atr", "close"} <= set(out.columns):
@@ -573,7 +574,11 @@ def _unreachable_only(df: pd.DataFrame) -> pd.DataFrame:
         # missed trade.
         log.warning("no atr/atr_pct on the frame — candidate reach not filtered")
         return out
-    keep = pd.to_numeric(out["entry_dist_pct"], errors="coerce") <= reach * MULT
+    dist = pd.to_numeric(out["entry_dist_pct"], errors="coerce")
+    # BOTH bounds: ATR-relative for reachability per symbol, and an absolute
+    # ceiling so the watchlist does not inherit active_zones' 15%, which exists for
+    # a different reason. See CANDIDATE_MAX_DIST_PCT.
+    keep = (dist <= reach * MULT) & (dist <= ABSCAP)
     return out[keep.fillna(False)].copy()
 
 

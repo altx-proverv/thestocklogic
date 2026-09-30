@@ -78,7 +78,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    BLOCKING_STATUSES, MAX_CONCURRENT_POSITIONS, MAX_RISK_PER_TRADE,
+    BLOCKING_STATUSES, MAX_CONCURRENT_EXPOSURE, MAX_RISK_PER_TRADE,
+    SHORT_MARGIN_PCT_ESTIMATE,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
     ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
     DEFAULT_ON_UNKNOWN_REGIME,
@@ -377,11 +378,22 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
 # decision time via atlas/risk/funds.py, which also nets off resting GTTs.
 
 
-def get_open_position_count() -> tuple:
+def get_open_exposure() -> tuple:
     """
-    (readable, count) of positions occupying a slot right now.
+    (readable, rupees, count) of capital already committed.
 
-    BLOCKING_STATUSES, MAX_CONCURRENT_POSITIONS, MAX_RISK_PER_TRADE, not just OPEN: a PENDING row is a fill we could not confirm,
+    IN RUPEES, because that is what the broker withholds and what runs out. A count
+    would treat a Rs20,000 short and a Rs1,00,000 long as one unit of exposure when
+    one ties up five times the cash.
+
+    Derived from qty x entry_price rather than a stored column -- atlas_trades keeps
+    neither notional nor capital_required, and the sizing rule fixes the rest: a
+    LONG is CNC at full value, a SHORT is MIS at SHORT_MARGIN_PCT_ESTIMATE. For a
+    PENDING row entry_price is the intended price rather than the fill, which is
+    close enough for a ceiling and errs on the side of counting it.
+
+    BLOCKING_STATUSES, MAX_CONCURRENT_EXPOSURE, MAX_RISK_PER_TRADE,
+    SHORT_MARGIN_PCT_ESTIMATE, not just OPEN: a PENDING row is a fill we could not confirm,
     so it may be a live position. A position that MIGHT exist occupies a slot --
     assuming otherwise is how a ceiling gets exceeded by exactly the positions
     nobody is sure about.
@@ -563,16 +575,20 @@ def enter_trade(signal: dict) -> dict:
     #
     # Fails closed: an unreadable ledger refuses the entry rather than treating
     # "cannot count" as "nothing is open".
-    slots_ok, open_now = get_open_position_count()
-    if not slots_ok:
+    exp_ok, open_exposure, open_count = get_open_exposure()
+    if not exp_ok:
         return {"status": "BLOCKED_NO_LEDGER",
-                "reason": "cannot count open positions — refusing to add to an "
-                          "exposure I cannot measure"}
-    if open_now >= MAX_CONCURRENT_POSITIONS:
+                "reason": "cannot read open exposure — refusing to add to a "
+                          "position I cannot measure"}
+    # CHEAP REFUSAL FIRST. If the book is already at the ceiling, no trade of any
+    # size fits, and there is no point fetching a quote and sizing a position to
+    # discover that. The exact check -- including THIS trade's requirement -- is at
+    # Gate 5b, once sizing knows what it needs.
+    if open_exposure >= MAX_CONCURRENT_EXPOSURE:
         return {"status": "SKIPPED_EXPOSURE",
-                "reason": (f"{open_now}/{MAX_CONCURRENT_POSITIONS} positions "
-                           f"already open (~Rs{open_now * MAX_RISK_PER_TRADE:,.0f} "
-                           f"of risk at stop)")}
+                "reason": (f"Rs{open_exposure:,.0f} already committed across "
+                           f"{open_count} position(s); ceiling is "
+                           f"Rs{MAX_CONCURRENT_EXPOSURE:,.0f}")}
 
     # THE PER-DAY COUNT IS STILL GONE. A count of entries TODAY bounded the
     # number of positions while saying nothing about their size, and refused the
@@ -648,6 +664,18 @@ def enter_trade(signal: dict) -> dict:
 
     # GATE 6 -- live broker funds, net of resting GTTs. FAIL CLOSED: can_afford
     # returns False both when funds are short and when they cannot be read.
+    # GATE 5b -- WOULD THIS TRADE CROSS THE EXPOSURE CEILING? Checked with the
+    # trade's own requirement, so the ceiling is never crossed by the entry that
+    # tests it. Gate 3 already refused the case where nothing fits at all; this is
+    # the one that knows how much THIS position needs.
+    would_be = open_exposure + float(sizing["capital_required"])
+    if would_be > MAX_CONCURRENT_EXPOSURE:
+        return {"status": "SKIPPED_EXPOSURE",
+                "reason": (f"Rs{open_exposure:,.0f} committed across {open_count} "
+                           f"position(s) + Rs{sizing['capital_required']:,.0f} for "
+                           f"this trade = Rs{would_be:,.0f}, over the "
+                           f"Rs{MAX_CONCURRENT_EXPOSURE:,.0f} ceiling")}
+
     # THE BROKER'S MARGIN, NOT OUR ESTIMATE. sizing["capital_required"] is
     # notional for a CNC long and notional x SHORT_MARGIN_PCT_ESTIMATE (0.20) for
     # an MIS short. With no cap on the number of trades, that 0.20 is the only

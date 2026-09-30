@@ -145,42 +145,64 @@ MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 # live price.
 CANDIDATE_MAX_ATR_MULTIPLE = 1.0
 
-# ── CONCURRENT EXPOSURE CEILING ───────────────────────────────────
+# AND AN EXPLICIT ABSOLUTE CEILING, so the watchlist does not inherit its outer
+# bound from a constant chosen for something else. active_zones.MAX_ZONE_DIST_PCT
+# is 15% and exists to stop forward-filling a zone price has travelled far past;
+# it was never a considered watchlist threshold, and a stock 12% from its zone is
+# not a candidate.
+#
+# MEASURED on the ATR-filtered set, 754 sessions: p50 1.32%, p90 2.70%, MAX 8.88%.
+# So 15% was already not binding on anything -- the ATR cut does the work -- and
+# the honest numbers for the thresholds asked about are:
+#
+#     cap      kept/session (232 sym)   share    scaled to 706
+#     1.5%              17.5            58.1%         53
+#     2.0%              22.7            75.5%         69
+#     3.0%              28.2            93.8%         86
+#     5.0%              30.0            99.7%         91
+#     8.0%              30.1           100.0%         92   <- a no-op
+#
+# 3.0% is the choice: it is the point where an absolute cap starts to do anything
+# at all (trimming 6%), it sits just above the p90 of 2.70% so it keeps everything
+# ordinary, and it removes the volatile tail -- the 8.88% outlier is a stock whose
+# ATR is nearly 9%, where one ATR of movement is a different event from the one
+# this watchlist is for. 5% and 8% would be decoration; 1.5% and 2% discard
+# reachable setups to no purpose, since the ATR test has already established they
+# are reachable.
+CANDIDATE_MAX_DIST_PCT = 3.0
+
+# ── CONCURRENT EXPOSURE CEILING, IN RUPEES ────────────────────────
 #
 # A DIFFERENT SHAPE FROM THE PER-DAY COUNT THAT WAS REMOVED. That one capped
-# OPPORTUNITY: three entries a day whatever the book already held, so a quiet
-# week and a crowded one were treated alike and the fourth good setup was refused
-# for arithmetic. This caps RISK: how much can be open AT ONCE, which is the thing
-# that actually compounds.
+# OPPORTUNITY: three entries a day whatever the book held, so a quiet week and a
+# crowded one were treated alike and the fourth good setup was refused for
+# arithmetic. This caps CAPITAL AT RISK OF BEING COMMITTED, which is the thing
+# that compounds.
 #
-# THE NUMBER COMES FROM THE MEASURED BOOK, not a preference. Over the 20 sessions
-# to 2026-09-30: peak capital Rs13,81,517 on 2026-09-07, average notional about
-# Rs78,000, which is roughly 18 positions open simultaneously at the peak. Entry
-# rate was 2.55 published signals a session against a 5-day median hold, and
-# 2.55 x 5 = 12.75 predicts the average while the peak runs higher on clustering.
+# IN RUPEES, NOT POSITIONS, and the difference is not cosmetic. A count treats a
+# Rs20,000 short and a Rs1,00,000 long as the same unit of exposure when one ties
+# up five times the cash. Capital is what the broker actually withholds and what
+# runs out.
 #
-# So 20. Above the measured peak of ~18, so it does NOT constrain what the book has
-# actually been doing -- a ceiling that binds on normal behaviour is a bug that
-# looks like caution. It bites only on the thing that is new: a watchlist about 45
-# times wider can raise the entry rate, and at a 5-day hold even 13 entries a
-# session compounds to 65 open positions, which is roughly Rs50 lakh at the
-# measured average notional.
+# WHAT Rs4,00,000 MEANS AGAINST THE MEASURED BOOK. Over the 20 sessions to
+# 2026-09-30, peak deployed capital was Rs13,81,517 and the AVERAGE was
+# Rs7,09,526. So this ceiling sits below the average the book has been running --
+# it is roughly a third of the peak, and it WILL bind on ordinary behaviour, not
+# only on the wider watchlist. At the measured Rs78,000 average notional it allows
+# about five concurrent longs, or about twenty-five shorts, since MIS margin is a
+# fifth of notional. Five longs is about Rs15,000 of risk if every stop fills.
 #
-# WHAT 20 MEANS IN THE TWO UNITS THAT MATTER:
-#   aggregate risk   20 x MAX_RISK_PER_TRADE = Rs60,000 if every stop fills on the
-#                    same day. That is the real number to have an opinion about.
-#   capital          20 x Rs78,000 average = about Rs15.6 lakh of longs, or
-#                    Rs20 lakh if every one hit the Rs1,00,000 notional cap.
+# That is a deliberate reduction in activity, not just a guard rail. It is recorded
+# here because a number chosen to "bound risk rather than opportunity" does both at
+# this level, and whoever revisits it should know which of the two they are
+# adjusting.
 #
-# Shorts consume a fifth of a long's capital at MIS margin, so for them the COUNT
-# is the binding constraint rather than funds -- which is the right way round: 20
-# shorts is Rs60,000 of risk whether or not the margin happens to be cheap.
-#
-# Counted from atlas_trades in a BLOCKING status, so a PENDING row whose fill is
-# unconfirmed counts against the ceiling. A position that might exist occupies a
-# slot; assuming it does not is how a cap gets exceeded by exactly the positions
-# nobody is sure about.
-MAX_CONCURRENT_POSITIONS = 20
+# Computed from qty x entry_price on rows in a BLOCKING status, with MIS shorts at
+# SHORT_MARGIN_PCT_ESTIMATE, so no new column is needed. A PENDING row whose fill
+# was never confirmed counts: a position that MIGHT exist has already committed the
+# cash, and assuming otherwise is how a ceiling is exceeded by exactly the
+# positions nobody is sure about.
+MAX_CONCURRENT_EXPOSURE = 400000.0
 
 # RETIRED. Gate 3 is gone: there is no per-day entry count. A count bounded the
 # NUMBER of positions while saying nothing about their size, and each is already
