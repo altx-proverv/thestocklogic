@@ -136,6 +136,9 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
   .warn{margin-top:14px;padding:11px 14px;border:1px solid rgba(245,132,69,.35);border-radius:8px;
         background:rgba(245,132,69,.06);font-family:var(--mono);font-size:10.5px;color:var(--orange);line-height:1.65}
   .loading{padding:26px;text-align:center;color:var(--muted2);font-family:var(--mono);font-size:11px}
+
+.excl-note{margin:10px 0 2px;padding:10px 12px;border:1px solid rgba(245,132,69,0.4);background:rgba(245,132,69,0.08);border-radius:4px;font-size:12px;line-height:1.5;color:var(--fg)}
+.excl-note code{font-size:11px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -158,6 +161,7 @@ nav .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255
     <h1>Daily Signal Book</h1>
     <div class="sub" id="hdrLine">loading…</div>
 
+    <div class="excl-note" id="exclNote" style="display:none"></div>
     <div class="srow" id="row1"></div>
   </div>
 </header>
@@ -629,6 +633,44 @@ async function load(){
        the same day resolves the same way under either publication. */
     var wrows = await jget('/rest/v1/v_window_summary');
     var W = (wrows && wrows[0]) ? wrows[0] : {};
+
+    /* THE EXCLUSION IS STATED, NOT ASSUMED READ.
+       75 signals published on 2026-08-11 and 08-12 carried an entry zone on the
+       wrong side of price -- a LONG on a supply_ob/bear_fvg, a SHORT on a
+       demand_ob/bull_fvg -- because zone_entry resolved the zone from the row's
+       structure_trend instead of the trade direction (fixed in ac43f53). They
+       are excluded from the accuracy record.
+
+       THE FIGURES ON THIS PAGE DO NOT MOVE. Everything here is the rolling
+       20-mark window, currently 2026-08-19 to 09-28, and all 75 predate it -- so
+       they were never in these numbers. They DO drag the all-time resolved
+       population (mean +0.57% -> +1.00%, win 43.4% -> 47.0%), which no page
+       publishes. The notice says so explicitly rather than implying a correction
+       to figures that did not change.
+
+       A record that quietly drops 9% of itself is a different kind of dishonest
+       from one that keeps bad rows, so the count comes from
+       v_window_summary.n_excluded_wrong_side and is printed whenever it is
+       non-zero. It is NOT hardcoded: a literal here is how four other operator-
+       facing numbers went stale, and this one would go stale the moment the
+       backfill changed. */
+    var nx = Number(W.n_excluded_wrong_side || 0);
+    var xEl = document.getElementById('exclNote');
+    if (xEl) {
+      xEl.innerHTML = nx
+        ? '<strong>' + nx + ' signals excluded from the accuracy record.</strong> '
+          + 'Published 11&ndash;12 Aug 2026 with the entry zone on the wrong side of '
+          + 'price &mdash; a long whose zone sat above the price, a short whose zone sat '
+          + 'below it. They were not calls that went wrong: the entry contradicted the '
+          + 'setup it was based on. The defect is fixed, and the rows are kept rather '
+          + 'than deleted &mdash; still queryable in <code>v_wrong_side_excluded</code>, '
+          + 'because the comparison against correctly zoned signals from the same two '
+          + 'sessions is the only evidence either way on how much the zone matters. '
+          + '<em>Those dates fall before the rolling window above, so the figures shown '
+          + 'here never included them and are unchanged by the exclusion.</em>'
+        : '';
+      xEl.style.display = nx ? '' : 'none';
+    }
     var line = function(lbl, val){ return '<span class="lbl">'+lbl+'</span>'+val; };
 
     document.getElementById('row1').innerHTML =

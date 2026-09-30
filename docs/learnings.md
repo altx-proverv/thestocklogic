@@ -54,3 +54,53 @@ when each is independently sufficient. They are a trap when they are jointly
 necessary — then there is no redundancy at all, only a dependency nobody
 declared, and the failure mode is that removing an apparently unrelated condition
 silently opens a path.
+
+---
+
+## A null result from a population that never tests the hypothesis
+
+`ac43f53` · `20260930090000` · 2026-09-30
+
+**The setup.** 75 signals were published with the entry zone on the wrong side of
+price. Comparing them against correctly zoned signals from the *same two
+sessions* — an unusually clean control, since the whole zone-known population
+falls on those two days — gave opposite answers by direction:
+
+```
+LONG   wrong-side   41 resolved   mean −3.65%   win  2.4%   TARGET 1 / STOP 40
+LONG   correct     221 resolved   mean +2.31%   win 61.5%   TARGET 136 / STOP 85
+SHORT  wrong-side   32 resolved   mean −0.27%   win 43.8%   TARGET 0 / STOP 0
+SHORT  correct      24 resolved   mean −0.40%   win 45.8%   TARGET 0 / STOP 0
+```
+
+**The trap.** The short rows look like evidence that the zone does not matter.
+They are not evidence of anything. Every short in the record — both groups —
+resolved `SAME_DAY`, with zero targets and zero stops, because shorts are
+intraday MIS and are squared off before either level is reached. The zone's only
+causal path to the outcome is via the entry and stop levels, and a same-day exit
+severs it. The measurement cannot distinguish "the zone is irrelevant" from "we
+closed before the zone could matter".
+
+**The generalisation.** Before reading a null result, check that the population
+could have produced a non-null one. A control group that is structurally
+incapable of expressing the effect gives a null with the same shape as a real
+one, and the smaller the sample the more persuasive it looks. Here the tell was
+sitting in the data: `TARGET 0 / STOP 0` on both sides says the exit mechanism,
+not the entry, decided every short outcome.
+
+The long rows, by contrast, are strong: 40 of 41 stopped out at a 2.4% win rate
+against 61.5% on the same days. A long entered above price on a bear FVG is
+buying into resistance with the stop below, and it behaves exactly as that
+description predicts.
+
+**The open question, which this does NOT answer.** Whether the zone or the
+0.30% entry-distance gate is doing the work is untested. The two are confounded
+by construction: a signal only publishes when price is already at the zone, so
+"at the zone" and "within 0.30%" are nearly the same condition on every row that
+survives. Separating them needs signals that pass one and fail the other, which
+the current gate never emits. Worth designing the outcome analysis around
+deliberately, rather than inferring it from a comparison that cannot carry it.
+
+**Also worth keeping:** the excluded rows were kept, not deleted. They are the
+only evidence either way, and an exclusion that destroys its own justification
+cannot be reviewed later.
