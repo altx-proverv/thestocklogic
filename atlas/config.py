@@ -171,38 +171,29 @@ CANDIDATE_MAX_ATR_MULTIPLE = 1.0
 # are reachable.
 CANDIDATE_MAX_DIST_PCT = 3.0
 
-# ── CONCURRENT EXPOSURE CEILING, IN RUPEES ────────────────────────
+# ── THERE IS NO EXPOSURE CEILING ──────────────────────────────────
 #
-# A DIFFERENT SHAPE FROM THE PER-DAY COUNT THAT WAS REMOVED. That one capped
-# OPPORTUNITY: three entries a day whatever the book held, so a quiet week and a
-# crowded one were treated alike and the fourth good setup was refused for
-# arithmetic. This caps CAPITAL AT RISK OF BEING COMMITTED, which is the thing
-# that compounds.
+# No MAX_CONCURRENT_EXPOSURE, no MAX_CAPITAL_DEPLOYED, no maximum simultaneous
+# capital deployed of any kind. BROKER FUNDS ARE THE ONLY BOUND: the operator
+# keeps capital available, and ATLAS takes every setup that forms.
 #
-# IN RUPEES, NOT POSITIONS, and the difference is not cosmetic. A count treats a
-# Rs20,000 short and a Rs1,00,000 long as the same unit of exposure when one ties
-# up five times the cash. Capital is what the broker actually withholds and what
-# runs out.
+# A Rs4,00,000 rupee ceiling existed here for one commit. The reasoning for it
+# was that capping CAPITAL rather than the per-day entry count bounds risk
+# instead of opportunity -- true as far as it goes, but the level made it a cap
+# on opportunity anyway. Peak deployed capital over the 20 sessions to
+# 2026-09-30 was Rs13,81,517 and the AVERAGE was Rs7,09,526, so Rs4,00,000 sat
+# BELOW the average the book had been running: about five concurrent longs. It
+# would have started refusing ordinary sixth positions on week one.
 #
-# WHAT Rs4,00,000 MEANS AGAINST THE MEASURED BOOK. Over the 20 sessions to
-# 2026-09-30, peak deployed capital was Rs13,81,517 and the AVERAGE was
-# Rs7,09,526. So this ceiling sits below the average the book has been running --
-# it is roughly a third of the peak, and it WILL bind on ordinary behaviour, not
-# only on the wider watchlist. At the measured Rs78,000 average notional it allows
-# about five concurrent longs, or about twenty-five shorts, since MIS margin is a
-# fifth of notional. Five longs is about Rs15,000 of risk if every stop fills.
+# It was also the wrong place for the decision. A constant here is a second
+# opinion about the operator's own balance -- held locally, unable to see
+# deposits or withdrawals, and drifting from the truth the moment either
+# happens. atlas/risk/funds.py reads kite.margins() at decision time, net of
+# resting GTTs, and Gate 6 refuses what the account cannot pay for. That check
+# cannot be stale.
 #
-# That is a deliberate reduction in activity, not just a guard rail. It is recorded
-# here because a number chosen to "bound risk rather than opportunity" does both at
-# this level, and whoever revisits it should know which of the two they are
-# adjusting.
-#
-# Computed from qty x entry_price on rows in a BLOCKING status, with MIS shorts at
-# SHORT_MARGIN_PCT_ESTIMATE, so no new column is needed. A PENDING row whose fill
-# was never confirmed counts: a position that MIGHT exist has already committed the
-# cash, and assuming otherwise is how a ceiling is exceeded by exactly the
-# positions nobody is sure about.
-MAX_CONCURRENT_EXPOSURE = 400000.0
+# Per-trade bounds are unaffected and still apply to every entry:
+# MAX_RISK_PER_TRADE and MAX_NOTIONAL_PER_TRADE. What is gone is the aggregate.
 
 # RETIRED. Gate 3 is gone: there is no per-day entry count. A count bounded the
 # NUMBER of positions while saying nothing about their size, and each is already

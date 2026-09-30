@@ -78,8 +78,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
-    BLOCKING_STATUSES, MAX_CONCURRENT_EXPOSURE, MAX_RISK_PER_TRADE,
-    SHORT_MARGIN_PCT_ESTIMATE,
+    BLOCKING_STATUSES,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO,
     ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
     DEFAULT_ON_UNKNOWN_REGIME,
@@ -369,51 +368,18 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# EXPOSURE
+# EXPOSURE -- THERE IS NO LOCAL MEASURE OF IT, BY DESIGN
 # ─────────────────────────────────────────────────────────────────────
-# get_exposure() is gone. It summed entry_price*qty over our own atlas_trades
-# rows to enforce MAX_CAPITAL_DEPLOYED -- a ledger that duplicated the broker's
-# balance and could drift from it without anything reconciling the two. Both the
-# ledger and the cap are removed; available funds come from kite.margins() at
-# decision time via atlas/risk/funds.py, which also nets off resting GTTs.
-
-
-def get_open_exposure() -> tuple:
-    """
-    (readable, rupees, count) of capital already committed.
-
-    IN RUPEES, because that is what the broker withholds and what runs out. A count
-    would treat a Rs20,000 short and a Rs1,00,000 long as one unit of exposure when
-    one ties up five times the cash.
-
-    Derived from qty x entry_price rather than a stored column -- atlas_trades keeps
-    neither notional nor capital_required, and the sizing rule fixes the rest: a
-    LONG is CNC at full value, a SHORT is MIS at SHORT_MARGIN_PCT_ESTIMATE. For a
-    PENDING row entry_price is the intended price rather than the fill, which is
-    close enough for a ceiling and errs on the side of counting it.
-
-    BLOCKING_STATUSES, MAX_CONCURRENT_EXPOSURE, MAX_RISK_PER_TRADE,
-    SHORT_MARGIN_PCT_ESTIMATE, not just OPEN: a PENDING row is a fill we could not confirm,
-    so it may be a live position. A position that MIGHT exist occupies a slot --
-    assuming otherwise is how a ceiling gets exceeded by exactly the positions
-    nobody is sure about.
-
-    FAILS CLOSED. An unreadable ledger returns readable=False and the caller
-    refuses the entry. Returning 0 would read as "nothing is open", which is the
-    one answer that turns the ceiling off at the moment it is least safe to.
-    """
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/atlas_trades"
-            f"?status=in.({','.join(BLOCKING_STATUSES)})&select=id",
-            headers={**_headers(), "Prefer": "count=exact"}, timeout=15)
-        if r.status_code != 200:
-            log.error(f"open position count failed: HTTP {r.status_code}")
-            return False, 0
-        return True, len(r.json() or [])
-    except Exception as e:
-        log.error(f"open position count failed: {e}")
-        return False, 0
+# Two functions have stood here and both are gone: get_exposure(), which summed
+# entry_price*qty to enforce MAX_CAPITAL_DEPLOYED, and get_open_exposure(),
+# which did the same for MAX_CONCURRENT_EXPOSURE. Each was a ledger duplicating
+# the broker's balance with nothing reconciling the two, and each existed only
+# to serve a cap that no longer exists.
+#
+# Available funds come from kite.margins() at decision time via
+# atlas/risk/funds.py, which also nets off resting GTTs. That is the only
+# exposure bound: broker funds. The operator keeps capital available and ATLAS
+# takes every setup that forms.
 
 
 def get_today_entry_count() -> int:
@@ -440,10 +406,10 @@ def get_open_position(symbol: str) -> tuple:
     supposed to say what live would have done.
 
     FAILS CLOSED. `readable` is False when the book cannot be read at all, and
-    the caller must block on that. This is deliberately stricter than Gate 3
-    above, which returns 0 on failure: an unreadable book there costs at most
-    one extra trade against the daily cap, whereas here it costs a second
-    position stacked behind a stop already sized for one.
+    the caller must block on that. It is the only book read that still gates an
+    entry, now that the aggregate caps are gone, and it has to be: an unreadable
+    answer here costs a second position stacked behind a stop already sized for
+    one, which is one structural stop covering double the intended risk.
     """
     try:
         r = requests.get(
@@ -568,55 +534,46 @@ def enter_trade(signal: dict) -> dict:
             return {"status": "SKIPPED_MARKET_WAIT",
                     "reason": f"opening range is {mkt_dir} -- hedge short needs SHORT"}
 
-    # GATE 3 -- CONCURRENT EXPOSURE. Not a per-day count; a ceiling on what can
-    # be open at once. See MAX_CONCURRENT_POSITIONS: the number is the measured
-    # peak of the book plus headroom, so it does not bind on normal behaviour and
-    # does bind on a watchlist 45x wider raising the entry rate.
+    # THERE IS NO GATE 3. Nothing here counts entries, positions, or rupees.
     #
-    # Fails closed: an unreadable ledger refuses the entry rather than treating
-    # "cannot count" as "nothing is open".
-    exp_ok, open_exposure, open_count = get_open_exposure()
-    if not exp_ok:
-        return {"status": "BLOCKED_NO_LEDGER",
-                "reason": "cannot read open exposure — refusing to add to a "
-                          "position I cannot measure"}
-    # CHEAP REFUSAL FIRST. If the book is already at the ceiling, no trade of any
-    # size fits, and there is no point fetching a quote and sizing a position to
-    # discover that. The exact check -- including THIS trade's requirement -- is at
-    # Gate 5b, once sizing knows what it needs.
-    if open_exposure >= MAX_CONCURRENT_EXPOSURE:
-        return {"status": "SKIPPED_EXPOSURE",
-                "reason": (f"Rs{open_exposure:,.0f} already committed across "
-                           f"{open_count} position(s); ceiling is "
-                           f"Rs{MAX_CONCURRENT_EXPOSURE:,.0f}")}
-
-    # THE PER-DAY COUNT IS STILL GONE. A count of entries TODAY bounded the
-    # number of positions while saying nothing about their size, and refused the
-    # fourth good setup for arithmetic.
+    # BROKER FUNDS ARE THE ONLY BOUND ON TOTAL EXPOSURE. The operator keeps
+    # capital available and ATLAS takes every setup that forms. There is no
+    # maximum simultaneous capital deployed and no per-day entry count.
     #
-    # A count was never a risk control -- it bounded the NUMBER of positions while
-    # saying nothing about their size, and each one is already bounded to Rs3,000
-    # of risk and Rs1,00,000 of notional by the sizing rule. Three entries of
-    # Rs3k risk and thirty are different exposures, but the thing that should stop
-    # the thirtieth is the absence of funds to pay for it, which Gate 6 reads live
-    # from the broker net of resting GTTs.
+    # Three limits have stood in this spot and all three are gone for the same
+    # reason. MAX_TRADES_PER_DAY counted entries, which bounded the NUMBER of
+    # positions while saying nothing about their size, and refused the fourth good
+    # setup for arithmetic. MAX_CAPITAL_DEPLOYED, with get_exposure(), summed our
+    # own rows into a local balance. MAX_CONCURRENT_EXPOSURE, with
+    # get_open_exposure(), did the same in rupees at Rs4,00,000 -- below the
+    # average this book had been running and about a third of its peak, so it
+    # would have refused ordinary sixth positions. That is a cap on opportunity
+    # wearing a risk control's clothes.
     #
-    # THE CONSEQUENCE, STATED: broker funds are now the ONLY bound on total
-    # exposure. There is no maximum simultaneous capital deployed --
-    # MAX_CAPITAL_DEPLOYED and get_exposure() were removed when capital tracking
-    # went. get_today_entry_count() is kept and still logged for the daily report,
-    # because how many entries a day produced is worth knowing even when nothing
-    # limits it.
+    # What remains is the right shape: each entry is bounded individually by
+    # MAX_RISK_PER_TRADE and MAX_NOTIONAL_PER_TRADE, and what stops the next one
+    # is the absence of funds to pay for it, which Gate 6 reads live from
+    # kite.margins() net of resting GTTs. Three entries of Rs3k risk and thirty
+    # are genuinely different exposures -- but the broker already knows which one
+    # the account can carry, and any local ceiling is a second opinion about the
+    # operator's own balance, held in a constant, able to drift from the truth,
+    # and wrong more often than the broker is.
+    #
+    # get_today_entry_count() is kept and still logged for the daily report:
+    # how many entries a day produced is worth knowing even when nothing limits
+    # it. If a limit is ever wanted again it belongs in the funds the account
+    # holds, not here.
 
     # GATE 3b -- already holding this symbol. HARD SKIP, never a scale-in.
     #
     # A zone that survives two sessions re-publishes, so the same symbol
     # reappears in consecutive batches -- DELHIVERY was in both the 20 Aug and
     # 21 Aug batches with an identical setup and an identical stop, and nothing
-    # below would have noticed. Gate 3 counts TODAY's entries only, so a
-    # position opened any earlier day was invisible; kill_switch dropped its
-    # max-open-positions check; and market_open.dedupe() dedupes within a batch,
-    # not against the book.
+    # below would have noticed. Nothing else looks: the per-day count that used
+    # to sit above saw TODAY's entries only, so a position opened any earlier day
+    # was invisible to it; kill_switch dropped its max-open-positions check; and
+    # market_open.dedupe() dedupes within a batch, not against the book. This is
+    # the only gate that reads the book by symbol.
     #
     # Skip rather than scale in because the caps are per-entry: RISK_PER_TRADE
     # and MAX_NOTIONAL would each be applied a second time, so a second fill
@@ -664,18 +621,6 @@ def enter_trade(signal: dict) -> dict:
 
     # GATE 6 -- live broker funds, net of resting GTTs. FAIL CLOSED: can_afford
     # returns False both when funds are short and when they cannot be read.
-    # GATE 5b -- WOULD THIS TRADE CROSS THE EXPOSURE CEILING? Checked with the
-    # trade's own requirement, so the ceiling is never crossed by the entry that
-    # tests it. Gate 3 already refused the case where nothing fits at all; this is
-    # the one that knows how much THIS position needs.
-    would_be = open_exposure + float(sizing["capital_required"])
-    if would_be > MAX_CONCURRENT_EXPOSURE:
-        return {"status": "SKIPPED_EXPOSURE",
-                "reason": (f"Rs{open_exposure:,.0f} committed across {open_count} "
-                           f"position(s) + Rs{sizing['capital_required']:,.0f} for "
-                           f"this trade = Rs{would_be:,.0f}, over the "
-                           f"Rs{MAX_CONCURRENT_EXPOSURE:,.0f} ceiling")}
-
     # THE BROKER'S MARGIN, NOT OUR ESTIMATE. sizing["capital_required"] is
     # notional for a CNC long and notional x SHORT_MARGIN_PCT_ESTIMATE (0.20) for
     # an MIS short. With no cap on the number of trades, that 0.20 is the only

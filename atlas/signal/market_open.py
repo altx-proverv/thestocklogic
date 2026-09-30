@@ -291,8 +291,8 @@ def get_signals(batch_date: str) -> list:
         # would have caught -- it watched 3 of 706 for a whole session.
         #
         # Nothing about the entry standard changes: a candidate still has to reach
-        # its zone, pass the fundamentals gate, the exposure ceiling, sizing and
-        # live funds. It just gets looked at.
+        # its zone, pass the fundamentals gate, sizing, and live broker funds --
+        # which is the only bound on total exposure. It just gets looked at.
         f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{batch_date}"
         f"&select=symbol,direction,entry_ref,entry_low,entry_high,sl,stop_pct,"
         f"setup_name,zone_source,score,grade,structure_trend,publication_kind",

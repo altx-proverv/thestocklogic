@@ -346,60 +346,43 @@ def main() -> int:
           "config says stop-only, so no target leg")
 
     print()
-    print("THE EXPOSURE CEILING, AND WHAT IT IS MADE OF")
+    print("THERE IS NO EXPOSURE CEILING, AND THAT IS THE POINT")
     print("-" * 78)
-    # A DIFFERENT SHAPE from the per-day count that was removed: that capped
-    # OPPORTUNITY, this caps CAPITAL. In rupees rather than positions, because a
-    # count treats a Rs20,000 short and a Rs1,00,000 long as one unit of exposure
-    # when one ties up five times the cash.
-    from atlas.config import (MAX_CONCURRENT_EXPOSURE as CEIL,
-                              SHORT_MARGIN_PCT_ESTIMATE as MARG,
-                              CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT,
+    # This section asserts an ABSENCE. Broker funds are the only bound on total
+    # exposure: the operator keeps capital available and ATLAS takes every setup
+    # that forms. An aggregate cap is the kind of thing that comes back quietly --
+    # one constant and one comparison -- so it is tested for, not assumed gone.
+    import atlas.config as CFG
+    for name in ("MAX_CONCURRENT_EXPOSURE", "MAX_CAPITAL_DEPLOYED",
+                 "MAX_CONCURRENT_POSITIONS", "MAX_OPEN_POSITIONS"):
+        check(f"config has no {name}", hasattr(CFG, name), False)
+    check("MAX_TRADES_PER_DAY is retired, not enforcing",
+          getattr(CFG, "MAX_TRADES_PER_DAY", 0), 0,
+          "0 is the absence of a limit, not a limit of zero")
+
+    src = (ROOT / "atlas/execution/atlas_entry.py").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    check("the entry path never sums a local exposure",
+          "get_open_exposure" in code or "get_exposure(" in code, False)
+    check("  and has no SKIPPED_EXPOSURE outcome to return",
+          "SKIPPED_EXPOSURE" in code, False)
+    # What DOES stop the next entry, and the one check that must stay
+    check("what stops an entry is broker funds, read live",
+          "can_afford" in code, True, "kite.margins(), net of resting GTTs")
+    check("  and it fails closed on an unreadable balance",
+          "BLOCKED_NO_FUNDS" in code or "SKIPPED_FUNDS" in code, True)
+    # per-trade bounds are untouched; only the aggregate went
+    check("per-trade risk cap still applies", CFG.MAX_RISK_PER_TRADE, 3000.0)
+    check("per-trade notional cap still applies",
+          CFG.MAX_NOTIONAL_PER_TRADE, 100000.0)
+
+    from atlas.config import (CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT,
                               CANDIDATE_MAX_DIST_PCT as ABSCAP)
-    check("the ceiling is denominated in rupees", CEIL, 400000.0)
-    # Recorded because it is NOT obvious from the number: measured peak deployed
-    # was Rs13,81,517 and the average Rs7,09,526, so this sits BELOW the average
-    # the book has been running and will bind on ordinary behaviour, not only on
-    # the wider watchlist.
-    print(f"  {'  = ~' + str(round(CEIL/78000,1)) + ' longs at the measured Rs78k notional':<54}"
-          f"or ~{round(CEIL/(78000*MARG))} shorts at MIS margin")
-    print(f"  {'  measured peak deployed was Rs13,81,517':<54}"
-          f"so this ceiling binds on normal behaviour too")
     check("candidate reach is ATR-relative", ATRMULT, 1.0)
     # 3% rather than inheriting active_zones' 15%, which exists to stop
     # forward-filling a zone price has travelled past -- never a watchlist bound.
     check("  with an explicit absolute cap, not the inherited 15%", ABSCAP, 3.0)
-
-    import atlas.execution.atlas_entry as AE
-    saved = AE.get_open_exposure
-    try:
-        for readable, spent, want in (
-                (True, 0.0, "allow"),
-                (True, CEIL - 100000, "allow"),
-                (True, CEIL, "SKIPPED_EXPOSURE"),
-                (True, CEIL + 50000, "SKIPPED_EXPOSURE"),
-                (False, 0.0, "BLOCKED_NO_LEDGER")):
-            AE.get_open_exposure = lambda r=readable, c=spent: (r, c, 3)
-            rd, amt, cnt = AE.get_open_exposure()
-            got = ("BLOCKED_NO_LEDGER" if not rd
-                   else "SKIPPED_EXPOSURE" if amt >= CEIL else "allow")
-            good = got == want
-            ok &= good
-            print(f"  {('readable=' + str(readable) + ' committed=Rs' + format(spent, ',.0f')):<54}"
-                  f"{got:<20}{'ok' if good else '** want ' + want + ' **'}")
-    finally:
-        AE.get_open_exposure = saved
-
-    src = (ROOT / "atlas/execution/atlas_entry.py").read_text(encoding="utf-8")
-    body = src.split("def get_open_exposure")[1][:1400]
-    check("exposure counts BLOCKING_STATUSES, so PENDING commits cash",
-          "BLOCKING_STATUSES" in body, True)
-    check("  and charges MIS shorts at margin, not full notional",
-          "SHORT_MARGIN_PCT_ESTIMATE" in body, True)
-    # the exact check must know THIS trade's requirement, or the ceiling is
-    # crossed by the entry that tests it
-    check("the exact check adds this trade's own capital_required",
-          "open_exposure + float(sizing[" in src, True)
 
     print("-" * 78)
     print("EXITS:", "correct" if ok else "*** DEFECTIVE ***")

@@ -150,3 +150,60 @@ feed each guard the degraded input — absent regime, unreadable file, timed-out
 fetch — and require it to refuse. `test_regime_gate` now does this for the entry
 gate; the publisher's filter never had such a test, which is part of why its
 `except` went unexamined for four months.
+
+---
+
+## A monkeypatched dependency tests the stub, not the code (2026-10-01)
+
+`MAX_CONCURRENT_EXPOSURE` shipped in `d9b8ba7` with two gates reading a helper
+that could not possibly have satisfied them:
+
+```python
+# the gate, in atlas_entry.enter_trade
+exp_ok, open_exposure, open_count = get_open_exposure()   # expects 3
+
+# the helper it called
+def get_open_exposure() -> tuple:
+    """(readable, rupees, count) of capital already committed. ..."""
+    ...
+    return True, len(r.json() or [])                      # returns 2
+```
+
+The docstring was rewritten to describe rupees and a count. The body was never
+changed from the old position-*count* query it had been. So the first live entry
+attempt would have raised `ValueError: not enough values to unpack` at Gate 3 —
+before any quote was fetched, on every symbol, every cycle.
+
+**Why the test suite was green.** The test exercised the gate by replacing the
+helper:
+
+```python
+AE.get_open_exposure = lambda r=readable, c=spent: (r, c, 3)
+```
+
+which is a *correct* 3-tuple. The test then asserted that the gate's arithmetic
+mapped committed-rupees to allow / `SKIPPED_EXPOSURE` / `BLOCKED_NO_LEDGER`, and
+it did. Every assertion passed against a stub that had the interface the caller
+wanted, while the real implementation had a different one. The one thing that was
+broken was the only thing the monkeypatch removed from the test's reach.
+
+**The generalisation.** Monkeypatching a dependency to test a caller deletes the
+contract between them from the test. That is the point — it is why you patch, so
+the caller can be driven through states the real dependency cannot cheaply
+produce — but it means the patch's shape is now an *unverified claim* about the
+real function, and the test will not notice when the claim goes false. A
+docstring is not an interface; it was in fact the thing that made this bug
+invisible on reading, because it described the tuple the caller wanted.
+
+**Cheap tests that would have caught it, in order of cost.** (1) Call the real
+function once with no network and assert its arity — `len(...) == 3` — even if
+the values are a failure case; a `return False, 0` path still proves the shape.
+(2) Assert the patched signature against the real one with `inspect.signature`
+or a return-annotation check. (3) Import-time smoke: exercise the gate once with
+the real helper against an unreachable Supabase, which should yield
+`BLOCKED_NO_LEDGER`, not a `ValueError`.
+
+**What made it moot, and why that is not the lesson.** The cap was removed the
+next day — broker funds are the only bound on exposure — so the broken gate never
+ran. The bug survived a green 17-suite run, a self-review, and a push, and only
+turned up because the code was being deleted. Deletion is not a test strategy.
