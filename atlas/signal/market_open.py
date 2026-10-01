@@ -503,6 +503,64 @@ def at_zone(sig: dict, ltp: float, direction: str) -> tuple:
 
 
 # ══════════════════════════════════════════════════════════════════
+# THE LIVE VIEW — the quotes this loop used to throw away
+# ══════════════════════════════════════════════════════════════════
+
+def push_live_zones(state, rows: list, entered: set) -> bool:
+    """Overwrite the current state of every watched symbol. -> wrote ok.
+
+    THE DATA IS ALREADY IN HAND. fetch_quotes gets a price for every symbol in
+    the zone map, in one batched request, and everything that is not at a zone is
+    discarded. That discarded set is the only live picture of the engine that
+    exists -- signals holds last night's geometry, this holds the price against
+    it. So this adds no upstream call; the only new traffic is one POST to
+    Supabase.
+
+    CURRENT STATE, NOT HISTORY. Upsert on (symbol, direction), so there is one
+    row per watched pair and the table is bounded at 2x the universe. A pair that
+    drops out of the zone map on a batch change stops being updated and keeps an
+    old cycle_at -- which the page must detect anyway for a dead loop, so the two
+    cases share one check and no DELETE is needed.
+
+    NEVER FATAL, AND DELIBERATELY NOT THROUGH THE BREAKER. breaker.record_read
+    counts consecutive failures toward a self-halt, and it exists for risk inputs
+    -- the signal batch, the ledger, the quote feed. Routing a reporting write
+    through it would let the site's table being unwritable stop ATLAS trading,
+    which is backwards. The loop's job is trading; this is a side effect of it.
+    Logged once per cycle and dropped.
+    """
+    if not rows:
+        return True
+    now = datetime.now(timezone.utc).isoformat()
+    payload = []
+    for r in rows:
+        key = (r["symbol"], r["direction"])
+        payload.append({**r,
+                        # same-cycle truth: a symbol entered a few lines above is
+                        # held NOW, not from the next cycle. committed_today()
+                        # cannot know yet because the ledger write is in flight.
+                        "held": bool(r.get("held") or key in entered),
+                        "batch_date": state.batch_date,
+                        "cycle_n": state.cycle_n,
+                        "cycle_at": now})
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/atlas_live_zones"
+            f"?on_conflict=symbol,direction",
+            headers={**_headers(),
+                     "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=payload, timeout=20)
+        if r.status_code not in (200, 201, 204):
+            log.warning(f"live view not written: HTTP {r.status_code} "
+                        f"{r.text[:160]}")
+            return False
+        return True
+    except Exception as e:
+        log.warning(f"live view not written: {type(e).__name__}: {e}")
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════
 # WHAT IS ALREADY COMMITTED — one query, every cycle
 # ══════════════════════════════════════════════════════════════════
 
@@ -678,14 +736,50 @@ def cycle(state: Session) -> dict:
     # block is kept. Reading both kinds here would have let a watchlist row be
     # traded, which is the opposite of keeping the block.
     candidates = []
+    live_rows = []
     mitigated = waiting = watch_only = 0
     for (sym, direction), sig in state.zone_map.items():
-        if (sym, direction) in held:
+        ltp = quotes.get(sym)
+        kind = str(sig.get("publication_kind", "signal"))
+        actionable = kind == "signal"
+        is_held = (sym, direction) in held
+
+        # THE LIVE VIEW COVERS EVERY WATCHED PAIR, not only the enterable ones.
+        # Showing 5 rows when the engine watches 158 describes a different system.
+        # at_zone is evaluated for all of them because `state` is what the page
+        # sorts and labels on; whether a row may be TRADED is `publication_kind`,
+        # which is a separate question answered below.
+        if ltp:
+            lo = min(float(sig.get("entry_low") or 0),
+                     float(sig.get("entry_high") or 0))
+            hi = max(float(sig.get("entry_low") or 0),
+                     float(sig.get("entry_high") or 0))
+            at, why = at_zone(sig, ltp, direction)
+            st = ("at_zone" if at
+                  else "mitigated" if "mitigated" in why else "waiting")
+            # UNSIGNED, to the nearest edge, 0 inside. The direction lives in
+            # `state`, so ORDER BY dist_pct puts the nearest first for either side
+            # and the page never has to know what a demand zone is.
+            if at or not (lo > 0 and hi > 0):
+                dist = 0.0
+            else:
+                dist = (lo - ltp) / ltp * 100.0 if ltp < lo else (ltp - hi) / ltp * 100.0
+            live_rows.append({
+                "symbol": sym, "direction": direction,
+                "ltp": round(float(ltp), 2),
+                "zone_low": round(lo, 2) or None, "zone_high": round(hi, 2) or None,
+                "dist_pct": round(abs(dist), 3),
+                "state": st, "inside": bool(at),
+                "publication_kind": kind, "held": is_held,
+                "sl": float(sig.get("sl") or 0) or None,
+                "setup_name": sig.get("setup_name", ""),
+            })
+
+        if is_held:
             continue
-        if str(sig.get("publication_kind", "signal")) != "signal":
+        if not actionable:
             watch_only += 1
             continue
-        ltp = quotes.get(sym)
         if not ltp:
             continue
         ok, why = at_zone(sig, ltp, direction)
@@ -707,8 +801,13 @@ def cycle(state: Session) -> dict:
         log.info(f"cycle {state.cycle_n}: {len(quotes)} quotes — "
                  f"{waiting} waiting for price, {mitigated} mitigated, "
                  f"{watch_only} watch-only, 0 at a zone")
+        # No entries are possible on this path, so this IS after the entry
+        # decisions. A session where nothing reaches a zone is exactly when the
+        # page most needs to show what the engine is looking at.
+        out["live_view"] = push_live_zones(state, live_rows, set())
         return out
 
+    entered_keys = set()
     for sym, direction, sig, ltp in candidates:
         signal = {
             "symbol": sym, "direction": direction,
@@ -735,6 +834,11 @@ def cycle(state: Session) -> dict:
             continue
 
         status = result.get("status", "?")
+        if status in ("ENTERED", "GTT_PLACED", "ORDER_INDETERMINATE"):
+            # INDETERMINATE counts as held: the order may have filled, and the
+            # live view must not show a symbol as available when a position in it
+            # might exist. Same reasoning as BLOCKING_STATUSES in the ledger.
+            entered_keys.add((sym, direction))
         log_decision(signal, result)
 
         if status in ("ENTERED", "SHADOW_INTENT"):
@@ -762,6 +866,13 @@ def cycle(state: Session) -> dict:
                 state.last_gate_reason = result.get("reason", "")
             if status.startswith("BLOCKED_"):
                 alert(status, f"{sym}: {result.get('reason','')}", key=sym)
+
+    # AFTER THE ENTRY DECISIONS, deliberately. Reporting must never delay an
+    # order, so the write is the last thing the cycle does -- and `entered` makes
+    # a symbol filled moments ago show as held NOW rather than from the next
+    # cycle, which committed_today() cannot know because its ledger write is
+    # still in flight.
+    out["live_view"] = push_live_zones(state, live_rows, entered_keys)
 
     return out
 

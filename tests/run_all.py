@@ -12,6 +12,7 @@ cron, or from CI.
 """
 
 import sys
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -42,6 +43,21 @@ SUITES = [
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
+
+# THE PAGE'S OWN LOGIC, run under node. Registered conditionally rather than
+# unconditionally: the production box has no node, and a suite that cannot run
+# there would turn every box-side run into a failure for a reason unrelated to
+# the code. Absent node the suites are SKIPPED and say so -- not silently
+# dropped, which is how a test stops being a test.
+if shutil.which("node"):
+    SUITES += [
+        ("signals batch state", ["node", "tests/signals_batch_state.js"]),
+        ("signals live view",   ["node", "tests/signals_live_view.js"]),
+    ]
+else:
+    SUITES += [("signals page logic (SKIPPED — node not installed)",
+                [sys.executable, "-c",
+                 "print('node is not installed; tests/signals_*.js did not run')"])]
 
 
 def main() -> int:

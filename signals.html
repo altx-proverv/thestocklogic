@@ -110,6 +110,40 @@ nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-f
 /* THE WATCHLIST IS A TABLE, NOT CARDS, on purpose. The visual grammar has to say
    "different kind of thing" before the words do: cards are what a call looks like
    on this page, so a candidate must not get one. */
+/* ── THE LIVE VIEW ───────────────────────────────────────────────────
+   Dense by intent: this is a watch list of up to ~300 rows, scanned rather than
+   read, so the row height is tight and the type is tabular. lv-dim is the stale
+   and closed treatment -- the table stays legible but visibly not current, which
+   is the point: hiding it would leave the reader guessing. */
+.lv-wrap{margin:14px 0 18px;border:1px solid var(--line2);background:rgba(255,255,255,0.015)}
+.lv-dim{opacity:0.62}
+.lv-head{padding:11px 14px;border-bottom:1px solid var(--line2)}
+.lv-title{font-size:10px;letter-spacing:2px;color:var(--muted);display:block}
+.lv-sub{font-size:11px;color:var(--muted2);display:block;margin-top:5px;line-height:1.5;max-width:76ch}
+.lv-stats{display:flex;flex-wrap:wrap;gap:4px 20px;padding:9px 14px;border-bottom:1px solid var(--line2);font-size:10.5px;letter-spacing:1px;color:var(--muted2)}
+.lv-stats b{color:var(--fg);font-weight:600}
+.lv-scroll{overflow-x:auto;max-height:430px;overflow-y:auto}
+table.lv{border-collapse:collapse;width:100%;font-size:11.5px;font-variant-numeric:tabular-nums}
+table.lv th{position:sticky;top:0;background:var(--bg);text-align:left;font-weight:500;font-size:9.5px;letter-spacing:1.4px;color:var(--muted2);padding:7px 12px;border-bottom:1px solid var(--line2);white-space:nowrap;z-index:1}
+table.lv td{padding:5px 12px;border-bottom:1px solid rgba(255,255,255,0.045);white-space:nowrap;color:var(--muted)}
+table.lv td.r,table.lv th.r{text-align:right}
+table.lv tbody tr:hover td{background:rgba(255,255,255,0.03)}
+.lv-sym{color:var(--fg);font-weight:600;letter-spacing:0.4px}
+.lv-dir{padding-left:0 !important;padding-right:0 !important;text-align:center}
+.lv-dist{color:var(--fg)}
+.lv-zone{color:var(--muted2)}
+.lv-wo td{color:var(--muted2)}
+.lv-wo .lv-sym{color:var(--muted);font-weight:500}
+.lv-at{color:var(--green);font-size:9.5px;letter-spacing:1.2px;font-weight:600}
+.lv-wait{color:var(--muted2);font-size:9.5px;letter-spacing:1px}
+.lv-gone{color:var(--red);font-size:9.5px;letter-spacing:1px;opacity:0.8}
+.lv-tag{text-align:right}
+.lv-held{display:inline-block;font-size:9px;letter-spacing:1.2px;color:var(--sky);border:1px solid rgba(59,169,238,0.35);padding:1px 5px;margin-right:6px}
+.lv-action{font-size:9px;letter-spacing:1.1px;color:var(--green);opacity:0.85}
+.lv-watch{font-size:9px;letter-spacing:1.1px;color:var(--muted2)}
+.lv-foot{font-size:10.5px;color:var(--muted2);line-height:1.6;padding:11px 14px 13px;margin:0;border-top:1px solid var(--line2);max-width:86ch}
+.lv-foot b{color:var(--muted);font-weight:600}
+@media(max-width:640px){.lv-foot,.lv-sub{font-size:10px}table.lv td,table.lv th{padding-left:8px;padding-right:8px}}
 .wl-wrap{margin:14px 0 4px}
 .wl-btn{width:100%;background:none;border:1px solid var(--line);color:var(--muted);
   font-family:var(--display);font-size:11px;letter-spacing:2px;padding:9px;
@@ -462,6 +496,21 @@ async function fetchWatchlist(){
      plausibly live. */
   var r = await sbGet('/rest/v1/signals?publication_kind=eq.candidate'
     + '&order=signal_date.desc,entry_dist_pct.asc.nullslast&select=*&limit=400');
+  return r.rows || [];
+}
+
+async function fetchLiveZones(){
+  /* THE LIVE VIEW. Every symbol the market-hours loop is watching, with the price
+     against its zone, overwritten each 60s cycle by market_open.push_live_zones.
+     setup_name is deliberately NOT selected: it is already on the signals row and
+     this table is about price, and dropping it is about a third of the payload on
+     a fetch that repeats every minute.
+     Nearest-first. dist_pct is unsigned, so this ordering is correct for longs and
+     shorts alike -- the side lives in `state`. */
+  var r = await sbGet('/rest/v1/atlas_live_zones'
+    + '?order=dist_pct.asc.nullslast'
+    + '&select=symbol,direction,ltp,zone_low,zone_high,dist_pct,state,inside,'
+    + 'publication_kind,held,sl,cycle_at&limit=1000');
   return r.rows || [];
 }
 
@@ -820,8 +869,8 @@ function renderSentimentPanel(sectors){
 }
 
 async function render(){
-  var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices(),fetchWatchlist()]);
-  var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4],watchAll=res[5];
+  var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices(),fetchWatchlist(),fetchLiveZones()]);
+  var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4],watchAll=res[5],liveZones=res[6];
   var priceMap={};
   (prices||[]).forEach(function(p){priceMap[p.symbol]=p;});
   var outcomeMap={};
@@ -1036,6 +1085,120 @@ async function render(){
   }
 
   // Watchlist section builder
+  /* ── THE LIVE VIEW ───────────────────────────────────────────────────
+     Three states, the same discipline as the batch-age notice: a page that shows
+     a price as current when it is twenty minutes old is worse than one that shows
+     nothing, because the reader cannot tell.
+
+       live     newest cycle_at under 3 minutes. Prices are current.
+       stale    inside 09:20-15:20 IST but older than that. Shown, de-emphasised,
+                with the real age named -- the loop is down, and the reader needs
+                to know that rather than be shown nothing.
+       closed   outside the window. The snapshot is labelled as the last session's
+                and never presented as live.
+
+     3 minutes because the cycle is 60s: one miss is jitter, two consecutive is a
+     signal. Age arithmetic is on instants -- Date.now() minus the UTC timestamp --
+     so no timezone enters it. Only the wall-clock label formats to IST. */
+  function liveState(rows, istMin){
+    var open = istMin >= 9*60+20 && istMin < 15*60+20;
+    if(!rows || !rows.length) return {kind: open?'empty':'closed', ageS:null, n:0};
+    var newest = 0;
+    for(var i=0;i<rows.length;i++){
+      var t = Date.parse(rows[i].cycle_at);
+      if(isFinite(t) && t>newest) newest = t;
+    }
+    if(!newest) return {kind:'empty', ageS:null, n:rows.length};
+    var ageS = Math.max(0, Math.round((Date.now()-newest)/1000));
+    if(!open) return {kind:'closed', ageS:ageS, n:rows.length, at:newest};
+    return {kind: ageS<180?'live':'stale', ageS:ageS, n:rows.length, at:newest};
+  }
+
+  function fmtAge(s){
+    if(s==null) return '—';
+    if(s<60) return s+'s ago';
+    var m=Math.floor(s/60);
+    if(m<60) return m+' min ago';
+    var h=Math.floor(m/60);
+    return h+'h '+(m%60)+'m ago';
+  }
+
+  function buildLiveView(rows, istMin){
+    var st = liveState(rows, istMin);
+    if(st.kind==='closed' && !st.n) return '';
+
+    var hdr, note, dim;
+    if(st.kind==='live'){
+      hdr='<span style="color:var(--green)">\u25cf LIVE</span> &middot; WHAT ATLAS IS WATCHING';
+      note='Updated '+fmtAge(st.ageS)+'. '+st.n+' symbol(s), nearest to their entry zone first.';
+      dim=false;
+    }else if(st.kind==='stale'){
+      hdr='<span style="color:var(--amber)">\u25cf STALE</span> &middot; WHAT ATLAS WAS WATCHING';
+      note='The market is open but the engine last reported '+fmtAge(st.ageS)+
+           '. These prices are NOT current \u2014 the market-hours loop is not '+
+           'running or cannot write. Nothing below should be read as a live price.';
+      dim=true;
+    }else if(st.kind==='closed'){
+      hdr='MARKET CLOSED &middot; LAST SESSION\u2019S CLOSE';
+      note='The engine runs 09:20\u201315:20 IST. This is where things stood '+
+           fmtAge(st.ageS)+', at the end of the last session \u2014 not a live price.';
+      dim=true;
+    }else{
+      hdr='WHAT ATLAS IS WATCHING';
+      note='The market is open but no symbols have been reported yet this session.';
+      dim=true;
+      rows=[];
+    }
+
+    var act = rows.filter(function(r){return r.publication_kind!=='candidate';});
+    var h = '<div class="lv-wrap'+(dim?' lv-dim':'')+'">'
+      + '<div class="lv-head"><span class="lv-title">'+hdr+'</span>'
+      + '<span class="lv-sub">'+note+'</span></div>';
+
+    if(rows.length){
+      var inside = rows.filter(function(r){return r.state==='at_zone';}).length;
+      var heldN  = rows.filter(function(r){return r.held;}).length;
+      h += '<div class="lv-stats">'
+        + '<span><b>'+rows.length+'</b> watched</span>'
+        + '<span><b>'+act.length+'</b> actionable</span>'
+        + '<span><b>'+inside+'</b> at zone</span>'
+        + '<span><b>'+heldN+'</b> held by ATLAS</span></div>';
+      h += '<div class="lv-scroll"><table class="lv"><thead><tr>'
+        + '<th>SYMBOL</th><th></th><th class="r">LTP</th><th class="r">TO ZONE</th>'
+        + '<th class="r">ZONE</th><th>STATE</th><th></th></tr></thead><tbody>';
+      for(var i=0;i<rows.length;i++){
+        var r=rows[i];
+        var isL=String(r.direction).toUpperCase()!=='SHORT';
+        var watchOnly = r.publication_kind==='candidate';
+        var stLabel = r.state==='at_zone' ? 'AT ZONE'
+                    : r.state==='mitigated' ? 'zone gone' : 'waiting';
+        var stCls = r.state==='at_zone' ? 'lv-at'
+                  : r.state==='mitigated' ? 'lv-gone' : 'lv-wait';
+        h += '<tr'+(watchOnly?' class="lv-wo"':'')+'>'
+          + '<td class="lv-sym">'+r.symbol+'</td>'
+          + '<td class="lv-dir" style="color:'+(isL?'var(--green)':'var(--red)')+'">'
+          +   (isL?'\u2191':'\u2193')+'</td>'
+          + '<td class="r">'+(r.ltp!=null?'\u20b9'+fmt(r.ltp):'&mdash;')+'</td>'
+          + '<td class="r lv-dist">'+(r.dist_pct!=null?parseFloat(r.dist_pct).toFixed(2)+'%':'&mdash;')+'</td>'
+          + '<td class="r lv-zone">'+(r.zone_low!=null?'\u20b9'+fmt(r.zone_low)+'\u2013'+fmt(r.zone_high):'&mdash;')+'</td>'
+          + '<td><span class="'+stCls+'">'+stLabel+'</span></td>'
+          + '<td class="lv-tag">'
+          +   (r.held?'<span class="lv-held">IN POSITION</span>':'')
+          +   (watchOnly?'<span class="lv-watch">watchlist only</span>'
+                        :'<span class="lv-action">actionable</span>')
+          + '</td></tr>';
+      }
+      h += '</tbody></table></div>';
+      h += '<p class="lv-foot"><b>Actionable</b> means ATLAS may enter it this '
+        + 'session if price reaches the zone. <b>Watchlist only</b> means the zone '
+        + 'is valid and unmitigated but the setup did not qualify \u2014 it is shown '
+        + 'so this page describes what the engine watches, not only what it may '
+        + 'trade, and it will never be entered. Neither is a recommendation, and '
+        + 'nothing here is counted in the accuracy record.</p>';
+    }
+    return h+'</div>';
+  }
+
   function buildWatchlist(rows, batchDate){
     /* A SEPARATE SECTION, COLLAPSED, AND A TABLE. Three rules, each load-bearing:
        never one list with the signals above (separate count, separate grammar);
@@ -1124,6 +1287,7 @@ async function render(){
     html+=buildSection(watchlistEOD,todayLive,secLabel,secDate,false);
   }
   // Below the signals, never inside them.
+  html+='<div id="liveViewHost">'+buildLiveView(liveZones, _istMin)+'</div>';
   html+=buildWatchlist(watchAll, batchDate);
 
   // Live signals date map for archive
@@ -1385,7 +1549,43 @@ function openAuthModal(){ document.getElementById('authModal').classList.add('op
 function closeAuthModal(){ document.getElementById('authModal').classList.remove('open'); }
 document.getElementById('authModal').addEventListener('click', function(e){ if(e.target===document.getElementById('authModal'))closeAuthModal(); });
 
+/* THE LIVE-VIEW POLL, separate from the 5-minute full render.
+   The live table changes every 60s and the rest of the page changes once a night,
+   so re-rendering everything on the cycle cadence would re-fetch six feeds to
+   update one table. This refreshes only the live view, only while the market is
+   open, and stops entirely outside 09:20-15:20 IST -- a tab left open overnight
+   should cost nothing.
+   Cost per poll: about 300 rows x 12 columns, ~48 KB. At 60s through one session
+   that is roughly 17 MB per open tab, against ~100 MB if the full render were on
+   this cadence. */
+var _lvTimer=null;
+async function refreshLiveView(){
+  try{
+    var istMin=(function(){var d=new Date(Date.now()+(5.5*60*60*1000));
+                           return d.getUTCHours()*60+d.getUTCMinutes();})();
+    var host=document.getElementById('liveViewHost');
+    if(!host) return;
+    var rows=await fetchLiveZones();
+    host.innerHTML=buildLiveView(rows, istMin);
+  }catch(e){ console.error('live view refresh failed', e); }
+}
+function startLiveViewPoll(){
+  if(_lvTimer) return;
+  _lvTimer=setInterval(function(){
+    var d=new Date(Date.now()+(5.5*60*60*1000));
+    var m=d.getUTCHours()*60+d.getUTCMinutes();
+    var dow=d.getUTCDay();
+    /* Mon-Fri only. The trading calendar lives server-side; a holiday simply
+       shows as STALE, which is the honest answer from the page's position -- it
+       cannot know why the engine is quiet, only that it is. */
+    if(dow===0||dow===6) return;
+    if(m< 9*60+20 || m>=15*60+20) return;
+    refreshLiveView();
+  }, 60*1000);
+}
+
 setInterval(function(){if(_user)render().catch(function(e){console.error(e);});}, 5*60*1000);
+startLiveViewPoll();
 window.addEventListener('load', function(){
   if (!_supa) _supa = window.supabase.createClient(SB, AK);
   /* Both paths go through checkAuth(), which is the ONLY thing that verifies

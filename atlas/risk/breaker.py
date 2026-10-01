@@ -213,7 +213,45 @@ def record_ledger_write(ok: bool, status_code: int = None, detail: str = "",
 
 
 def record_read(ok: bool, what: str, detail: str = "") -> bool:
-    """Report a per-cycle read (positions, funds, state). Returns may-continue."""
+    """Report a per-cycle read (positions, funds, state). Returns may-continue.
+
+    NOT IMPLEMENTED, AND WANTED: the deterministic/transient split that
+    record_ledger_write above already makes.
+    ---------------------------------------------------------------------------
+    On 2026-10-01 a schema error tripped this after three consecutive failures
+    and the session stayed halted until the operator fixed the schema by hand.
+    Both halves of that were wrong in opposite directions:
+
+      TOO SLOW. A missing column answers identically on every attempt. Waiting
+      for three failures to establish that spends two cycles learning something
+      the first response already said. record_ledger_write treats a 4xx as
+      deterministic and halts at once, with the reason naming why -- "will not
+      self-heal". A read has the same classes of failure and does not use them.
+
+      TOO FINAL. A timeout or a 5xx is the opposite case: it usually clears on
+      its own, and three of them inside three minutes is a Supabase blip rather
+      than a broken system. Halting on that costs a session and needs a human to
+      clear a sentinel, for something that had already fixed itself.
+
+    The shape, when it is built:
+
+      4xx, PGRST1xx/2xx, "does not exist", "column", "schema"
+                     -> deterministic. Halt on the FIRST one. The message
+                        already contains the remedy; a counter adds nothing.
+      timeout, connection reset, 5xx, 429
+                     -> transient. Retry with backoff -- 1s, 4s, 15s -- and only
+                        halt if a read is still failing after the window. A
+                        retried read that succeeds must clear the counter.
+      anything unclassified
+                     -> count as today, which is the safe default: an unfamiliar
+                        failure should not get the permissive branch.
+
+    Deliberately NOT done in the same change as the live view, because this
+    changes when ATLAS stops trading and that deserves its own commit and its own
+    test. Note the asymmetry it does not touch: market_open.push_live_zones never
+    calls this at all, because a reporting write that cannot reach Supabase must
+    not count toward a trading halt.
+    """
     key = f"read:{what}"
     if ok:
         _consecutive[key] = 0
