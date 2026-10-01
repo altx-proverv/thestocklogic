@@ -395,6 +395,40 @@ def test_zone_side_invariant():
               f"{'ok' if good else '** WRONG **':<14}{why[:40]}")
     # no distance gate anywhere
     print()
+    # A MISSING DISPLAY COLUMN MUST NOT STOP THE ENGINE TRADING. publication_kind
+    # arrives with a hand-applied migration, and until it lands PostgREST answers
+    # the whole select with 400 "does not exist" -- which took down load_zone_map,
+    # and with it quotes and entries, for a column that only labels a population.
+    class _R:
+        def __init__(self, c, t="", j=None):
+            self.status_code, self.text, self._j = c, t, j or []
+        def json(self): return self._j
+    _saved = MO.requests.get
+    try:
+        seen = []
+        def _g(url, **kw):
+            seen.append(url)
+            if "publication_kind" in url:
+                return _R(400, '{"message":"column signals.publication_kind does not exist"}')
+            return _R(200, "", [{"symbol": "ABB", "direction": "LONG"}])
+        MO.requests.get = _g
+        rows = MO.get_signals("2026-10-01")
+        good = (len(rows) == 1 and rows[0].get("publication_kind") == "signal"
+                and len(seen) == 2)
+        ok &= good
+        print(f"  {'a missing publication_kind degrades, not dies':<40}"
+              f"{'ok' if good else '** THE SESSION WOULD BE DEAD **'}")
+        MO.requests.get = lambda url, **kw: _R(500, "boom")
+        try:
+            MO.get_signals("2026-10-01"); raised = False
+        except RuntimeError:
+            raised = True
+        ok &= raised
+        print(f"  {'  but a real fetch failure still raises':<40}"
+              f"{'ok' if raised else '** SWALLOWED **'}")
+    finally:
+        MO.requests.get = _saved
+
     # Checked on the CODE OBJECT, not the source text. Both modules describe the
     # removed gate at length in comments and docstrings -- deliberately -- and a
     # grep for the name cannot tell an explanation from a use.

@@ -270,37 +270,64 @@ def get_latest_batch_date() -> str:
     return r.json()[0].get("signal_date", "")
 
 
+# Columns 06_push_supabase.py writes. That file builds the row literal, so it is
+# the definition of what `signals` has; anything not in it does not exist.
+#
+# `sector` is deliberately absent. It was in this select and PostgREST answered
+# "column signals.sector does not exist" -- the fifth field-name mismatch in this
+# repo after gtt_trigger_id, delivery_pct, live_prices.volume and
+# atlas_trades.order_id. The sector comes from universe.SYMBOL_SECTOR_MAP, which
+# is where it lives and costs no query.
+_SIGNAL_COLS = ("symbol,direction,entry_ref,entry_low,entry_high,sl,stop_pct,"
+                "setup_name,zone_source,score,grade,structure_trend")
+
+
 def get_signals(batch_date: str) -> list:
-    # EVERY COLUMN HERE IS ONE 06_push_supabase.py WRITES. That file builds the
-    # row literal that creates these, so it is the definition of what `signals`
-    # has; anything not in it does not exist.
-    #
-    # `sector` is not one of them. It was in this select and PostgREST answered
-    # "column signals.sector does not exist" -- the fifth field-name mismatch in
-    # this repo after gtt_trigger_id, delivery_pct, live_prices.volume and
-    # atlas_trades.order_id. The sector comes from universe.SYMBOL_SECTOR_MAP
-    # instead, which is where it actually lives and costs no query at all.
-    r = requests.get(
-        # BOTH KINDS, deliberately unfiltered on publication_kind.
-        #
-        # This is the one consumer that SHOULD see the watchlist. A signal is one
-        # whose price was within 0.30% of its zone at last night's CLOSE; a
-        # candidate is valid in every other way and within one ATR of its zone. The
-        # loop re-tests the distance against the LIVE price every cycle via
-        # near_zone, so the close-time test was throwing away symbols the live test
-        # would have caught -- it watched 3 of 706 for a whole session.
-        #
-        # Nothing about the entry standard changes: a candidate still has to reach
-        # its zone, pass the fundamentals gate, sizing, and live broker funds --
-        # which is the only bound on total exposure. It just gets looked at.
-        f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{batch_date}"
-        f"&select=symbol,direction,entry_ref,entry_low,entry_high,sl,stop_pct,"
-        f"setup_name,zone_source,score,grade,structure_trend,publication_kind",
-        headers=_headers(), timeout=30)
-    if r.status_code != 200:
+    """Every published row for the batch. publication_kind when the column exists.
+
+    BOTH KINDS, deliberately unfiltered. This is the one consumer that should see
+    the watchlist as well as the signals; the caller decides which are enterable.
+
+    DEGRADES RATHER THAN DIES ON A MISSING COLUMN. publication_kind arrives with a
+    migration that is applied by hand, and until it lands PostgREST answers the
+    whole select with 400 "column signals.publication_kind does not exist". That
+    took down load_zone_map, which takes down the session -- no zone map, no
+    quotes, no entries, for a column that only labels a population. A display
+    column must not be able to stop the engine trading.
+
+    Fail-closed is right for a risk input and wrong here: refusing to trade
+    because a label is missing is not caution, it is an outage. The retry drops
+    the column and treats every row as a signal, which is the pre-migration truth
+    -- nothing publishes candidates until the migration lands either. It says so
+    loudly, because a silently narrower world is how the loop came to watch 3
+    symbols out of 706.
+    """
+    base = (f"{SUPABASE_URL}/rest/v1/signals?signal_date=eq.{batch_date}"
+            f"&select={_SIGNAL_COLS}")
+    r = requests.get(base + ",publication_kind", headers=_headers(), timeout=30)
+    if r.status_code == 200:
+        return r.json()
+
+    missing = (r.status_code in (400, 404)
+               and "publication_kind" in r.text
+               and "does not exist" in r.text)
+    if not missing:
         raise RuntimeError(f"signal fetch failed: HTTP {r.status_code} "
                            f"{r.text[:200]}")
-    return r.json()
+
+    log.warning("signals.publication_kind does not exist — "
+                "migrations/PENDING_publication_kind.sql has not been applied. "
+                "Treating every published row as an actionable signal, which is "
+                "correct pre-migration because nothing publishes candidates yet. "
+                "The watchlist will stay empty until it is applied.")
+    r2 = requests.get(base, headers=_headers(), timeout=30)
+    if r2.status_code != 200:
+        raise RuntimeError(f"signal fetch failed: HTTP {r2.status_code} "
+                           f"{r2.text[:200]}")
+    rows = r2.json()
+    for row in rows:
+        row.setdefault("publication_kind", "signal")
+    return rows
 
 
 def batch_is_stale(batch_date: str) -> bool:
