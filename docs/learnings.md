@@ -207,3 +207,67 @@ the real helper against an unreachable Supabase, which should yield
 next day — broker funds are the only bound on exposure — so the broken gate never
 ran. The bug survived a green 17-suite run, a self-review, and a push, and only
 turned up because the code was being deleted. Deletion is not a test strategy.
+
+---
+
+## A view that fails to be REPLACED is still a view (2026-10-01)
+
+Two migrations pasted whole into the Supabase SQL editor applied only a prefix
+of their statements and reported "Success. No rows returned".
+
+```
+20260930093000_exclude_wrong_side_zone_signals.sql   3 of 12 statements
+  applied:  zone_side_valid column, its comment, the backfill
+  silent:   v_marks_zone_valid, v_wrong_side_excluded, and the
+            CREATE OR REPLACE of v_signal_window and v_window_summary
+
+PENDING_publication_kind.sql                         1 of 6 statements
+  applied:  publication_kind column
+  silent:   CHECK constraint, column comment, v_watchlist
+```
+
+**The failure that matters is not the missing object.** A view that was never
+created errors the first time anything queries it, which is a loud, same-day
+discovery. `v_marks_zone_valid` and `v_watchlist` were in that category and cost
+nothing, because nothing had started reading them yet.
+
+The expensive one is `CREATE OR REPLACE VIEW` on a view that already exists.
+When the REPLACE does not run, the view is still present, still queryable, still
+returning plausible numbers — and holding its old definition. `v_signal_window`
+and `v_window_summary` have existed since 21 August. The 30 September migration
+was supposed to replace both so that accuracy excluded 75 wrong-side signals. It
+didn't run. So for a day the dashboard carried the sentence "75 signals are
+excluded as wrong-side and why" over figures that excluded nothing, and every
+check anyone would naturally run — does the column exist, is it backfilled, does
+the view exist, does the page render — passed.
+
+**Why it was hard to see.** Each half looked finished from its own side. The
+code side was complete and correct: the column was added, the backfill ran, 75
+rows went false, the page copy was updated, the tests passed. The database side
+had every object the code names. Nothing in either half reveals that one object's
+*definition* is a version behind, because a stale view has no symptom except a
+number that is slightly wrong — and 44.28% against 44.45% is not a number anyone
+spots.
+
+**The generalisation.** For additive DDL, existence is a sufficient check:
+the object is there or it is not. For *replacing* DDL — `CREATE OR REPLACE`,
+`ALTER ... SET`, a re-granted policy — existence proves nothing, because the old
+version satisfies it. The check has to interrogate the content: does this view's
+definition mention the column it was replaced to filter on.
+
+```sql
+SELECT position('zone_side_valid' IN definition) > 0
+FROM pg_views WHERE viewname = 'v_signal_window';
+```
+
+**The second-order lesson, which is the one that generalises past Postgres.**
+A tool's success message describes what the tool did, not what you asked for.
+This is the same shape as the monkeypatched-dependency entry above: in both
+cases a green signal was produced by something other than the thing under test —
+there a stub standing in for the real function, here an editor reporting on the
+statements it chose to run. The remedy is identical and it is not "be careful":
+assert the end state, from the outside, against the artefact itself.
+
+**What changed.** `migrations/README.md` now requires every file to end with a
+catalogue query returning one row of booleans, and says to apply one statement at
+a time. The repair file is written that way.

@@ -1,79 +1,42 @@
--- PARTIALLY APPLIED. 3 of 12 statements landed. See
--- PENDING_repair_partial_applications.sql for the rest.
+-- REPAIR: statements two migrations reported as applied and did not apply.
 --
--- Discovered 2026-10-01 while checking a different partial apply. Verified
--- against the live catalogue:
+-- WHAT HAPPENED. Both files were pasted whole into the Supabase SQL editor,
+-- which answered "Success. No rows returned", and both applied only a PREFIX of
+-- their statements. Verified against the live catalogue on 2026-10-01:
 --
---   APPLIED      zone_side_valid, its comment, and the backfill
---                (75 false, 310 true, 446 NULL -- the NULLs are correct, they are
---                rows with no zone_source)
---   NOT APPLIED  v_marks_zone_valid, v_wrong_side_excluded, and the CREATE OR
---                REPLACE of v_signal_window and v_window_summary
+--   20260930093000_exclude_wrong_side_zone_signals.sql   3 of 12 statements
+--     applied:     zone_side_valid column, its comment, the backfill
+--                  (75 rows false, 310 true, 446 NULL -- the NULLs are correct,
+--                  they are rows with no zone_source)
+--     NOT applied: v_marks_zone_valid, v_wrong_side_excluded, and the REPLACE of
+--                  v_signal_window and v_window_summary
 --
--- THE CONSEQUENCE, WHICH IS WORSE THAN A MISSING VIEW. v_signal_window and
--- v_window_summary still EXIST, holding their pre-30-September definitions with
--- no reference to zone_side_valid. So the wrong-side exclusion has never been in
--- force: the column was added, the dashboard was changed to say 75 signals are
--- excluded, and the views that exclude them were never replaced. An absent view
--- announces itself at the first query; a silently stale one does not.
+--   PENDING_publication_kind.sql                         1 of 6 statements
+--     applied:     publication_kind column, NOT NULL DEFAULT 'signal'
+--     NOT applied: the CHECK constraint, the column comment, v_watchlist
 --
--- Measured: accuracy 44.28% as published against 44.45% filtered, because the
--- 849 wrong-side marks score 42.64%, near the overall rate. The number barely
--- moves; the claim was false.
+-- WHY THE FIRST ONE MATTERS MORE THAN IT LOOKS. v_signal_window and
+-- v_window_summary EXIST, so nothing errored and nothing looked wrong -- they
+-- just hold their PRE-30-September definitions, with no reference to
+-- zone_side_valid. The wrong-side exclusion has therefore never been in force.
+-- The column was added, the dashboard was changed to say 75 signals are
+-- excluded, and the views that do the excluding were never replaced. A view that
+-- is absent announces itself; a view that is silently stale does not.
+--
+-- The measured effect on the headline is small -- accuracy 44.28% as published
+-- against 44.45% filtered, because the 849 wrong-side marks score 42.64%, near
+-- the overall rate -- but the page has been claiming an exclusion that was not
+-- happening, which is a different fault from the number being wrong.
+--
+-- HOW TO APPLY THIS. Run it ONE STATEMENT AT A TIME. Do not paste the file.
+-- The verification block at the end returns one row of booleans; every column
+-- must be true before this is considered applied. "Success" from the editor is
+-- not evidence -- that is the whole reason this file exists.
 
--- Exclude wrong-side-zone signals from the accuracy record, visibly.
---
--- 75 signals were published with an entry zone on the WRONG SIDE of price: a
--- LONG whose zone was a supply_ob or bear_fvg (entry ABOVE price), or a SHORT
--- whose zone was a demand_ob or bull_fvg (entry BELOW price). The cause was
--- zone_entry reading active_zone_high/low, which active_zones resolves from
--- structure_trend rather than from the trade direction. Fixed in ac43f53.
---
--- All 75 fall on 2026-08-11 and 2026-08-12, the last two sessions of the 8%
--- entry-distance rule; the 0.30% gate that replaced it on 13 Aug rejected almost
--- all later ones incidentally, by distance rather than by side.
---
--- WHY EXCLUDE RATHER THAN LEAVE. These are not signals that performed badly,
--- they are signals constructed against their own premise: 40 of the 41 resolved
--- wrong-side LONGS hit their stop, a 2.4% win rate against 61.5% for correctly
--- zoned longs on the SAME TWO SESSIONS. A long entered above price on a bear FVG
--- is buying into resistance with the stop below. Leaving them in makes the record
--- measure two different things at once.
---
--- WHY NOT DELETE. The rows are the only evidence of what was published on those
--- days, and the wrong-side/correct-side comparison is the only evidence either
--- way on how much the zone actually matters. v_wrong_side_excluded keeps both
--- queryable.
---
--- NOTHING PUBLISHED IS REWRITTEN. This adds a column and filters the views;
--- every signals row keeps the values it was published with.
---
--- THE 443 BLANKS ARE NOT EXCLUDED. zone_source predates most of the record, so
--- wrong-side is only DETERMINABLE for 385 of 828 signals. 19.5% of those are
--- wrong-side; if that rate held across the blanks there would be ~86 more that
--- cannot be identified. Excluding a population because it might be affected
--- would remove more signal than defect, so NULL means "cannot tell" and is
--- treated as valid. Every filter below is written `IS NOT FALSE`, never
--- `= true`, so a NULL is included by construction rather than by accident.
+-- ─────────────────────────────────────────────────────────────────────
+-- 1. The tail of 20260930093000, verbatim except where noted.
+-- ─────────────────────────────────────────────────────────────────────
 
-ALTER TABLE public.signals
-  ADD COLUMN IF NOT EXISTS zone_side_valid boolean;
-
-COMMENT ON COLUMN public.signals.zone_side_valid IS
-  'FALSE when the entry zone was on the wrong side of price for the direction (a LONG on supply_ob/bear_fvg, a SHORT on demand_ob/bull_fvg). NULL when zone_source is absent and it cannot be determined. Accuracy views filter IS NOT FALSE, so NULL is included.';
-
-UPDATE public.signals SET zone_side_valid =
-  CASE
-    WHEN zone_source IS NULL OR zone_source = '' THEN NULL
-    WHEN upper(direction) = 'LONG'  AND zone_source IN ('supply_ob','bear_fvg') THEN false
-    WHEN upper(direction) = 'SHORT' AND zone_source IN ('demand_ob','bull_fvg') THEN false
-    ELSE true
-  END;
-
--- signal_marks with wrong-side signals removed. A drop-in replacement wherever
--- accuracy is computed from marks directly -- v_window_summary.accuracy_pct did
--- exactly that, bypassing v_signal_window, so filtering the base view alone would
--- have corrected the P&L figures and left the headline accuracy untouched.
 CREATE OR REPLACE VIEW public.v_marks_zone_valid
 WITH (security_invoker = true) AS
 SELECT m.*
@@ -203,3 +166,54 @@ FROM v_signal_window;
 
 COMMENT ON VIEW public.v_window_summary IS
   'Aggregate of v_signal_window. n_signals/n_long/n_short count PUBLICATIONS; everything position-level counts FIRST SIGNALS only. indicative_pnl sums pnl_inr at each position real notional. indicative_pnl_all_pub is the all-publications sum, a signal-quality figure and not P&L. accuracy_pct is per-mark across all publications by design.';
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 2. The tail of PENDING_publication_kind.
+--
+-- The CHECK is written NOT VALID then VALIDATEd separately: 831 existing rows
+-- are all 'signal' so it would pass either way, but a constraint that cannot be
+-- added because of one bad row should fail at the VALIDATE, where the message
+-- names the problem, rather than at the ADD.
+-- ─────────────────────────────────────────────────────────────────────
+
+ALTER TABLE public.signals
+  ADD CONSTRAINT signals_publication_kind_chk
+  CHECK (publication_kind IN ('signal', 'candidate')) NOT VALID;
+
+ALTER TABLE public.signals VALIDATE CONSTRAINT signals_publication_kind_chk;
+
+COMMENT ON COLUMN public.signals.publication_kind IS
+  'signal = the setup qualified, so it is actionable and is scored by mark_signals. candidate = a valid unmitigated zone that did NOT qualify; published so the record shows what the engine saw, never scored, never entered -- market_open filters entries to publication_kind = ''signal''. Every accuracy view and mark_signals filter on ''signal'' so the record keeps measuring the population it always measured. Reworded 2026-10-01: the original text defined these by distance from the zone, and the entry-distance gate (MAX_ENTRY_DIST_PCT) was removed that day.';
+
+-- The watchlist, for the page and for anyone asking what the loop is watching.
+CREATE OR REPLACE VIEW public.v_watchlist
+WITH (security_invoker = true) AS
+SELECT signal_date, symbol, direction, setup_name, zone_source,
+       entry_ref, entry_low, entry_high, sl, stop_pct, entry_dist_pct, score
+FROM public.signals
+WHERE publication_kind = 'candidate'
+ORDER BY signal_date DESC, entry_dist_pct ASC NULLS LAST;
+
+COMMENT ON VIEW public.v_watchlist IS
+  'Symbols carrying a valid unmitigated zone that did not qualify as signals: the zone exists, price has not passed through it, and the geometry is expressible, but the setup failed the disqualifier block or the stop cap. Ordered nearest-first by distance to the zone. NOT recommendations, not scored, and NOT enterable -- the loop takes entries only from publication_kind = ''signal''.';
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 3. VERIFY. Every column must come back true.
+-- ─────────────────────────────────────────────────────────────────────
+
+SELECT
+  (SELECT count(*) = 1 FROM pg_views
+     WHERE schemaname='public' AND viewname='v_marks_zone_valid')      AS v_marks_zone_valid,
+  (SELECT count(*) = 1 FROM pg_views
+     WHERE schemaname='public' AND viewname='v_wrong_side_excluded')   AS v_wrong_side_excluded,
+  (SELECT count(*) = 1 FROM pg_views
+     WHERE schemaname='public' AND viewname='v_watchlist')             AS v_watchlist,
+  (SELECT count(*) = 1 FROM pg_constraint
+     WHERE conname='signals_publication_kind_chk')                     AS chk_publication_kind,
+  (SELECT col_description('public.signals'::regclass::oid, ordinal_position) IS NOT NULL
+     FROM information_schema.columns
+     WHERE table_name='signals' AND column_name='publication_kind')    AS publication_kind_comment,
+  (SELECT position('zone_side_valid' IN definition) > 0 FROM pg_views
+     WHERE schemaname='public' AND viewname='v_signal_window')         AS signal_window_filters,
+  (SELECT position('v_marks_zone_valid' IN definition) > 0 FROM pg_views
+     WHERE schemaname='public' AND viewname='v_window_summary')        AS window_summary_filters;

@@ -1,3 +1,18 @@
+-- PARTIALLY APPLIED. 1 of 6 statements landed. See
+-- PENDING_repair_partial_applications.sql for the rest.
+--
+-- Pasted whole into the Supabase SQL editor on 2026-10-01, which answered
+-- "Success. No rows returned" and applied only the ALTER TABLE. Verified against
+-- the live catalogue the same day:
+--
+--   APPLIED      publication_kind text NOT NULL DEFAULT 'signal'  (0 NULL rows,
+--                so the UPDATE below was a no-op either way)
+--   NOT APPLIED  signals_publication_kind_chk, the column comment, v_watchlist
+--
+-- Kept under its applied version because the column IS in the database and the
+-- directory is a record of what was applied, not of what was intended. The file
+-- is NOT byte-identical to what ran -- that is the point of the name.
+
 -- Distinguish an actionable signal from a watched candidate, in one column.
 --
 -- WHY THE WATCHLIST HAS TO BE PUBLISHED AT ALL. The loop watches only what reaches

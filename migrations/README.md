@@ -55,3 +55,28 @@ the service-role count.
 Note that `atlas.html` sends the operator's `access_token` once signed in, so
 its reads arrive as `authenticated`, not `anon`. A policy scoped to `anon`
 alone breaks the page for exactly the person using it. Grant both roles.
+
+## "Success" from the SQL editor is not evidence
+
+Twice now a file pasted whole into the Supabase SQL editor has applied only a
+PREFIX of its statements and reported success. Found 2026-10-01:
+
+| file | applied | silent |
+|---|---|---|
+| `20260930093000_exclude_wrong_side_zone_signals.sql` | 3 of 12 | 2 views missing, 2 left stale |
+| `2026100104…_signals_publication_kind_PARTIAL.sql` | 1 of 6 | constraint, comment, view |
+
+The cut-off is not at a consistent statement number, so there is no rule like
+"only the first one runs" to work around. What is consistent is that the editor's
+success message describes the last statement it chose to run, not the file.
+
+**So verify, always, and verify the thing itself rather than the absence of an
+error.** The dangerous case is not a missing object — that errors at the first
+query. It is `CREATE OR REPLACE VIEW` on a view that already exists: when the
+REPLACE does not run, the view is still there, still queryable, and quietly holds
+its old definition. That is how the wrong-side exclusion shipped as a dashboard
+claim with nothing behind it for a day.
+
+A migration is applied when a catalogue query says its objects exist and, for a
+replaced view, that the new definition contains the thing it was replaced for.
+Every file from here on ends with such a query. Apply one statement at a time.
