@@ -185,9 +185,28 @@ def main() -> int:
     check("  de-emphasising rather than hiding them",
           "sc-counter" in signals and "opacity" in signals)
     check("  and labelling them on the card", "COUNTER-TREND" in signals)
-    check("a regime banner frames every signal list", "regimeBanner" in signals)
-    check("  naming what ATLAS will and will not act on",
-          "ATLAS" in signals and "not instructions" in signals)
+    # THE REGIME EXPLANATION BOX IS GONE, by decision: it explained how ATLAS
+    # works where a reader wants the day, and one of its sentences -- that 06_push
+    # suppresses by regime -- had been false on the live page since suppression was
+    # removed. The market flash replaces it. What must hold is weaker and more
+    # honest: the signals are still placed in a regime, and the note carries the
+    # disclaimer rather than the manual.
+    check("a market flash frames every signal list", "marketFlash" in signals)
+    check("  which still names the regime", "REGIME '+r" in signals)
+    check("  and carries the disclaimer, not a mechanism essay",
+          "Educational only" in signals and "not advice" in signals)
+    check("  the removed box is really gone",
+          "regimeBanner" not in signals, True)
+    # The claim, not the token: 06_push is named in comments legitimately. What
+    # must be gone is the assertion that it suppresses anything, which was false
+    # on the live page for a day after suppression was removed.
+    check("  and its false claim with it",
+          "06_push suppresses" not in signals
+          and "still suppressing" not in signals, True)
+    # The flash is model-generated text entering innerHTML; the server-side
+    # validator checks advice and numbers, not HTML.
+    check("the flash is escaped before insertion",
+          "esc(flash.flash_text)" in signals, True)
     # A short on the screener is information. The page must not read as a
     # short instruction, and the entry path must be unable to take one --
     # that half is proved in tests/test_regime_gate.py.
@@ -200,10 +219,10 @@ def main() -> int:
           ALLOW_SHORT_ENTRIES and ALLOW_LONG_ENTRIES, True)
     check("the page no longer claims ATLAS takes neither side",
           "takes neither" not in signals, True)
-    check("  and says which side it opens in a bearish regime",
-          "opens SHORTS here" in signals, True)
-    check("  and that a disagreement means cash",
-          "disagree" in signals, True)
+    # The side-and-cash wording lived in the removed explanation box. It is not
+    # replaced: the flash describes the day, and what ATLAS will act on is proved
+    # in tests/test_regime_gate.py against the gate rather than asserted against
+    # page copy, which is where it should have been all along.
     # ONE side at a time, from the matrix, whatever the market
     from atlas.execution.atlas_entry import allowed_side, regime_allows_side
     both = []

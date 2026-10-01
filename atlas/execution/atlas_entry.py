@@ -952,6 +952,37 @@ def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
 # cash regardless of origin.
 
 
+# Does atlas_trades have `product` yet? Probed once per process rather than
+# assumed, because the column arrives with a hand-applied migration and an INSERT
+# carrying an unknown key is rejected whole -- which would turn a missing
+# reporting column into a missing trade. Re-probed on a new process, so applying
+# the migration takes effect at the next restart without a code change.
+#
+# Fails to False: not sending the column costs a row that reconcile fills in by
+# direction. Sending one that does not exist costs the entry.
+_TRADES_HAS_PRODUCT = None
+
+
+def _trades_has_product() -> bool:
+    global _TRADES_HAS_PRODUCT
+    if _TRADES_HAS_PRODUCT is None:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/atlas_trades?select=product&limit=1",
+                headers=_headers(), timeout=10)
+            _TRADES_HAS_PRODUCT = (r.status_code == 200)
+            if not _TRADES_HAS_PRODUCT:
+                log.warning("atlas_trades.product does not exist — reserving "
+                            "without it. Apply "
+                            "migrations/PENDING_atlas_trades_product.sql; exits "
+                            "dispatch on this column.")
+        except Exception as e:
+            log.warning(f"could not probe atlas_trades.product ({e}) — "
+                        f"reserving without it")
+            _TRADES_HAS_PRODUCT = False
+    return _TRADES_HAS_PRODUCT
+
+
 def _reserve_intent(intent: dict) -> tuple:
     """
     Commit a PENDING row BEFORE any order exists. -> (row_id, status_code, detail)
@@ -980,6 +1011,16 @@ def _reserve_intent(intent: dict) -> tuple:
         "grade": intent.get("grade", ""),
         "sector": intent.get("sector", ""),
         "zone_source": intent.get("zone_source", ""),
+        # LOAD-BEARING FOR EXITS, and it was never written. exits.protect()
+        # dispatches on product -- GTT legs for a CNC long, an SL-M regular order
+        # for an MIS short -- and squareoff_mis() filters on it for the 15:15
+        # timer. A row without it is a position ATLAS cannot decide how to close.
+        #
+        # Sent conditionally: the column arrives with
+        # PENDING_atlas_trades_product.sql, and until that is applied PostgREST
+        # rejects the whole INSERT for one unknown key. A reserve that fails takes
+        # the entry with it, so this must not be the thing that stops a trade.
+        **({"product": intent["product"]} if _trades_has_product() else {}),
         "notes": (f"RESERVED before order placement — stop Rs"
                   f"{intent.get('stop_price', 0)} | risk Rs"
                   f"{intent.get('risk_actual', 0):,.0f}"),

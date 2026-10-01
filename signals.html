@@ -115,6 +115,11 @@ nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-f
    read, so the row height is tight and the type is tabular. lv-dim is the stale
    and closed treatment -- the table stays legible but visibly not current, which
    is the point: hiding it would leave the reader guessing. */
+/* The market flash. Reads as a note, so the text is the largest thing in the
+   box and the regime label is demoted to a tag beside it. */
+.mf .mf-text{display:block;font-size:13.5px;line-height:1.62;color:var(--fg);margin-top:7px;max-width:74ch}
+.mf .mf-foot{display:block;font-size:9.5px;letter-spacing:0.6px;color:var(--muted2);margin-top:9px;line-height:1.5;max-width:78ch}
+@media(max-width:640px){.mf .mf-text{font-size:12.5px}}
 .lv-wrap{margin:14px 0 18px;border:1px solid var(--line2);background:rgba(255,255,255,0.015)}
 .lv-dim{opacity:0.62}
 .lv-head{padding:11px 14px;border-bottom:1px solid var(--line2)}
@@ -499,6 +504,25 @@ async function fetchWatchlist(){
   return r.rows || [];
 }
 
+/* The flash is MODEL-GENERATED TEXT going into innerHTML. It is validated
+   server-side for shape and content, but validation is about advice and invented
+   numbers -- it is not an HTML sanitiser, and the two should not be confused.
+   Escaped here, at the point of insertion, which is the only place that can be
+   sure. */
+function esc(t){
+  return String(t==null?'':t)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+async function fetchFlash(){
+  /* The session's market flash, generated once by engine/market_flash.py at the
+     end of the EOD chain. A page view never triggers a model call. */
+  var r = await sbGet('/rest/v1/market_flash?order=session_date.desc&limit=1'
+    + '&select=session_date,flash_text,source,generated_at');
+  return (r.rows && r.rows[0]) || null;
+}
+
 async function fetchLiveZones(){
   /* THE LIVE VIEW. Every symbol the market-hours loop is watching, with the price
      against its zone, overwritten each 60s cycle by market_open.push_live_zones.
@@ -578,40 +602,42 @@ function outcomeBadge(s){
   return'';
 }
 
-/* THE REGIME IS CONTEXT, NOT A FILTER.
-   06_push still suppresses by regime before publishing, and the entry gate
-   blocks independently -- two answers to two different questions. What the page
-   adds is the reading: a signal that runs against the prevailing regime is shown
-   and marked, not dropped and not presented as though the regime agreed with it.
-   window._regimeNow is set in render() from the sector heatmap. */
-function regimeBanner(){
+/* THE MARKET FLASH replaces the regime explanation box.
+   What was there explained how ATLAS works -- three paragraphs of mechanism, one
+   of which had been wrong since regime suppression was removed from 06_push and
+   said so on the live page for a day. A reader opening the screener wants the
+   day, not the manual.
+   The text is generated once per session server-side and stored; this only
+   renders it. window._regimeNow still comes from the sector heatmap and still
+   drives counterTrend() below -- the reading is gone from the page, not from the
+   logic. */
+function marketFlash(flash, batchDate){
   var r=(window._regimeNow||'').toUpperCase();
-  var cls,label,note;
-  if(r==='BEARISH'){
-    cls='rc-bear'; label='REGIME BEARISH';
-    note='Shorts run with the trend; longs run against it and are marked. '
-        +'ATLAS opens SHORTS here when the day\'s breadth is also negative, and '
-        +'nothing when breadth and the index disagree. These remain observations '
-        +'about the market, not instructions: the screener reports what it found '
-        +'and sizing, stops and exits are the agent\'s own.';
-  } else if(r==='BULLISH'){
-    cls='rc-bull'; label='REGIME BULLISH';
-    note='Longs run with the trend; shorts run against it and are marked. '
-        +'ATLAS opens LONGS here when the day\'s breadth is also positive, and '
-        +'nothing when breadth and the index disagree. Not instructions.';
-  } else if(r){
-    cls='rc-side'; label='REGIME '+r;
-    note='Neither side is with or against the trend, so nothing is marked '
-        +'counter-trend. ATLAS follows the day\'s breadth here &mdash; long if '
-        +'positive, short if negative, cash if breadth and the index disagree. '
-        +'Not instructions.';
-  } else {
-    cls='rc-side'; label='REGIME UNKNOWN';
-    note='The market regime could not be read, so no signal below can be placed '
-        +'in context. Treat the direction labels as unqualified.';
+  var cls = r==='BEARISH' ? 'rc-bear' : r==='BULLISH' ? 'rc-bull' : 'rc-side';
+
+  /* STALE PROSE IS WORSE THAN NO PROSE. A flash names a specific day's breadth
+     and sectors, so showing yesterday's against today's signals is a stated
+     falsehood rather than a slightly old number -- which is why this compares the
+     flash's session to the batch on screen and drops it rather than ageing it. */
+  var fresh = flash && flash.flash_text &&
+              String(flash.session_date).slice(0,10) >= String(batchDate).slice(0,10);
+  if(!fresh){
+    return '<div class="regime-ctx '+cls+'"><span class="rc-label">'
+      + (r? 'REGIME '+r : 'REGIME UNKNOWN')+'</span>'
+      + '<span class="rc-note">No market note for this session yet.'
+      + (flash? ' The most recent is for '+fmtDate(String(flash.session_date).slice(0,10))
+              + ' and is not shown against a newer batch.' : '')
+      + '</span></div>';
   }
-  return '<div class="regime-ctx '+cls+'"><span class="rc-label">'+label
-        +'</span><span class="rc-note">'+note+'</span></div>';
+  var byLLM = flash.source==='llm';
+  return '<div class="regime-ctx '+cls+' mf">'
+    + '<span class="rc-label">'+(r? 'REGIME '+r : 'MARKET')+'</span>'
+    + '<span class="mf-text">'+esc(flash.flash_text)+'</span>'
+    + '<span class="mf-foot">&#9888; Educational only &mdash; not advice. '
+    + 'Conditions as at the close of '+fmtDate(String(flash.session_date).slice(0,10))
+    + '. Every figure is taken from the session\u2019s own data'
+    + (byLLM? '' : ' (generated from the data directly)')+'.</span>'
+    + '</div>';
 }
 
 function counterTrend(dir){
@@ -869,8 +895,8 @@ function renderSentimentPanel(sectors){
 }
 
 async function render(){
-  var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices(),fetchWatchlist(),fetchLiveZones()]);
-  var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4],watchAll=res[5],liveZones=res[6];
+  var res=await Promise.all([fetchEOD(),fetchSectors(),fetchLive(),fetchOutcomes(),fetchPrices(),fetchWatchlist(),fetchLiveZones(),fetchFlash()]);
+  var eodAll=res[0],sectors=res[1],liveAll=res[2],outcomes=res[3],prices=res[4],watchAll=res[5],liveZones=res[6],flash=res[7];
   var priceMap={};
   (prices||[]).forEach(function(p){priceMap[p.symbol]=p;});
   var outcomeMap={};
@@ -983,10 +1009,12 @@ async function render(){
   // lives in engine/trading_calendar.py and is not served to the browser.
   var isStale=sessionDate<expectedSession;
 
-  // The reason, only when we actually have one. 06_push suppresses LONG signals
-  // in a bearish regime, which is the common way a batch comes out empty, and
-  // the heatmap is already loaded. Stated as an observation -- "regime bearish"
-  // -- not as a proven cause, because the page cannot know why the chain
+  // The reason, only when we actually have one. This used to say "06_push
+  // suppresses LONG signals in a bearish regime", which stopped being true when
+  // regime suppression was removed from the publisher -- everything qualifying is
+  // published now, and an empty batch means the ENGINE found nothing, not that the
+  // publisher dropped it. Stated as an observation either way -- "regime bearish"
+  // -- never as a proven cause, because the page cannot know why the chain
   // published nothing, only what the regime was.
   var _regime=(sectors&&sectors.length&&sectors[0].market_direction)||'';
   window._regimeNow=_regime;
@@ -1267,7 +1295,7 @@ async function render(){
     return h;
   }
 
-  html+=regimeBanner();
+  html+=marketFlash(flash, batchDate);
 
   if(isStale){
     // Two separate statements, never one: what was NOT published, and then what

@@ -2,7 +2,7 @@
 ATLAS Reporting — Telegram Directive Handler
 =============================================
 Listens for your Telegram commands and updates agent state.
-Commands: /approve /pause /normal /status /capital /positions /help
+Commands: /approve /pause /normal (= /resume) /status /capital /positions /help
 Runs as a polling loop — call once after daily report is sent.
 """
 
@@ -136,12 +136,30 @@ def handle_directive(text: str) -> str:
             "Send /approve or /normal to resume."
         )
 
-    elif text.lstrip("/") == "normal":
-        update_agent_mode("NORMAL", f"Set to NORMAL by directive at {now}")
+    elif text.lstrip("/") in ("normal", "resume"):
+        # CLEARS BOTH HALVES. This used to set only atlas_state, and
+        # breaker.clear() removed only the file, so neither action resumed
+        # anything on its own -- paused() reads the sentinel FIRST and returns
+        # before it looks at the mode. On 2026-10-01 /normal was sent, the mode
+        # changed, and the loop stayed paused for an hour.
+        from atlas.risk import breaker as _breaker
+        had_file, halt_why = _breaker.is_halted()
+        both_ok = _breaker.clear()          # sentinel, then atlas_state
+        if not both_ok:
+            # Deliberately not silent. A partial resume is the state that cost an
+            # hour, and the operator needs to know which half is still set.
+            return (
+                f"⚠️ <b>PARTIAL RESUME</b>\n"
+                f"Something did not clear — check the log. A halt is a file "
+                f"(<code>{_breaker.SENTINEL}</code>) AND an atlas_state row, and "
+                f"the file wins.\n"
+                f"{_rules_line()}"
+            )
         return (
-            f"🔵 <b>NORMAL</b>\n"
-            f"Entries enabled. /pause is the only other mode.\n"
-            f"{_rules_line()}"
+            "🔵 <b>NORMAL</b>\n"
+            + (f"Self-halt cleared: {halt_why[:160]}\n" if had_file else "")
+            + "Entries enabled. /pause is the only other mode.\n"
+            + _rules_line()
         )
 
     # Retired modes still answer, rather than falling through to "unknown
@@ -248,7 +266,8 @@ def handle_directive(text: str) -> str:
             "🤖 <b>ATLAS DIRECTIVES</b>\n\n"
             "/approve — proceed with suggested mode\n"
             "/pause — no trading tomorrow\n"
-            "/normal — NORMAL mode\n"
+            "/normal — resume: clears the halt file AND the mode\n"
+            "/resume — same thing, for muscle memory\n"
 
             "/login — generate Zerodha login URL\n"
             "/capital — show capital status\n"

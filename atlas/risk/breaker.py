@@ -108,7 +108,13 @@ def is_halted() -> tuple:
     """
     try:
         if SENTINEL.exists():
-            return True, SENTINEL.read_text().strip()[:400]
+            # NAME THE FILE. The reason alone reads as a live condition, so an
+            # operator who has already fixed the cause looks for a cause that is
+            # gone. The halt is a FILE, it outlives a restart and an atlas_state
+            # edit, and the message has to say so or the next hour is spent the
+            # way 2026-10-01 was.
+            return True, (f"{SENTINEL.read_text().strip()[:320]} "
+                          f"[halt file {SENTINEL} — send /resume, or delete it]")
     except Exception as e:
         # Cannot read our own halt marker. Refuse rather than assume clear.
         log.error(f"cannot read halt sentinel {SENTINEL}: {e}")
@@ -158,13 +164,50 @@ def halt(kind: str, detail: str) -> None:
         log.error(f"could not send halt alert: {e}")
 
 
-def clear() -> None:
-    """Operator action. Does not touch atlas_state -- /normal does that."""
+def clear() -> bool:
+    """Operator action: resume. Clears BOTH halves of a halt. -> fully cleared.
+
+    IT USED TO CLEAR ONLY THE FILE, and /normal set only atlas_state, so neither
+    action on its own resumed anything. On 2026-10-01 the operator set mode NORMAL
+    and the loop stayed paused for an hour: paused() checks the sentinel FIRST and
+    returns before it ever reads the mode, so the file silently won and nothing in
+    the log said a file was involved.
+
+    A halt is one state with two records of it -- a local file that survives a
+    restart and a row the dashboard can see. Clearing one is not resuming.
+
+    Order matters. The sentinel goes first: it is local, it cannot fail for the
+    reason we are most likely halted, and it is what the next cycle reads. If the
+    atlas_state patch then fails the loop is already able to trade, and the mode
+    row is stale in the SAFE direction -- it says PAUSED while entries are
+    enabled, which an operator will notice, rather than the reverse.
+    """
+    ok = True
     try:
+        existed = SENTINEL.exists()
         SENTINEL.unlink(missing_ok=True)
-        log.info(f"halt sentinel cleared ({SENTINEL})")
+        log.info(f"halt sentinel {'cleared' if existed else 'was not present'} "
+                 f"({SENTINEL})")
     except Exception as e:
-        log.error(f"could not clear halt sentinel: {e}")
+        log.error(f"could not clear halt sentinel {SENTINEL}: {e}")
+        ok = False
+
+    try:
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/atlas_state?id=eq.1",
+            headers=_headers(),
+            json={"mode": "NORMAL",
+                  "notes": f"Resumed at {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')}"
+                           f" — halt sentinel cleared"},
+            timeout=10)
+        if r.status_code not in (200, 204):
+            log.error(f"sentinel cleared but atlas_state still PAUSED: "
+                      f"HTTP {r.status_code} {r.text[:160]}")
+            ok = False
+    except Exception as e:
+        log.error(f"sentinel cleared but atlas_state not reset: {e}")
+        ok = False
+    return ok
 
 
 # ══════════════════════════════════════════════════════════════════

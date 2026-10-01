@@ -573,18 +573,51 @@ def open_positions_for_reconcile() -> list:
     resting exactly as they were. It is the opposite of committed_today(), where an
     empty set would read as "nothing is held" and permit a duplicate entry.
     """
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/atlas_trades"
+    base = (f"{SUPABASE_URL}/rest/v1/atlas_trades"
             f"?status=in.({','.join(OPEN_STATUSES)})"
-            f"&select=id,symbol,direction,qty,product,gtt_trigger_id",
-            headers=_headers(), timeout=15)
-        if r.status_code != 200:
-            log.error(f"open positions read failed: HTTP {r.status_code}")
-            return []
-        return r.json() or []
+            f"&select=id,symbol,direction,qty,gtt_trigger_id")
+    try:
+        r = requests.get(base + ",product", headers=_headers(), timeout=15)
+        if r.status_code == 200:
+            return r.json() or []
+
+        # THE SAME MISSING-COLUMN SHAPE AS publication_kind, and it had the same
+        # consequence: PostgREST answers the whole select with 400 and this
+        # returned [], so reconcile_exits has never had a position to reconcile.
+        # Resting legs were never cancelled, and an orphaned trigger can re-enter
+        # a closed symbol -- which reconcile_exits' own docstring calls the worst
+        # outcome available here.
+        #
+        # The old message was `HTTP {status_code}` with the body dropped, which is
+        # why a session's worth of these said 400 and nothing else. PostgREST puts
+        # the column name in the body; throwing it away turned a one-line fix into
+        # an unexplained failure.
+        if r.status_code in (400, 404) and "product" in r.text:
+            log.warning("atlas_trades.product does not exist — "
+                        "migrations/PENDING_atlas_trades_product.sql has not been "
+                        "applied. Deriving product from direction: LONG=CNC, "
+                        "SHORT=MIS, which is how size_by_risk assigns it anyway.")
+            r2 = requests.get(base, headers=_headers(), timeout=15)
+            if r2.status_code != 200:
+                log.error(f"open positions read failed: HTTP {r2.status_code} "
+                          f"{r2.text[:200]}")
+                return []
+            rows = r2.json() or []
+            for row in rows:
+                # Derived, not guessed. position_sizing.size_by_risk sets
+                # product = "CNC" if LONG else "MIS", with no other branch, so
+                # this reproduces the stored value exactly for every row ATLAS
+                # has ever written.
+                row.setdefault("product",
+                               "CNC" if str(row.get("direction", "")).upper() == "LONG"
+                               else "MIS")
+            return rows
+
+        log.error(f"open positions read failed: HTTP {r.status_code} "
+                  f"{r.text[:200]}")
+        return []
     except Exception as e:
-        log.error(f"open positions read failed: {e}")
+        log.error(f"open positions read failed: {type(e).__name__}: {e}")
         return []
 
 

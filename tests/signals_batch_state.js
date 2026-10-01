@@ -60,80 +60,78 @@ const cases = [
 
 global.window = {};
 eval(extract('counterTrend'));
-eval(extract('regimeBanner'));
-
 let ok = true;
-console.log('BATCH FRESHNESS'.padEnd(46) + 'expected     stale');
-console.log('-'.repeat(78));
-for (const [label, today, istMin, batch, wantStale, wantExpected] of cases) {
-  const v = verdict(today, istMin, batch);
-  const good = v.stale === wantStale && v.expected === wantExpected;
+eval(extract('marketFlash'));
+eval(extract('esc'));
+function fmtDate(d){ return String(d); }
+
+/* THE REGIME EXPLANATION BOX IS GONE, replaced by the market flash. What it used
+ * to assert -- "opens SHORTS here", "not instructions", "cash when they
+ * disagree" -- was three paragraphs of mechanism, and one of those sentences had
+ * been false since regime suppression was removed from 06_push. A reader opening
+ * a screener wants the day, not the manual.
+ *
+ * So the assertions move with the contract. What is invariant is NOT the wording:
+ * it is that the box still places the signals in a regime, that it carries the
+ * disclaimer, and -- the part that matters most -- that it refuses to show one
+ * session's prose against another session's batch. A flash names a specific day's
+ * breadth, so a stale one is a stated falsehood rather than a slightly old
+ * number. */
+const flashCases = [
+  ['bearish',  'REGIME BEARISH'],
+  ['bullish',  'REGIME BULLISH'],
+  ['sideways', 'REGIME SIDEWAYS'],
+  ['',         'MARKET'],
+];
+for (const [reg, needle] of flashCases) {
+  window._regimeNow = reg;
+  const html = marketFlash(
+    {session_date: '2026-10-01', flash_text: 'Breadth is narrow.', source: 'llm'},
+    '2026-10-01');
+  const good = html.includes(needle) && html.includes('not advice');
   ok = ok && good;
-  console.log('  ' + label.padEnd(44) + v.expected.padEnd(13) +
-              String(v.stale).padEnd(7) + (good ? 'ok' : '** WRONG **'));
+  console.log('  ' + ("flash labels regime '" + reg + "'").padEnd(44) +
+              (good ? 'ok' : '** missing ' + needle + ' or the disclaimer **'));
 }
 
-/* The regime is CONTEXT, not a filter. A counter-trend signal is de-emphasised
- * and marked, never dropped -- dropping it would make the page mirror ATLAS's
- * trading rules instead of reporting the market, which is the whole point of
- * the change. */
-console.log('');
-console.log('REGIME AS CONTEXT'.padEnd(46) + 'LONG ctr  SHORT ctr');
-console.log('-'.repeat(78));
-const regimeCases = [
-  ['bearish',  true,  false],
-  ['BEARISH',  true,  false],   // case-insensitive
-  ['bullish',  false, true ],
-  ['sideways', false, false],   // favours neither
-  ['mixed',    false, false],
-  ['',         false, false],   // unreadable regime marks nothing
-];
-for (const [reg, wantLong, wantShort] of regimeCases) {
-  window._regimeNow = reg;
-  const gl = counterTrend('LONG'), gs = counterTrend('SHORT');
-  const good = gl === wantLong && gs === wantShort;
-  ok = ok && good;
-  console.log('  ' + ("regime '" + reg + "'").padEnd(44) +
-              String(gl).padEnd(10) + String(gs).padEnd(10) +
-              (good ? 'ok' : '** WRONG **'));
-}
-
-console.log('');
-console.log('THE BANNER NAMES THE REGIME AND DISCLAIMS THE INSTRUCTION');
-console.log('-'.repeat(78));
-const bannerCases = [
-  ['bearish',  ['REGIME BEARISH',  'against', 'not instructions']],
-  ['bullish',  ['REGIME BULLISH',  'against']],
-  ['sideways', ['REGIME SIDEWAYS', 'cash']],
-  ['',         ['REGIME UNKNOWN',  'could not be read']],
-];
-for (const [reg, needles] of bannerCases) {
-  window._regimeNow = reg;
-  const html = regimeBanner();
-  const missing = needles.filter(n => !html.includes(n));
-  const good = missing.length === 0;
-  ok = ok && good;
-  console.log('  ' + ("regime '" + reg + "'").padEnd(44) +
-              (good ? 'ok' : '** missing: ' + missing.join(', ') + ' **'));
-}
-/* The bearish banner must name the side ATLAS opens -- it SHORTS here now -- and
- * still not read as an instruction to the reader. It used to say ATLAS "takes
- * neither", which was true while the mandate was long-only and became false the
- * moment shorts shipped; asserting the old wording would have kept a stale claim
- * passing. What is invariant is that the page states the agent's behaviour
- * accurately AND disclaims it as instruction. */
 window._regimeNow = 'bearish';
-const bear = regimeBanner();
-const states = bear.includes('ATLAS') && bear.includes('opens SHORTS');
-const disclaims = bear.includes('not instructions');
-const hedged = bear.includes('disagree');   // cash when the legs conflict
-ok = ok && states && disclaims && hedged;
-console.log('  ' + 'bearish banner names the side ATLAS opens'.padEnd(44) +
-            (states ? 'ok' : '** SILENT OR STALE **'));
-console.log('  ' + '  and still disclaims it as instruction'.padEnd(44) +
-            (disclaims ? 'ok' : '** READS AS ADVICE **'));
-console.log('  ' + '  and says a disagreement means cash'.padEnd(44) +
-            (hedged ? 'ok' : '** OVERSTATES **'));
+const fresh = marketFlash(
+  {session_date: '2026-10-01', flash_text: 'Breadth stays weak at 29%.', source: 'llm'},
+  '2026-10-01');
+const shows = fresh.includes('Breadth stays weak at 29%');
+const disclaims = fresh.includes('Educational only') && fresh.includes('not advice');
+ok = ok && shows && disclaims;
+console.log('  ' + 'a current flash is shown'.padEnd(44) +
+            (shows ? 'ok' : '** NOT RENDERED **'));
+console.log('  ' + 'with the disclaimer beside it'.padEnd(44) +
+            (disclaims ? 'ok' : '** NO DISCLAIMER **'));
+/* The one that would otherwise ship quietly. */
+const stale = marketFlash(
+  {session_date: '2026-09-30', flash_text: 'Yesterday was quiet.', source: 'llm'},
+  '2026-10-01');
+const hidden = !stale.includes('Yesterday was quiet');
+const explains = stale.includes('not shown against a newer batch');
+ok = ok && hidden && explains;
+console.log('  ' + "yesterday's prose is NOT shown as today's".padEnd(44) +
+            (hidden ? 'ok' : '** STALE PROSE RENDERED **'));
+console.log('  ' + '  and the page says why'.padEnd(44) +
+            (explains ? 'ok' : '** SILENT **'));
+
+const none = marketFlash(null, '2026-10-01');
+const graceful = none.includes('No market note') && !none.includes('undefined');
+ok = ok && graceful;
+console.log('  ' + 'a missing flash degrades cleanly'.padEnd(44) +
+            (graceful ? 'ok' : '** BROKEN **'));
+
+/* Model-generated text goes into innerHTML. Validation is about advice and
+ * invented numbers; it is not an HTML sanitiser. */
+const nasty = marketFlash(
+  {session_date: '2026-10-01', flash_text: '<img src=x onerror=alert(1)>', source: 'llm'},
+  '2026-10-01');
+const escaped = !nasty.includes('<img') && nasty.includes('&lt;img');
+ok = ok && escaped;
+console.log('  ' + 'the flash text is HTML-escaped'.padEnd(44) +
+            (escaped ? 'ok' : '** INJECTED RAW **'));
 
 console.log('-'.repeat(78));
 console.log('SIGNALS BATCH STATE: ' + (ok ? 'correct' : '*** DEFECTIVE ***'));
