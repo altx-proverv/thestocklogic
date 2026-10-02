@@ -32,21 +32,24 @@ UPSTOX_INSTRUMENTS_NSE = ("https://assets.upstox.com/market-quote/instruments/"
                           "exchange/NSE.json.gz")
 
 # ── THE FOUR INDICES ──────────────────────────────────────────────
-# Keyed by Upstox instrument_key, which is what /option/chain wants.
+# Names only. The instrument_key and the expiry date are both READ from the
+# instrument master at run time -- "NSE_INDEX|NIFTY MID SELECT" is not a string
+# worth retyping from memory, and the expiry is the thing a keyword got wrong.
 #
-# EXPIRY KEYWORD PER UNDERLYING, and this is load-bearing. NIFTY is the only NSE
-# index that still has weekly contracts; BANKNIFTY, FINNIFTY and MIDCPNIFTY went
-# monthly-only when weeklies were rationalised, and every stock has always been
-# monthly, last Tuesday. Asking for current_week on a monthly-only underlying
-# either errors or quietly returns the monthly chain -- and a silently wrong
-# expiry would poison a year of history before anyone looked.
-INDICES = {
-    "NIFTY":      {"key": "NSE_INDEX|Nifty 50",          "expiry": "current_week"},
-    "BANKNIFTY":  {"key": "NSE_INDEX|Nifty Bank",        "expiry": "current_month"},
-    "FINNIFTY":   {"key": "NSE_INDEX|Nifty Fin Service", "expiry": "current_month"},
-    "MIDCPNIFTY": {"key": "NSE_INDEX|NIFTY MID SELECT",  "expiry": "current_month"},
-}
-STOCK_EXPIRY_KEYWORD = "current_month"
+# THE EXPIRY KEYWORDS ARE GONE. The recorder used current_week for NIFTY and
+# current_month for everything else. On Friday 2026-10-02 NIFTY alone returned
+# "chain carried no strikes": current_week resolves to the expiry inside the
+# current CALENDAR week, which was Tuesday 2026-09-29 and had already expired.
+# NIFTY weeklies expire Tuesday, so that keyword would have failed every
+# Wednesday, Thursday and Friday -- three sessions in five, on the most important
+# underlying in the recorder, in a series that cannot be back-filled.
+#
+# fno_universe.parse_master now reads each contract's real expiry and takes the
+# nearest one strictly after today. That also removes the weekly/monthly split
+# and any day-of-week arithmetic: NSE shifts expiries off Tuesday around
+# holidays, and the master currently holds a Monday weekly and a Monday monthly
+# that no weekday rule would have found.
+INDEX_SYMBOLS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
 
 INDIA_VIX_KEY = "NSE_INDEX|India VIX"
 

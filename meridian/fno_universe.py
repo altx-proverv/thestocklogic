@@ -30,10 +30,13 @@ import io
 import gzip
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 
 import requests
 
-from meridian.config import UPSTOX_INSTRUMENTS_NSE, STOCK_EXPIRY_KEYWORD
+from meridian.config import UPSTOX_INSTRUMENTS_NSE, INDEX_SYMBOLS
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 log = logging.getLogger("MERIDIAN-UNIV")
 
@@ -56,14 +59,7 @@ class UniverseUnavailable(Exception):
     """The Upstox instrument master could not be read. No universe, no run."""
 
 
-def fetch_upstox_fo_underlyings() -> dict:
-    """{symbol: instrument_key} for every NSE_FO stock option underlying.
-
-    Options carry underlying_key and underlying_symbol, so the set of distinct
-    underlyings IS the F&O list as Upstox can serve it. Indices are excluded here
-    and handled explicitly in config.INDICES, because their instrument keys and
-    expiry keywords differ and are worth stating by hand rather than inferring.
-    """
+def _download_master() -> list:
     try:
         r = requests.get(UPSTOX_INSTRUMENTS_NSE, timeout=120)
     except Exception as e:
@@ -82,8 +78,48 @@ def fetch_upstox_fo_underlyings() -> dict:
                                   f"{type(e).__name__}: {e}") from e
     if not isinstance(rows, list) or not rows:
         raise UniverseUnavailable("instrument master parsed to nothing")
+    return rows
 
-    out = {}
+
+def parse_master(rows: list, today=None) -> tuple:
+    """(stocks, index_keys, expiries) from the instrument master.
+
+    stocks      {symbol: underlying_key} for every F&O stock option underlying
+    index_keys  {symbol: underlying_key} for the four indices, READ from the
+                master rather than hardcoded -- "NSE_INDEX|NIFTY MID SELECT" is
+                not a string worth retyping from memory
+    expiries    {symbol: [date, ...]} ascending, FUTURE EXPIRIES ONLY
+
+    WHY EXPIRIES ARE RESOLVED HERE AND NOT LEFT TO A KEYWORD. The recorder used
+    Upstox's relative keywords -- current_week for NIFTY, current_month for
+    everything else. On Friday 2026-10-02 NIFTY returned "chain carried no
+    strikes" while all 216 other underlyings succeeded, because current_week
+    resolves to the expiry inside the current CALENDAR week: Tuesday
+    2026-09-29, which had already expired. Upstox drops expired contracts from
+    the next BOD master, so the contract the keyword named no longer had any
+    strikes to return.
+
+    That is not an edge case. NIFTY weeklies expire Tuesday, so the keyword
+    would have failed every Wednesday, Thursday and Friday -- three sessions in
+    five, on the single most important underlying in the recorder, silently, in a
+    series that cannot be back-filled.
+
+    The master already carries every contract's expiry and is already downloaded
+    for the universe, so the nearest live expiry is a fact we can read instead of
+    a keyword semantic we have to guess. It also removes two other guesses: the
+    weekly/monthly split per underlying disappears, and so does any day-of-week
+    arithmetic -- NSE shifts expiries off Tuesday around holidays, and this
+    master currently holds a Monday weekly (2026-10-19) and a Monday monthly
+    (2026-11-23) that no weekday rule would have found.
+
+    STRICTLY AFTER TODAY. An option expiring today has almost no time value left,
+    so its IV is degenerate and would enter the series as a spike that means
+    nothing about volatility. Taking the next expiry instead produces a visible
+    tenor jump, which days_to_expiry records, rather than an invisible bad number.
+    """
+    today = today or datetime.now(IST).date()
+    stocks, index_keys = {}, {}
+    exp = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -95,20 +131,49 @@ def fetch_upstox_fo_underlyings() -> dict:
         key = row.get("underlying_key")
         if not sym or not key:
             continue
-        # Index options share this segment; they are named explicitly in config.
-        if str(key).startswith("NSE_INDEX|"):
-            continue
-        out[str(sym).strip().upper()] = str(key)
+        sym = str(sym).strip().upper()
+        key = str(key)
 
-    if len(out) < 50:
+        if sym in INDEX_SYMBOLS:
+            index_keys[sym] = key
+        elif key.startswith("NSE_INDEX|"):
+            # An index we do not record. Not a stock; skipped rather than
+            # silently added to the stock universe.
+            continue
+        else:
+            stocks[sym] = key
+
+        raw = row.get("expiry")
+        if raw is None:
+            continue
+        try:
+            # milliseconds since epoch, read in IST because an expiry is a
+            # trading date and UTC would roll it back a day for an evening value
+            d = datetime.fromtimestamp(int(raw) / 1000, IST).date()
+        except Exception:
+            continue
+        if d > today:
+            exp.setdefault(sym, set()).add(d)
+
+    if len(stocks) < 50:
         # The list has run ~200 for years. Fifty would mean a format change or a
         # truncated download, and recording a tenth of the universe silently is
         # exactly the outcome this guard exists for.
         raise UniverseUnavailable(
-            f"only {len(out)} F&O underlyings parsed from the instrument master "
-            f"-- expected ~200. Refusing to record a truncated universe.")
-    log.info(f"Upstox instrument master: {len(out)} F&O stock underlyings")
-    return out
+            f"only {len(stocks)} F&O underlyings parsed from the instrument "
+            f"master -- expected ~200. Refusing to record a truncated universe.")
+
+    expiries = {k: sorted(v) for k, v in exp.items()}
+    log.info(f"instrument master: {len(stocks)} F&O stock underlyings, "
+             f"{len(index_keys)} indices, expiries resolved for {len(expiries)}")
+    return stocks, index_keys, expiries
+
+
+def fetch_upstox_fo_underlyings() -> dict:
+    """{symbol: instrument_key} for the F&O stock underlyings. Kept as the
+    narrow entry point the tests and any future caller use."""
+    stocks, _, _ = parse_master(_download_master())
+    return stocks
 
 
 def fetch_nse_fo_symbols() -> set:
@@ -152,18 +217,21 @@ def fetch_nse_fo_symbols() -> set:
     return set()
 
 
-def resolve_universe() -> tuple:
+def resolve_universe(today=None) -> tuple:
     """(underlyings, diff) -- what to record tonight, and where the sources differ.
 
-    underlyings is a list of dicts ready for the recorder:
-        {"symbol", "key", "kind", "expiry"}
-    with the four indices first, because if a run is going to be cut short by a
-    rate limit or an outage, the indices are the series that matter most.
-    """
-    from meridian.config import INDICES
+    Each underlying carries an EXPLICIT expiry date, resolved from the master:
+        {"symbol", "key", "kind", "expiry", "expiry_source"}
 
-    stocks = fetch_upstox_fo_underlyings()          # raises if unusable
-    nse = fetch_nse_fo_symbols()                    # {} on failure
+    Indices first, because if a run is cut short by an outage the index series
+    are the ones that matter most. An underlying with no future expiry in the
+    master is dropped WITH A REASON rather than fetched and failed -- that is a
+    contract gap, not a network problem, and the two should not look alike in the
+    failure list.
+    """
+    rows = _download_master()
+    stocks, index_keys, expiries = parse_master(rows, today=today)
+    nse = fetch_nse_fo_symbols()                    # set() on failure
 
     diff = {"checked": bool(nse),
             "upstox_count": len(stocks),
@@ -180,9 +248,32 @@ def resolve_universe() -> tuple:
                         f"Upstox instrument key — they will not be recorded: "
                         f"{sorted(nse - set(stocks))[:12]}")
 
-    underlyings = [{"symbol": s, "key": v["key"], "kind": "index",
-                    "expiry": v["expiry"]} for s, v in INDICES.items()]
-    underlyings += [{"symbol": s, "key": k, "kind": "stock",
-                     "expiry": STOCK_EXPIRY_KEYWORD}
-                    for s, k in sorted(stocks.items())]
+    missing_expiry = []
+    underlyings = []
+    for sym in INDEX_SYMBOLS:
+        key = index_keys.get(sym)
+        if not key:
+            missing_expiry.append({"symbol": sym, "reason": "not in master"})
+            continue
+        exps = expiries.get(sym) or []
+        if not exps:
+            missing_expiry.append({"symbol": sym, "reason": "no future expiry"})
+            continue
+        underlyings.append({"symbol": sym, "key": key, "kind": "index",
+                            "expiry": exps[0].isoformat(),
+                            "expiry_source": "master:nearest_future"})
+    for sym, key in sorted(stocks.items()):
+        exps = expiries.get(sym) or []
+        if not exps:
+            missing_expiry.append({"symbol": sym, "reason": "no future expiry"})
+            continue
+        underlyings.append({"symbol": sym, "key": key, "kind": "stock",
+                            "expiry": exps[0].isoformat(),
+                            "expiry_source": "master:nearest_future"})
+
+    if missing_expiry:
+        diff["no_future_expiry"] = missing_expiry[:40]
+        log.warning(f"{len(missing_expiry)} underlying(s) have no future expiry "
+                    f"in the master and are not recorded: "
+                    f"{[m['symbol'] for m in missing_expiry[:10]]}")
     return underlyings, diff

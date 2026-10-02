@@ -161,14 +161,99 @@ check("  and is well inside 2000/30min", calls <= 2000, True,
       f"{calls/2000*100:.0f}% of the 30-minute budget")
 
 print()
-print("EXPIRY KEYWORD PER UNDERLYING — A WRONG ONE POISONS THE SERIES")
+print("THE EXPIRY IS A RESOLVED DATE, NOT A KEYWORD")
 print("-" * 78)
-check("NIFTY uses weeklies", C.INDICES["NIFTY"]["expiry"], "current_week")
-for ix in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
-    check(f"  {ix} is monthly only", C.INDICES[ix]["expiry"], "current_month")
-check("stocks are monthly only", C.STOCK_EXPIRY_KEYWORD, "current_month")
-check("  only one index has weeklies",
-      sum(1 for v in C.INDICES.values() if v["expiry"] == "current_week"), 1)
+# THE REGRESSION. On Friday 2026-10-02 NIFTY alone failed with "chain carried no
+# strikes": current_week names the expiry inside the current CALENDAR week, which
+# was the already-expired Tuesday 2026-09-29. Three sessions in five, on the most
+# important underlying, in a series that cannot be back-filled.
+import datetime as _dt
+
+
+def master(sym_expiries, index=("NIFTY",)):
+    """A master shaped like the real one: expiry in epoch ms, IST."""
+    rows = []
+    for sym, dates in sym_expiries.items():
+        key = ("NSE_INDEX|Nifty 50" if sym in index else f"NSE_EQ|{sym}")
+        for d in dates:
+            ms = int(_dt.datetime(d.year, d.month, d.day, 15, 29,
+                                  tzinfo=U.IST).timestamp() * 1000)
+            for t in ("CE", "PE"):
+                rows.append({"segment": "NSE_FO", "instrument_type": t,
+                             "underlying_symbol": sym, "underlying_key": key,
+                             "strike_price": 100.0, "expiry": ms})
+    # pad past the truncation guard
+    for i in range(60):
+        rows.append({"segment": "NSE_FO", "instrument_type": "CE",
+                     "underlying_symbol": f"PAD{i}", "underlying_key": f"NSE_EQ|P{i}",
+                     "strike_price": 1.0,
+                     "expiry": int(_dt.datetime(2026, 12, 29, 15, 29,
+                                                tzinfo=U.IST).timestamp() * 1000)})
+    return rows
+
+
+FRIDAY = _dt.date(2026, 10, 2)
+EXPIRED_TUE = _dt.date(2026, 9, 29)
+NEXT_TUE = _dt.date(2026, 10, 6)
+rows = master({"NIFTY": [EXPIRED_TUE, NEXT_TUE, _dt.date(2026, 10, 13)]})
+stocks, idx, exps = U.parse_master(rows, today=FRIDAY)
+check("the expired Tuesday is excluded", EXPIRED_TUE in exps["NIFTY"], False,
+      "it would have returned a chain with no strikes")
+check("the nearest FUTURE expiry is chosen", exps["NIFTY"][0], NEXT_TUE)
+check("  index key is read from the master, not retyped",
+      idx["NIFTY"], "NSE_INDEX|Nifty 50")
+check("  and the index is not in the stock universe", "NIFTY" in stocks, False)
+
+# expiry day itself: an option expiring today has no time value, so its IV is
+# degenerate and must not enter the series.
+rows2 = master({"NIFTY": [FRIDAY, NEXT_TUE]})
+_, _, e2 = U.parse_master(rows2, today=FRIDAY)
+check("an expiry dated TODAY is skipped", FRIDAY in e2["NIFTY"], False,
+      "zero time value = degenerate IV")
+check("  the next one is used instead", e2["NIFTY"][0], NEXT_TUE)
+
+# a Monday expiry, which no day-of-week rule would find
+MON = _dt.date(2026, 10, 19)
+rows3 = master({"NIFTY": [MON]})
+_, _, e3 = U.parse_master(rows3, today=FRIDAY)
+check("a holiday-shifted MONDAY expiry is found", e3["NIFTY"][0], MON,
+      "weekday arithmetic would have missed it")
+
+# an underlying with no future expiry is dropped with a reason, not fetched
+rows4 = master({"NIFTY": [NEXT_TUE], "DEADSTOCK": [EXPIRED_TUE]})
+saved_dl, saved_nse = U._download_master, U.fetch_nse_fo_symbols
+try:
+    U._download_master = lambda: rows4
+    U.fetch_nse_fo_symbols = lambda: set()
+    unders, diff = U.resolve_universe(today=FRIDAY)
+    syms = [u["symbol"] for u in unders]
+    check("an underlying with no live contract is not fetched",
+          "DEADSTOCK" in syms, False)
+    check("  and the reason is recorded",
+          any(m["symbol"] == "DEADSTOCK" for m in diff.get("no_future_expiry", [])),
+          True)
+    check("every underlying carries an explicit ISO date",
+          all(len(u["expiry"]) == 10 and u["expiry"][4] == "-" for u in unders), True)
+    check("  and none carries a keyword",
+          any("current_" in u["expiry"] for u in unders), False)
+    check("indices are ordered first", unders[0]["kind"], "index")
+finally:
+    U._download_master, U.fetch_nse_fo_symbols = saved_dl, saved_nse
+
+# Checked on the MODULE NAMESPACE, not the source text. Every file here explains
+# the keyword bug at length and deliberately names current_week while doing so --
+# a text search finds the explanation and reports it as the thing it warns about.
+# This is the third time that trap has caught me in this repo; the namespace
+# cannot lie about it.
+check("config exposes no expiry-keyword constant",
+      any("EXPIRY_KEYWORD" in n or n == "STOCK_EXPIRY_KEYWORD"
+          for n in dir(C)), False)
+check("  and no config value is a relative keyword",
+      any(isinstance(v, str) and v.startswith("current_")
+          for n, v in vars(C).items() if not n.startswith("_")), False)
+check("  INDEX_SYMBOLS is names only, no per-index settings",
+      all(isinstance(x, str) for x in C.INDEX_SYMBOLS), True,
+      ", ".join(C.INDEX_SYMBOLS))
 
 print()
 print("THE UNIVERSE IS RESOLVED, NEVER HARDCODED")

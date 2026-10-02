@@ -119,8 +119,13 @@ class Pacer:
 # FETCH
 # ══════════════════════════════════════════════════════════════════
 
-def fetch_chain(key: str, expiry_keyword: str, headers: dict, pacer: Pacer) -> list:
+def fetch_chain(key: str, expiry_date: str, headers: dict, pacer: Pacer) -> list:
     """One expiry's full chain. Raises on exhausted retries.
+
+    expiry_date is an EXPLICIT YYYY-MM-DD, resolved from the instrument master,
+    never one of Upstox's relative keywords. current_week resolved to an
+    already-expired Tuesday on any Wednesday-to-Friday and returned a chain with
+    no strikes -- see fno_universe.parse_master for the full account.
 
     429 and 5xx are retried with backoff; a 4xx that is not 429 is NOT -- a bad
     instrument key or an expiry keyword the underlying does not have answers
@@ -129,7 +134,7 @@ def fetch_chain(key: str, expiry_keyword: str, headers: dict, pacer: Pacer) -> l
     """
     url = (f"{UPSTOX_BASE}/option/chain"
            f"?instrument_key={requests.utils.quote(key, safe='')}"
-           f"&expiry_date={expiry_keyword}")
+           f"&expiry_date={expiry_date}")
     last = ""
     for attempt in range(MAX_RETRIES):
         pacer.wait()
@@ -403,6 +408,15 @@ def main() -> int:
             continue
 
         d = parsed["daily"]
+        if d["expiry_date"] and str(d["expiry_date"])[:10] != u["expiry"]:
+            # Not fatal -- the chain is real data for a real expiry -- but it means
+            # the master and the API disagree about the nearest contract, and a
+            # series silently mixing tenors is worse than one with a flagged row.
+            log.warning(f"{u['symbol']}: asked {u['expiry']}, chain returned "
+                        f"{str(d['expiry_date'])[:10]}")
+            failures.append({"symbol": u["symbol"], "kind": u["kind"],
+                             "error": f"expiry mismatch: asked {u['expiry']}, "
+                                      f"got {str(d['expiry_date'])[:10]}"})
         dte = None
         if d["expiry_date"]:
             try:
@@ -414,7 +428,11 @@ def main() -> int:
             "trade_date": trade_date, "underlying_symbol": u["symbol"],
             "underlying_key": u["key"], "kind": u["kind"],
             "india_vix": vix, "days_to_expiry": dte,
-            "expiry_keyword": u["expiry"], "snapshot_taken_at": snap, **d})
+            # What we ASKED for, beside what the chain came back with. If the two
+            # ever disagree the series is recording a different contract than the
+            # one resolved, and only storing both makes that visible.
+            "expiry_keyword": f'{u["expiry_source"]}={u["expiry"]}',
+            "snapshot_taken_at": snap, **d})
         for s in parsed["strikes"]:
             strike_rows.append({
                 "trade_date": trade_date, "underlying_symbol": u["symbol"],
