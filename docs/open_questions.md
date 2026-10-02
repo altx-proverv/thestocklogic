@@ -97,13 +97,33 @@ populations from being pooled.
 
 ---
 
-## FIXED, PENDING APPLICATION
+## MIGRATION STATE — verified against the live schema 2026-10-03
+
+**Applied** (renamed out of `PENDING_`): `atlas_trades_product`,
+`live_signals_kind`, `signal_excursions` (source CHECK admits `reject`),
+`reject_sample` (six-for-six), `repair_measurement_targets`,
+`meridian_iv_recorder`.
+
+**Still pending**, probed rather than assumed:
+
+| file | what is missing |
+|---|---|
+| `atlas_live_zones` | table exists; `inside`, `held`, `sl`, `setup_name`, `batch_date`, `cycle_n` do not. The live view has never populated and fails silently. |
+| `repair_partial_applications` | `v_marks_zone_valid` and `v_wrong_side_excluded` are absent; `v_signal_window` still holds its pre-30-September definition. **The wrong-side exclusion is still not in force.** |
+| `sector_pubkind_derived` | `signals.sector`, `sector_bias`, `sector_as_of` all absent — so `sector=OTHER` is still what the row says. |
+| `signals_features_provenance` | `signals_features` does not exist. The 54-column learning-loop table is not there, so the re-run in the section above has nowhere to read from. |
+| `market_flash` | table absent, and it is scheduled nowhere regardless. |
+
+## FIXED AND APPLIED
 
 `PENDING_repair_measurement_targets.sql` — the measurement basis moved from
 `entry_ref` to the actual fill, and 31 signals carry a target that is not 2R.
-Three numbers, which are about different things: **22.2%** is published, **18.8%**
-is the old record restated honestly (the size of the overstatement), and **~23.2%**
-is what re-resolution will actually show. The headline rate goes slightly *up*
+**Applied 2026-10-03. The outcome, measured:** 282 resolved (from 293), **26.2%**
+hit rate (CI 21.5–31.7), expectancy **−0.2128R** (from −0.3459R), and **16
+AMBIGUOUS** rows correctly refusing to take a side. My prediction of ~23.2% was
+low. Three numbers were in play: **22.2%** published, **18.8%** the old record
+restated honestly (the size of the overstatement), **26.2%** what it actually
+became. The headline rate goes slightly *up*
 while the record gets stricter, because what changes is what a win means — 65 wins
 at a median 2.08R of a risk nobody took, 10 under +1R and 7 losing money, become
 63 wins at exactly 2R of the risk taken. ~13 rows move to AMBIGUOUS or OPEN and

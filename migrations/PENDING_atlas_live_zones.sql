@@ -1,3 +1,21 @@
+-- ─────────────────────────────────────────────────────────────────────
+-- STATUS 2026-10-03: PARTIALLY APPLIED, AND THE LIVE VIEW IS DEAD UNTIL IT IS NOT.
+--
+-- Probed against the live schema today:
+--   present  symbol, direction, signal_date, updated_at
+--   MISSING  inside, held, sl, setup_name, batch_date, cycle_n
+--
+-- atlas/signal/market_open.push_live_zones() sends all ten. PostgREST rejects the
+-- whole insert on the first unknown column, so atlas_live_zones has never received
+-- a row and the live section of signals.html has never populated. It fails
+-- silently because push_live_zones is deliberately not routed through
+-- breaker.record_read -- a view that cannot fill is not a reason to halt trading.
+--
+-- This is the same shape as PENDING_repair_partial_applications: a file that
+-- reported success and applied a prefix. Run the remaining statements ONE AT A
+-- TIME and check the verify block.
+-- ─────────────────────────────────────────────────────────────────────
+
 -- The live view: what the market-hours loop is watching, right now.
 --
 -- WHY A TABLE AND NOT A VIEW OVER signals. The loop already fetches a quote for
