@@ -316,6 +316,131 @@ from engine.reject_sample import draw as _draw
 check("the sampler defines controls by `disqualified`, not by gates_failed",
       'df["disqualified"] == True' in inspect.getsource(_draw))
 
+print("\n── PANDAS 3: A MIXED MASK, WHICH IS THE ONLY SHAPE THAT FAILS ──")
+# THE SECOND BOX CRASH. score_vectorized built gates_failed as int16 and
+# compute_trade_levels_vectorized rebuilt it as int64; process_direction then
+# assigned those int64 values back through df.loc[qual_mask, col]. pandas 2 warns
+# and silently widens. pandas 3 -- which the box runs and this venv does not --
+# raises TypeError: Invalid value '[4 4 4 ... 4 1 1]' for dtype 'int16'.
+#
+# WHY THE EARLIER TEST STILL PASSED. The single-row fixture above has an all-True
+# mask, and pandas treats a full-coverage .loc assignment as a column REPLACEMENT,
+# which is allowed to change dtype and never warns. Only a PARTIAL mask takes the
+# in-place path that objects. So the frame below must have some rows qualify and
+# some not -- the one property the previous fixtures lacked, and the one every
+# real batch has.
+#
+# Under PYTHONWARNINGS=error::FutureWarning (which tests/run_all.py now sets) this
+# section fails against the pre-fix code on pandas 2 as well, so the suite no
+# longer depends on being run against the box's pandas to catch this class.
+def mixed_frame():
+    n = 4
+    d = pd.DataFrame({
+        "symbol": ["PASS", "BADZONE", "NOSTRUCT", "ALSOPASS"],
+        "direction": ["long"] * n,
+        "date": [pd.Timestamp("2026-10-02")] * n,
+        "close": [98.0] * n, "open": [98.0] * n, "high": [99.0] * n,
+        "low": [97.0] * n, "volume": [1e6] * n, "atr": [2.0] * n,
+        "atr_pct": [2.0] * n, "rvol": [1.5] * n, "rsi": [55.0] * n,
+        "is_warmup": [False] * n, "no_trade_zone": [0] * n,
+        "market_regime": ["bull"] * n, "adx": [25.0] * n, "adx_ranging": [0] * n,
+        "weekly_bullish": [1] * n, "weekly_bearish": [0] * n,
+        "near_demand_ob": [1] * n, "price_in_bull_fvg": [0] * n,
+        "bos_bull": [1] * n, "choch_bull": [0] * n, "bull_liq_sweep": [0] * n,
+        "near_supply_ob": [0] * n, "price_in_bear_fvg": [0] * n,
+        "bos_bear": [0] * n, "bear_liq_sweep": [0] * n,
+        "recent_bos_choch": [1, 1, 0, 1],          # NOSTRUCT fails gate 9
+        "last_swing_low": [95.0, np.nan, 95.0, 95.0],
+        "last_swing_high": [105.0] * n,
+        "active_zone_high": [99.0, np.nan, 99.0, 99.0],
+        "active_zone_low": [97.0, np.nan, 97.0, 97.0],
+        "active_zone_source": ["demand_ob"] * n,
+    })
+    for c in FAM:
+        d[c] = np.nan
+    d["active_demand_ob_high"] = [99.0, np.nan, 99.0, 99.0]
+    d["active_demand_ob_low"] = [97.0, np.nan, 97.0, 97.0]
+    return d
+
+
+try:
+    mixed = s3b.process_direction(mixed_frame(), "long", {}, {})
+    mcrash = None
+except Exception as e:
+    mixed, mcrash = None, f"{type(e).__name__}: {str(e)[:110]}"
+check("process_direction survives a PARTIAL qualifying mask", mcrash is None, mcrash or "")
+
+if mixed is not None:
+    n_q = int(mixed["qualifies"].sum())
+    check("  the mask really was partial", 0 < n_q < len(mixed),
+          f"{n_q} of {len(mixed)} qualified")
+    check("  gates_failed keeps its declared dtype",
+          mixed["gates_failed"].dtype == s3b.GATES_FAILED_DTYPE,
+          f"{mixed['gates_failed'].dtype} not {s3b.GATES_FAILED_DTYPE}")
+    check("  gates_failed_mask keeps its declared dtype",
+          mixed["gates_failed_mask"].dtype == s3b.GATES_MASK_DTYPE,
+          f"{mixed['gates_failed_mask'].dtype} not {s3b.GATES_MASK_DTYPE}")
+    check("  and the values are still right",
+          int(mixed.loc[mixed['symbol'] == 'NOSTRUCT', 'gates_failed'].iloc[0]) == 1
+          and int(mixed.loc[mixed['symbol'] == 'PASS', 'gates_failed'].iloc[0]) == 0)
+    check("both build sites agree on dtype",
+          s3b.GATES_FAILED_DTYPE == np.int16 and s3b.GATES_MASK_DTYPE == np.int32)
+
+print("\n── THE INVARIANT: a stage must hand back the dtype it was given ──")
+# This is the regression test for the box crash, stated as an invariant rather
+# than as "does it crash". Crash-based tests for this are unreliable here: pandas 2
+# only WARNS, the warning only fires on a PARTIAL mask, and 03b suppressed all
+# warnings at import anyway. The invariant fails against the pre-fix code
+# immediately and on any pandas version: int16 went in, int64 came out.
+try:
+    from accumulation import apply_accumulation_screen as _scr
+except Exception:
+    from engine.accumulation import apply_accumulation_screen as _scr
+sv = s3b.score_vectorized(mixed_frame(), {}, {}, screen=_scr)
+sv["setup_name"] = s3b.determine_setup_names(sv)
+qm = sv["qualifies"].to_numpy(dtype=bool, copy=True)
+check("the fixture produces a partial qualifying mask", 0 < qm.sum() < len(qm),
+      f"{qm.sum()} of {len(qm)}")
+lv2 = s3b.compute_trade_levels_vectorized(sv[qm].copy())
+for c in ("gates_failed", "gates_failed_mask"):
+    check(f"compute_trade_levels_vectorized preserves {c}'s dtype",
+          lv2[c].dtype == sv[c].dtype,
+          f"{sv[c].dtype} in, {lv2[c].dtype} out")
+
+print("\n── 03b no longer silences its own deprecation warnings ──")
+# warnings.filterwarnings("ignore") at module import is why pandas spent a year
+# saying this would break and nobody heard it. A deprecation is the only advance
+# notice that a library upgrade will take the pipeline down.
+import warnings as _w
+cat_all = [f for f in _w.filters
+           if f[0] == "ignore" and f[2] is Warning and f[1] is None and f[3] is None]
+check("no catch-all ignore filter is installed", not cat_all, str(cat_all[:1]))
+mod_src = (ROOT / "engine/03b_score.py").read_text()
+check("the blanket filterwarnings(\"ignore\") is gone",
+      'warnings.filterwarnings("ignore")\n' not in mod_src)
+check("FutureWarning is not suppressed by category",
+      'category=FutureWarning' not in mod_src)
+check("RuntimeWarning still is, by name", 'category=RuntimeWarning' in mod_src)
+
+print("\n── the propagation widens explicitly instead of relying on pandas ──")
+src = inspect.getsource(s3b.process_direction)
+check("the loop goes through _assign_masked", "_assign_masked" in src)
+check("no bare df.loc[qual_mask, col] = assignment remains",
+      "df.loc[qual_mask, col] = levels" not in src)
+hsrc = inspect.getsource(s3b._assign_masked)
+check("_assign_masked widens the destination first", "result_type" in hsrc
+      and "astype(want)" in hsrc)
+# it must be a no-op when the dtypes already agree
+probe = pd.DataFrame({"a": np.zeros(4, dtype=np.int16)})
+s3b._assign_masked(probe, np.array([True, True, False, False]),
+                   "a", np.array([3, 3], dtype=np.int16))
+check("  and does not widen when it need not", probe["a"].dtype == np.int16,
+      str(probe["a"].dtype))
+s3b._assign_masked(probe, np.array([True, True, False, False]),
+                   "a", np.array([3.5, 3.5]))
+check("  but does widen when it must", probe["a"].dtype == np.float64,
+      str(probe["a"].dtype))
+
 print()
 if FAILS:
     print(f"FAILED {len(FAILS)}: {FAILS}")

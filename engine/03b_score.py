@@ -14,7 +14,21 @@ import pandas as pd
 from collections import Counter
 from tqdm import tqdm
 
-warnings.filterwarnings("ignore")
+# NOT a blanket ignore. This line used to be warnings.filterwarnings("ignore"),
+# which suppressed FutureWarning along with everything else -- so pandas spent a
+# year telling us that assigning int64 values into an int16 column would stop
+# working, and this module silenced it. On 2026-10-02 pandas 3 on the box turned
+# that warning into a TypeError, 03b crashed, and nothing published.
+#
+# Deprecations are the one category that must stay audible: they are the only
+# advance notice that a library upgrade will break the pipeline. Numeric noise is
+# suppressed by name instead.
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", message="invalid value encountered")
+warnings.filterwarnings("ignore", message="divide by zero encountered")
+warnings.filterwarnings("ignore", message="Mean of empty slice")
+warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+warnings.filterwarnings("ignore", message="numpy.ndarray size changed")
 Path("reports").mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -96,6 +110,16 @@ GATE_ORDER = (
 # compute_zone_entries, for a row whose entry geometry is unusable -- that gate
 # lives at a different stage and cannot be evaluated here.
 GATE_ZONE_ENTRY_BIT = 9
+
+# ONE DTYPE PAIR FOR BOTH BUILD SITES. score_vectorized built these as int16/int32
+# and compute_trade_levels_vectorized rebuilt them as int64, and
+# process_direction's propagation then assigned int64 values into an int16 column.
+# On pandas 2.x that is a FutureWarning and succeeds; on pandas 3.x -- which the
+# box runs and this venv does not -- it is a TypeError, and 03b published nothing.
+# int16 holds ten gates with room; int32 holds the mask with room for twenty-two
+# more. Both are explicit so neither site can quietly widen.
+GATES_FAILED_DTYPE = np.int16
+GATES_MASK_DTYPE = np.int32
 
 
 def gate_conditions(df: pd.DataFrame) -> tuple:
@@ -223,13 +247,13 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
 
     # The unconditioned view. int8 is enough for 9 gates and keeps the frame small
     # at ~183k rows per direction.
-    failed = np.zeros(len(df), dtype=np.int16)
-    bits   = np.zeros(len(df), dtype=np.int32)
+    failed = np.zeros(len(df), dtype=GATES_FAILED_DTYPE)
+    bits   = np.zeros(len(df), dtype=GATES_MASK_DTYPE)
     for i, (name, cond) in enumerate(conds.items()):
         c = cond.to_numpy(dtype=bool, na_value=False) if hasattr(cond, "to_numpy") \
             else np.asarray(cond, dtype=bool)
-        failed += c
-        bits   |= (c.astype(np.int32) << i)
+        failed += c.astype(GATES_FAILED_DTYPE)
+        bits   |= (c.astype(GATES_MASK_DTYPE) << i)
     df["gates_failed"]      = failed
     df["gates_failed_mask"] = bits
 
@@ -460,10 +484,17 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
         # np.ndarray and worked; this site operates on a column and did not.
         bad = invalid.to_numpy(dtype=bool, na_value=False) \
             if hasattr(invalid, "to_numpy") else np.asarray(invalid, dtype=bool)
-        base = df["gates_failed"].fillna(0).to_numpy(dtype=np.int64)
-        mask = df["gates_failed_mask"].fillna(0).to_numpy(dtype=np.int64)
-        df["gates_failed"] = base + bad.astype(np.int64)
-        df["gates_failed_mask"] = mask | (bad.astype(np.int64) << GATE_ZONE_ENTRY_BIT)
+        base = df["gates_failed"].fillna(0).to_numpy(dtype=GATES_FAILED_DTYPE)
+        mask = df["gates_failed_mask"].fillna(0).to_numpy(dtype=GATES_MASK_DTYPE)
+        # Cast back to the SAME dtype score_vectorized used. These values travel
+        # home through a masked .loc assignment, which on pandas 3 refuses to
+        # widen an int16 column to hold int64 values -- even when every value
+        # fits.
+        df["gates_failed"] = (base + bad.astype(GATES_FAILED_DTYPE)) \
+            .astype(GATES_FAILED_DTYPE)
+        df["gates_failed_mask"] = (
+            mask | (bad.astype(GATES_MASK_DTYPE) << GATE_ZONE_ENTRY_BIT)
+        ).astype(GATES_MASK_DTYPE)
 
     return df
 
@@ -586,9 +617,37 @@ def process_direction(combined: pd.DataFrame, direction: str,
                     # reject sampler would record it as failing nothing.
                     "gates_failed","gates_failed_mask"]:
             if col in levels.columns:
-                df.loc[qual_mask, col] = levels[col].values
+                _assign_masked(df, qual_mask, col, levels[col].values)
 
     return df
+
+
+def _assign_masked(df: pd.DataFrame, mask, col: str, values) -> None:
+    """df.loc[mask, col] = values, widening the column FIRST when it has to.
+
+    pandas 2 emits a FutureWarning and silently upcasts when the values do not fit
+    the destination column's dtype. pandas 3 raises TypeError -- "Invalid value
+    '[4 4 4 ... 4 1 1]' for dtype 'int16'" -- even when every value is
+    representable, because the objection is to the implicit widening, not to the
+    data.
+
+    The box runs pandas 3 and this venv runs 2.3.3, so the whole class of defect
+    is a passing test here and a crash there. Nineteen columns go through this
+    loop; any of them can be the next one. Widening explicitly is what pandas asks
+    for and it is a no-op whenever the dtypes already agree.
+    """
+    if col not in df.columns:
+        df[col] = values if np.ndim(values) == 0 else pd.Series(values, index=df.index[mask]) \
+            .reindex(df.index)
+        return
+    cur = df[col].dtype
+    try:
+        want = np.result_type(cur, np.asarray(values).dtype)
+    except TypeError:
+        want = object
+    if want != cur:
+        df[col] = df[col].astype(want)
+    df.loc[mask, col] = values
 
 
 def _latest_slice(df: pd.DataFrame) -> pd.DataFrame:

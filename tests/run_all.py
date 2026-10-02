@@ -11,6 +11,7 @@ Exits non-zero if anything fails, so this works unchanged from a shell, from
 cron, or from CI.
 """
 
+import os
 import sys
 import shutil
 import subprocess
@@ -20,6 +21,19 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # (label, argv). Self-tests live in their modules; this just drives them so one
 # command covers everything.
+# PANDAS 3 SEMANTICS, ON A PANDAS 2 VENV.
+#
+# The box runs pandas 3 and this venv runs 2.3.3, so an entire class of defect is a
+# passing test here and a crash there: pandas 2 emits a FutureWarning and silently
+# widens a column whose dtype cannot hold what is being assigned, while pandas 3
+# raises TypeError. 03b published nothing for a night because of exactly that, and
+# the suite was green throughout.
+#
+# Turning the warning into an error makes the local run behave like the box. If a
+# third-party library trips this and cannot be fixed here, narrow it with a
+# module-specific filter rather than removing this line.
+os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
+
 SUITES = [
     ("entry ordering", [sys.executable, "tests/test_entry_ordering.py"]),
     ("reconcile",      [sys.executable, "tests/test_reconcile.py"]),

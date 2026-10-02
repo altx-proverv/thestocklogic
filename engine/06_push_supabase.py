@@ -20,7 +20,21 @@ try:
 except ModuleNotFoundError:
     from zone_entry import measurement_targets
 
-warnings.filterwarnings("ignore")
+# NOT a blanket ignore. This line used to be warnings.filterwarnings("ignore"),
+# which suppressed FutureWarning along with everything else -- so pandas spent a
+# year telling us that assigning int64 values into an int16 column would stop
+# working, and this module silenced it. On 2026-10-02 pandas 3 on the box turned
+# that warning into a TypeError, 03b crashed, and nothing published.
+#
+# Deprecations are the one category that must stay audible: they are the only
+# advance notice that a library upgrade will break the pipeline. Numeric noise is
+# suppressed by name instead.
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", message="invalid value encountered")
+warnings.filterwarnings("ignore", message="divide by zero encountered")
+warnings.filterwarnings("ignore", message="Mean of empty slice")
+warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+warnings.filterwarnings("ignore", message="numpy.ndarray size changed")
 
 from engine.provenance import engine_sha          # noqa: E402
 

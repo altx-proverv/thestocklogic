@@ -458,3 +458,55 @@ membership test would measure the accumulation screen rather than the filters.
 computed, not by what its name suggests. When a later stage can reverse an earlier
 decision, any column written before that stage records the earlier decision
 forever — so the definition of a group has to name the stage it comes from.
+
+## A module that silences its own warnings cannot be warned (2026-10-03)
+
+03b crashed on the box a second time:
+
+```
+TypeError: Invalid value '[4 4 4 ... 4 1 1]' for dtype 'int16'
+```
+
+`score_vectorized` built `gates_failed` as `int16`; `compute_trade_levels_vectorized`
+rebuilt it as `int64`; `process_direction` then assigned those values home through
+`df.loc[qual_mask, col]`. pandas 2 warns and silently widens. **pandas 3 raises** —
+and the box runs pandas 3 while the dev venv runs 2.3.3.
+
+So the environments diverge by a major version, and the entire class of
+dtype-coercion defect is a passing test locally and a crash in production. That
+alone would be the lesson. But the actual reason nobody saw it coming is worse:
+
+```python
+# engine/03b_score.py:17
+warnings.filterwarnings("ignore")
+```
+
+pandas spent **a year** emitting `FutureWarning: Setting an item of incompatible
+dtype is deprecated and will raise an error in a future version` — and the module
+silenced it at import, along with every other deprecation in the scoring engine.
+Three other pipeline stages had the same line. The advance notice was delivered and
+discarded.
+
+Setting `PYTHONWARNINGS=error::FutureWarning` in the test runner does nothing
+against that, because the module-level `filterwarnings` call runs at import and
+wins. A blanket suppression is not a local decision; it overrides the operator.
+
+**Why a crash-based test is the wrong instrument here.** Three things all had to
+line up to reproduce it: pandas 2 only *warns*, the warning only fires on a
+**partial** boolean mask (a full-coverage `.loc` assignment is treated as a column
+replacement and is allowed to change dtype silently), and the module suppressed
+warnings anyway. An all-True fixture — which the first test used — cannot trigger
+it on any pandas version.
+
+The test that works asserts the **invariant** instead: a stage hands back the dtype
+it was given. `int16` in, `int64` out is a failure on every pandas version,
+immediately, with no partial mask and no warning machinery involved.
+
+**Three lessons.**
+1. Suppress warnings by category or message, never wholesale. Deprecations are the
+   only advance notice that a library upgrade will break the pipeline.
+2. Know your production interpreter's library versions. A suite on pandas 2
+   validating code that runs on pandas 3 is theatre for this whole class.
+3. When a defect needs several conditions to surface, test the invariant it
+   violates rather than the symptom it produces. The symptom needs all the
+   conditions; the invariant needs none.
