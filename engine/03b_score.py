@@ -454,9 +454,16 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     # with a usable setup and an unusable stop is the nearest miss there is and
     # must be distinguishable from one that failed nine feature gates.
     if "gates_failed" in df.columns:
-        df["gates_failed"] = df["gates_failed"].fillna(0).astype(int) + invalid.astype(int)
-        df["gates_failed_mask"] = (df["gates_failed_mask"].fillna(0).astype(int)
-                                   | (invalid.astype(int) << GATE_ZONE_ENTRY_BIT))
+        # NUMPY, NOT A SERIES. pandas implements & | ^ on a Series and does NOT
+        # implement << or >>, so `series << 9` raises TypeError rather than
+        # broadcasting. The mask built in score_vectorized happens to operate on
+        # np.ndarray and worked; this site operates on a column and did not.
+        bad = invalid.to_numpy(dtype=bool, na_value=False) \
+            if hasattr(invalid, "to_numpy") else np.asarray(invalid, dtype=bool)
+        base = df["gates_failed"].fillna(0).to_numpy(dtype=np.int64)
+        mask = df["gates_failed_mask"].fillna(0).to_numpy(dtype=np.int64)
+        df["gates_failed"] = base + bad.astype(np.int64)
+        df["gates_failed_mask"] = mask | (bad.astype(np.int64) << GATE_ZONE_ENTRY_BIT)
 
     return df
 
@@ -571,7 +578,13 @@ def process_direction(combined: pd.DataFrame, direction: str,
                     "entry_dist_pct","qty","risk_inr","notional","product",
                     "target_1","target_2","rr_1","rr_2",
                     "entry_valid","reject_reason","entry_zone_source","qualifies",
-                    "disqualified","disqualify_reason"]:
+                    "disqualified","disqualify_reason",
+                    # Gate 10 is counted inside compute_trade_levels_vectorized and
+                    # dies here if it is not listed -- exactly what the comment
+                    # above warns about. A row rejected by zone validation is the
+                    # nearest miss the funnel produces, and without these two the
+                    # reject sampler would record it as failing nothing.
+                    "gates_failed","gates_failed_mask"]:
             if col in levels.columns:
                 df.loc[qual_mask, col] = levels[col].values
 

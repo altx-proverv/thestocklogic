@@ -145,6 +145,16 @@ CREATE POLICY "authenticated read reject_sample"
 COMMENT ON TABLE public.reject_sample IS
   'A stratified daily sample of stock-days that did NOT qualify, at 10 controls per qualifying case, written by engine/reject_sample.py. Exists to test the engine''s premise: whether the ~3.6 symbol-days a night that pass twelve gates behave any differently from 3.6 drawn at random from the ~460 that do not. Every analysis before this one compared winners against losers and so could not ask that question. Sampled rather than stored whole because a 128:1 control ratio gives a confidence interval only 0.4% narrower than 10:1 -- not because the rows are expensive. Read alongside signal_excursions where source=''reject'' for the forward paths.';
 
+-- ONE SEMANTIC TRAP, WRITTEN DOWN BEFORE ANYONE ANALYSES THIS. gates_failed means
+-- "this row's features failed a gate", NOT "this row was rejected". The
+-- accumulation screen runs after 03b's gate block and can un-disqualify a row,
+-- clearing disqualified and disqualify_reason while gates_failed keeps its count --
+-- so a QUALIFYING row can carry gates_failed >= 1. Cases must therefore be defined
+-- by `qualifies`, never by gates_failed = 0; doing the latter puts every
+-- screen-recovered row in the control group and measures the screen instead of the
+-- filters. Nothing in this table is a recovered row (the sampler draws only from
+-- disqualified == True), but the comparison's other side is full of them.
+
 COMMENT ON COLUMN public.reject_sample.gates_failed IS
   'How many of 03b''s gates this row''s features fail IN TOTAL, computed without short-circuiting. 1 means a near miss -- acceptable everywhere except one place -- and those are the only informative negatives. NOT recoverable from disqualify_reason, which is the FIRST gate failed and is confounded with gate position: the last gate''s rejects are all near misses by construction, the first gate''s fail a median of three.';
 
