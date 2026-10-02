@@ -96,15 +96,18 @@ def evaluate(sig, stock_df):
     qty         = int(sig.get("qty") or 1)
     risk_inr    = float(sig.get("risk_inr") or 0)
 
-    # Signals pushed before the measurement yardstick was restored carry a NULL
-    # target_1 and used to fall straight through the guard below as SKIP --
-    # which is why this job reported "Processed: 0" while looking healthy.
-    # Derive the same 2R/3R yardstick so the historical record is scored too.
-    if t1 <= 0 and entry_ref > 0 and sl > 0:
-        _t1, _ = measurement_targets(entry_ref, sl, direction)
-        t1 = float(_t1 or 0)
-
-    if entry_ref <= 0 or sl <= 0 or t1 <= 0:
+    # The stored target_1 is NOT the yardstick. It is computed at publish time
+    # from entry_ref, which is the price the setup was priced off -- and the trade
+    # is filled at actual_entry, which is a gap away and not known until the next
+    # open. So a "2R win" measured against the stored target paid 2R on a risk
+    # nobody took. Measured off 293 resolved rows, the stored target is 2.082R off
+    # the fill at the median, 1.73R at p10 and 6.71R at p90.
+    #
+    # Worse, on 17 rows the stored target is not beyond the fill at all. Those
+    # were booked as WIN_T1 the instant price touched a level BETWEEN the entry
+    # and the stop, and seven of them were booked as wins while realising a
+    # negative R. The target is re-derived below, after the fill is known.
+    if entry_ref <= 0 or sl <= 0:
         return {"entry_status": "NO_LEVELS", "outcome": "SKIP"}
 
     next_days = next_n_trading_days(signal_date, 6)
@@ -130,6 +133,26 @@ def evaluate(sig, stock_df):
         if next_open > sl:
             return {"entry_status": "GAPPED_ABOVE_SL", "outcome": "INVALIDATED", "actual_entry": next_open}
         actual_entry = max(next_open, entry_low)
+
+    # THE YARDSTICK, off the fill. 2R of the risk actually taken.
+    t1, _t2 = measurement_targets(actual_entry, sl, direction)
+    if not t1:
+        # measurement_targets refuses a stop on the wrong side of the fill, which
+        # is a real condition: a long gapping to a fill below its own stop. The
+        # gap guards above catch most of these; anything left is unmeasurable
+        # rather than a win.
+        return {"entry_status": "NO_LEVELS", "outcome": "SKIP",
+                "actual_entry": round(actual_entry, 2)}
+    t1 = float(t1)
+
+    # FAIL CLOSED on a target that is not beyond the fill. This cannot happen now
+    # that t1 is derived from actual_entry, and the assertion stays because it is
+    # the exact defect that put 10 false wins in the record: the guard is cheap
+    # and the failure it prevents was invisible for five months.
+    if (direction == "LONG" and t1 <= actual_entry) or \
+       (direction != "LONG" and t1 >= actual_entry):
+        return {"entry_status": "BAD_TARGET", "outcome": "SKIP",
+                "actual_entry": round(actual_entry, 2)}
 
     # Check outcome over next 5 days
     check_days = next_days[0:5]
@@ -165,7 +188,13 @@ def evaluate(sig, stock_df):
                 outcome = "WIN_T1"; exit_price = t1; exit_day = d; days_held = i+1; break
 
     if outcome == "WIN_T1":
-        pnl = abs(exit_price - actual_entry) * qty
+        # SIGNED, never abs(). abs() made a target BELOW the fill on a long book a
+        # positive P&L: OFFS 2026-06-01 was recorded as +226.36 per share while
+        # actually losing 226.36. Seven rows, 625.78 per unit of quantity, all of
+        # it in the favourable direction.
+        move = (exit_price - actual_entry) if direction == "LONG" \
+               else (actual_entry - exit_price)
+        pnl = move * qty
     elif outcome == "LOSS":
         pnl = -risk_inr if risk_inr > 0 else -abs(actual_entry - sl) * qty
     else:

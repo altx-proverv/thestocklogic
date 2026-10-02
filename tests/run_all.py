@@ -45,6 +45,7 @@ SUITES = [
     ("signal schema",   [sys.executable, "tests/test_signal_schema.py"]),
     ("excursions",      [sys.executable, "tests/test_excursions.py"]),
     ("detection score",  [sys.executable, "tests/test_detection_scoring.py"]),
+    ("outcome integrity",[sys.executable, "tests/test_outcome_integrity.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

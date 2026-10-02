@@ -336,3 +336,58 @@ remains. It is shared rather than copied precisely because the inline copy in
 **The lesson.** Interrogate the runtime object: the module namespace, the code
 object, the parsed tree. Never the file as text. And when the same fix lands
 twice, put it somewhere the third author has to find.
+
+## abs() on a P&L turns a loss into a win (2026-10-02)
+
+`update_outcomes.evaluate` booked a winning trade as:
+
+```python
+pnl = abs(exit_price - actual_entry) * qty
+```
+
+The `abs()` reads as defensive — "P&L magnitude, sign comes from the branch" —
+and it is, for every row where the target is actually beyond the fill. On 7 rows
+where it was not, the trade touched a level *between* the entry and the stop,
+`WIN_T1` was written, and `abs()` reported the resulting loss as a profit. OFSS
+2026-06-01 sits in the record at **+226.36 per share while actually losing
+226.36**.
+
+The LOSS branch directly below it uses `-abs(actual_entry - sl)` and is correct,
+which is what made the pair look considered rather than wrong.
+
+Three defects had to line up, and each on its own looked harmless:
+
+1. the win level came from `entry_ref` instead of the fill, so it could land
+   anywhere relative to the actual entry;
+2. nothing asserted the target was on the winning side of the fill;
+3. `abs()` erased the sign of whatever came out.
+
+**The lesson.** `abs()` in a P&L expression is a silent assumption about
+direction, and the place it fails is exactly the place the direction was already
+wrong. Sign the arithmetic from the direction field and let a negative number be
+negative — a loss booked as a loss is visible, and the guard in (2) then has
+something to catch. The same block existed in `trade_review.py` with the same
+`abs()`; two copies of a resolver is the actual defect, and only one of them was
+in the published path, which is why nothing ever visibly diverged.
+
+## Having the helper is not the same as reaching for it (2026-10-02)
+
+One turn after writing `tests/_srcutil.py` specifically to stop checks matching
+their own prose, I wrote `test_outcome_integrity.py` with
+`inspect.getsource(mod)` and a text search for `abs(` — and it failed on the
+comment explaining why the `abs()` had been removed. Sixth occurrence, second
+since the fix existed.
+
+Then the corrected version failed *again*: `executable_source()` stripped the
+prose, but the 400-character window after the marker ran past the win branch into
+the LOSS branch, where `abs(actual_entry - sl)` is correct. A scoping bug
+replacing a prose bug.
+
+The version that works finds the `if outcome == "WIN_T1"` node with `ast` and
+reads only that branch's body — and asserts the loss branch *still* contains a
+magnitude, so the check proves it is scoped rather than merely finding nothing.
+
+**The lesson.** "Search the source for a forbidden string" fails twice over: once
+on prose that discusses the string, and once on adjacent code where the string is
+correct. Both are symptoms of the same thing — the unit of the assertion was a
+character range when it should have been a syntax node. Name the node.

@@ -160,7 +160,13 @@ def evaluate_signal(sig, stock_df):
 
     # Calculate P&L
     if outcome == "WIN_T1":
-        pnl = abs(exit_price - actual_entry) * qty
+        # SIGNED. See the note in update_outcomes.evaluate -- this is the second
+        # copy of that block and it carried the same abs() for the same five
+        # months. Two copies of a resolver is the actual defect; this one is a
+        # reporting path only, which is why nothing published diverged visibly.
+        move = (exit_price - actual_entry) if direction == "LONG" \
+               else (actual_entry - exit_price)
+        pnl = move * qty
     elif outcome == "LOSS":
         pnl = -risk_inr if risk_inr > 0 else -abs(actual_entry - sl) * qty
     else:
