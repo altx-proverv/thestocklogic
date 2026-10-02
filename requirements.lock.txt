@@ -25,23 +25,28 @@
 #   numpy    2.4.6
 #   pyarrow  24.0.0
 #
-# NOT YET VERIFIED: the box's Python minor version. pandas 3.0 requires >= 3.11,
-# so it is at least that; this venv uses 3.13.16. If the box differs, update
-# PYTHON_EXPECTED in tests/test_environment.py — a minor-version gap is a smaller
-# risk than the library gap was, but it is the same kind of risk.
+#   Python   3.14.4   (this venv: 3.14.8 from brew — same minor, so the same
+#                       language semantics, the same cp314 ABI and the same wheels.
+#                       Matching the patch is false precision; the minor is
+#                       asserted hard in tests/test_environment.py, the patch is
+#                       reported as a note.)
 #
 # Everything below the trio is resolved locally, not read off the box. Treat the
 # three as authoritative and the rest as "what satisfied them on 2026-10-03".
 #
+# Two packages have no cp314 wheel and are built from source on install: pyppeteer
+# and ta. Both build clean and neither is in the nightly publishing path, but a
+# fresh venv takes a minute longer because of them.
+#
 # Regenerate:  ./venv/bin/pip freeze > requirements.lock.txt   (then restore this
-#              header, and re-confirm the trio against the box)
+#              header, and re-confirm the trio AND the Python minor against the box)
 
 # ── pinned to production, do not move without re-checking the box ──
 pandas==3.0.3    # verified against the box
 numpy==2.4.6    # verified against the box
 pyarrow==24.0.0    # verified against the box
 
-# ── resolved locally against the three above ──
+# ── resolved locally against the three above, on Python 3.14 ──
 appdirs==1.4.4
 attrs==26.1.0
 beautifulsoup4==4.14.3

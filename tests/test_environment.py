@@ -28,10 +28,20 @@ from tests._srcutil import executable_source   # after sys.path, deliberately
 
 LOCK = ROOT / "requirements.lock.txt"
 
-# pandas 3.0 requires >= 3.11. The box's exact minor is not yet confirmed; this is
-# what the venv is built on. A mismatch here is a smaller risk than a library
-# mismatch but the same kind, so it is reported rather than ignored.
-PYTHON_EXPECTED = (3, 13)
+# THE BOX RUNS 3.14.4 (confirmed 2026-10-03) AND THIS IS A HARD CHECK.
+#
+# It was briefly a soft NOTE while the box's version was unknown, and a NOTE is
+# exactly the shape of the failure that cost a night of publishing: pandas spent a
+# year emitting a FutureWarning about the int16 dtype change and the module silenced
+# it. A signal with no teeth is indistinguishable from no signal. The minor version
+# is now known, so it is asserted.
+#
+# MINOR, NOT PATCH. brew carries 3.14.8 and the box runs 3.14.4; a patch difference
+# inside a minor shares the language semantics, the cp314 ABI and the same wheels,
+# so matching it would be false precision. The patch level is reported as a NOTE --
+# which is the right use of a NOTE, for something genuinely informational.
+PYTHON_EXPECTED = (3, 14)
+PYTHON_PATCH_BOX = (3, 14, 4)     # what the box reported; brew offers 3.14.8
 PYTHON_MINIMUM = (3, 11)          # below this, pandas 3 cannot install at all
 
 # The three the box was read for. Anything else in the lock is locally resolved.
@@ -79,8 +89,14 @@ print("\n── the interpreter can host the pinned pandas ──")
 cur = sys.version_info[:2]
 check(f"Python >= {PYTHON_MINIMUM[0]}.{PYTHON_MINIMUM[1]} (pandas 3 requires it)",
       cur >= PYTHON_MINIMUM, f"running {cur[0]}.{cur[1]}")
-soft(f"Python is {PYTHON_EXPECTED[0]}.{PYTHON_EXPECTED[1]} as the lock assumes",
-     cur == PYTHON_EXPECTED, f"running {cur[0]}.{cur[1]}")
+check(f"Python minor is {PYTHON_EXPECTED[0]}.{PYTHON_EXPECTED[1]}, matching the box",
+      cur == PYTHON_EXPECTED,
+      f"running {cur[0]}.{cur[1]} — the box runs "
+      f"{PYTHON_EXPECTED[0]}.{PYTHON_EXPECTED[1]}; rebuild the venv")
+soft(f"patch level matches the box exactly ({'.'.join(map(str, PYTHON_PATCH_BOX))})",
+     sys.version_info[:3] == PYTHON_PATCH_BOX,
+     f"running {'.'.join(map(str, sys.version_info[:3]))}; same minor, so same "
+     f"language semantics and ABI — informational only")
 
 print("\n── the running versions match the lock ──")
 import importlib
