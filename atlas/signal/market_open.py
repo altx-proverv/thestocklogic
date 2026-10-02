@@ -379,7 +379,7 @@ def load_zone_map(state: Session) -> bool:
     # almost nothing should say so in its first line, not be inferred from
     # 87 cycles of "nothing at a zone".
     n_sig = sum(1 for r in rows
-                if str(r.get("publication_kind", "signal")) == "signal")
+                if str(r.get("publication_kind") or "") == "signal")
     n_cand = len(state.zone_map) - n_sig
     log.info(f"zone map loaded: {len(state.zone_map)} zones from batch "
              f"{batch_date} — {n_sig} at-zone signal(s), {n_cand} candidate(s) "
@@ -773,7 +773,14 @@ def cycle(state: Session) -> dict:
     mitigated = waiting = watch_only = 0
     for (sym, direction), sig in state.zone_map.items():
         ltp = quotes.get(sym)
-        kind = str(sig.get("publication_kind", "signal"))
+        # NO DEFAULT. The test is already positive -- only 'signal' is enterable --
+        # but the default was "signal", and historical rows are now deliberately
+        # NULL: the column arrived as NOT NULL DEFAULT 'signal', so a backfilled
+        # value cannot be distinguished from one 06_push wrote, which made it a
+        # label leak for anything learning from this table. A NULL row is
+        # watch-only, and `or ""` is what makes None land there rather than
+        # inheriting the default and becoming tradeable.
+        kind = str(sig.get("publication_kind") or "")
         actionable = kind == "signal"
         is_held = (sym, direction) in held
 

@@ -267,7 +267,17 @@ def main():
             "target_1":     sig.get("target_1"),
             "grade":        sig.get("grade", "B"),
             "score":        sig.get("score", 0),
-            "sector":       sig.get("sector", "OTHER"),
+            # NO DEFAULT. This read `sig.get("sector", "OTHER")` and signals has
+            # never had a sector column, so EVERY outcome row written since
+            # May 2025 says OTHER -- 831 of them, and the last feature
+            # analysis found sector constant and useless without knowing why.
+            #
+            # The default is what made it silent. Seven earlier field-name
+            # mismatches in this repo all surfaced as a PostgREST 400, because
+            # selecting a column that does not exist errors. A .get() with a
+            # fallback is the one access pattern that cannot. Absent now means
+            # NULL, which is visible in any query that looks.
+            "sector":       sig.get("sector"),
             "outcome":      result["outcome"],
             "entry_status": result["entry_status"],
             "actual_entry": result.get("actual_entry"),

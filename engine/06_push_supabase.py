@@ -224,6 +224,17 @@ def push_signals(target_date: str = None):
             "atr_pct":          float(row.get("atr_pct", 0)) if row.get("atr_pct") else None,
             "delivery_pct":     float(row.get("delivery_pct", 0)) if row.get("delivery_pct") else None,
             "vix_close":        float(row.get("vix_close", 0)) if row.get("vix_close") else None,
+            # SECTOR, CARRIED AT LAST. 03b computes it from
+            # universe.SYMBOL_SECTOR_MAP via load_symbol_sector() and this literal
+            # dropped it, after which update_outcomes substituted the constant
+            # "OTHER" for every row since May 2025. The data existed the whole
+            # time; the 36-key literal was where it stopped.
+            "sector":           str(row.get("sector") or "") or None,
+            "sector_bias":      str(row.get("sector_bias") or "") or None,
+            # Recorded, not imputed. A row written from here carries the sector in
+            # force on the night it was published; the backfill marks itself
+            # separately so the two can never be confused.
+            "sector_as_of":     "recorded",
             "market_regime":    str(row.get("market_regime", "unknown")),
             "structure_trend":  str(row.get("structure_trend", "ranging")),
             "trade_type":       str(row.get("trade_type", "")),

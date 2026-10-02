@@ -715,7 +715,14 @@ function openModal(s){
   var rvol=parseFloat(s.rvol||0).toFixed(1);
   var sp=isORB?Math.min(100,(s.rvol||0)/3*100):Math.min(100,((s.score||0)/100)*100);
   var ds=fmtDate(s.signal_date||todayStr());
-  var slDist=(isORB&&entry&&s.sl)?parseFloat(Math.abs(entry-s.sl)/entry*100).toFixed(2)+'%':(s.sl_pct||'&mdash;')+'%';
+  /* DERIVED, not read. sl_pct is NULL on 736 of 1,012 rows -- 06_push has never
+     written it -- so the else branch rendered a bare "%" on three quarters of the
+     record. sl and an entry are present on every row, so the distance is
+     computable for all of them and the stored column is not needed. */
+  var _slBase=(isORB?entry:0)||entryOf(s);
+  var slDist=(_slBase&&s.sl)
+    ?parseFloat(Math.abs(_slBase-s.sl)/_slBase*100).toFixed(2)+'%'
+    :'&mdash;';
   var eZone=isORB&&entry?'&#8377;'+fmt(entry*0.999)+' &ndash; &#8377;'+fmt(entry*1.001):'&#8377;'+fmt(s.entry_low)+' &ndash; &#8377;'+fmt(s.entry_high);
   var dep=s.qty&&entry?Math.round(s.qty*entry).toLocaleString('en-IN'):'&mdash;';
   /* The live strategy holds with an OPEN target and trails winners --

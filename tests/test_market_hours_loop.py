@@ -41,8 +41,15 @@ REAL_PAUSED = mo.paused
 IST = timezone(timedelta(hours=5, minutes=30))
 HALT = Path(os.environ["ATLAS_HALT_FILE"])
 
+# publication_kind IS PART OF THE FIXTURE NOW. The loop tests it positively --
+# only 'signal' is enterable -- because historical rows are deliberately NULL and
+# the old `!= "signal"` with a default of "signal" would have made a NULL row
+# tradeable. get_signals always supplies the key (setdefault in the
+# missing-column path), so a row without it is not a production state; the case
+# below asserts it fails SAFE anyway.
 SIG = {"symbol": "TCS", "direction": "LONG", "entry_ref": 100.0,
-       "entry_low": 99.5, "entry_high": 100.5, "sl": 96.0, "stop_pct": 4.0}
+       "entry_low": 99.5, "entry_high": 100.5, "sl": 96.0, "stop_pct": 4.0,
+       "publication_kind": "signal"}
 
 
 def fresh_state():
@@ -179,6 +186,27 @@ def main() -> int:
     ok &= good
     print(f"  {'already shadowed today -> skipped':<46}"
           f"{'ok' if good else '** RE-LOGGED **'}")
+
+    # ONLY 'signal' IS ENTERABLE, and the unsafe directions are the ones worth
+    # asserting: a candidate must not be entered, and neither must a row whose
+    # kind is NULL or missing -- that is what the old default got wrong.
+    for kind, want_entered in (("signal", True), ("candidate", False),
+                               (None, False), ("", False), ("__absent__", False)):
+        s = fresh_state()
+        row = dict(SIG)
+        if kind == "__absent__":
+            row.pop("publication_kind")
+        else:
+            row["publication_kind"] = kind
+        s.zone_map = {("TCS", "LONG"): row}
+        calls = stub(committed=(True, set()))
+        mo.cycle(s)
+        got = calls == ["TCS"]
+        good = got == want_entered
+        ok &= good
+        label = "absent" if kind == "__absent__" else repr(kind)
+        print(f"  {('publication_kind ' + label + ' -> entered'):<46}"
+              f"{'ok' if good else '** want ' + str(want_entered) + ' **'}")
 
     s = fresh_state()
     calls = stub(committed=(True, set()))
