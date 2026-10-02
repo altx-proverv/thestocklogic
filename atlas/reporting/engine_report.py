@@ -67,6 +67,9 @@ STATE_DIR = Path(os.environ.get("ATLAS_STATE_DIR", "/var/lib/atlas"))
 # Telegram caps a message at 4096 characters. Skips are counted rather than
 # listed and entries are capped, so a busy day cannot silently lose its tail.
 MAX_ENTRIES_SHOWN = 10
+# Two trading days: one holiday or one failed night is not an alarm,
+# two consecutive is. Short on purpose -- IV history is unrecoverable.
+MERIDIAN_MAX_AGE_DAYS = 2
 MAX_SKIP_REASONS_SHOWN = 8
 TELEGRAM_LIMIT = 4000
 
@@ -174,6 +177,51 @@ def batch_health(day: date, sess: dict) -> tuple:
             "        python3 engine/03b_score.py &amp;&amp; python3 engine/06_push_supabase.py",
         ]
     return True, []
+
+
+def meridian_iv_health() -> tuple:
+    """(line, is_stale) -- is the MERIDIAN IV recorder still writing?
+
+    THE INDEPENDENT HALF OF THE RECORDER'S LOUD-FAILURE DESIGN, and the half that
+    matters. meridian/iv_recorder.py records a run row and alerts whenever a run
+    goes wrong -- but the failure actually worth preventing is "wrote nothing for
+    three months", and the case that produces it is the recorder never starting.
+    A process that does not run cannot report its own absence.
+
+    So this lives HERE, in a report that already fires at 15:30 every weekday for
+    its own reasons, and asks the only question the recorder cannot ask about
+    itself: is there a recent row? Two trading days of tolerance, so a single
+    holiday or one failed night is not an alarm and a second consecutive one is.
+
+    MERIDIAN is otherwise separate from ATLAS and this does not change that: it is
+    a read of one date, no ATLAS value depends on it, and if the table does not
+    exist yet the line says so and the report carries on.
+    """
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/meridian_iv_daily"
+            f"?select=trade_date&order=trade_date.desc&limit=1",
+            headers=_headers(), timeout=15)
+        if r.status_code in (404,) or (r.status_code == 400
+                                       and "meridian_iv_daily" in r.text):
+            return ("  not installed yet — "
+                    "migrations/PENDING_meridian_iv_recorder.sql"), False
+        if r.status_code != 200:
+            return (f"  ⚠️ could not be checked: HTTP {r.status_code}"), True
+        rows = r.json() or []
+        if not rows:
+            return ("  ⚠️ NO ROWS AT ALL. The recorder has never written. "
+                    "A year of IV history cannot be back-filled — every night "
+                    "missed is gone."), True
+        last = str(rows[0].get("trade_date"))[:10]
+        age = (now_ist().date() - date.fromisoformat(last)).days
+        if age > MERIDIAN_MAX_AGE_DAYS:
+            return (f"  ⚠️ STALE. Newest IV row is {last}, {age} day(s) old. "
+                    f"Nothing recorded since. This history cannot be "
+                    f"back-filled."), True
+        return f"  newest IV row {last} ({age}d) — recording", False
+    except Exception as e:
+        return f"  ⚠️ could not be checked: {type(e).__name__}: {e}", True
 
 
 def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
@@ -323,6 +371,15 @@ def compose(day: date, sess: dict, log_ok: bool, rows: list) -> str:
             out.append(f"  {status:<26}{n}")
         if len(counts) > MAX_SKIP_REASONS_SHOWN:
             out.append(f"  … {len(counts) - MAX_SKIP_REASONS_SHOWN} more kind(s)")
+
+    # ── MERIDIAN ─────────────────────────────────────────────────
+    # A separate vertical reported here for one reason: this is the only job that
+    # runs every weekday regardless of what else is working, which makes it the
+    # only place a watchdog for a nightly recorder can actually live.
+    mline, mstale = meridian_iv_health()
+    out.append("")
+    out.append("<b>MERIDIAN IV RECORDER</b>")
+    out.append(mline)
 
     # ── why nothing qualified ────────────────────────────────────
     # The requirement this exists for: a day with no entries must still say why,

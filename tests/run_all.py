@@ -41,6 +41,7 @@ SUITES = [
     ("batch & report",  [sys.executable, "tests/test_batch_and_report.py"]),
     ("page claims",     [sys.executable, "tests/test_page_claims.py"]),
     ("market flash",    [sys.executable, "tests/test_market_flash.py"]),
+    ("meridian iv",     [sys.executable, "tests/test_meridian_iv.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
