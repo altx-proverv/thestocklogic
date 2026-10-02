@@ -27,6 +27,8 @@ Every field is tagged:
 | `created_at` | PROVENANCE | |
 | `publication_kind` | PROVENANCE | `signal` = ATLAS-actionable. `candidate` = watchlist only, never entered. **`NULL` = published before the column existed**, so actionability was never recorded. Do not read NULL as either value. |
 | `sector_as_of` | PROVENANCE | `recorded` = written at publication. `backfill-YYYY-MM-DD` = imputed later from the then-current map. |
+| `engine_sha` | PROVENANCE | short git SHA of the code that wrote the row. **NULL = written before 2026-10-02**, when provenance did not exist. The literal `unknown` = the SHA could not be read at run time. Two different facts, stored differently. |
+| `engine_ran_at` | PROVENANCE | when the chain wrote it, UTC. Distinct from `signal_date` (the batch's trading date) and `created_at` (the database default): a batch re-run days later shares the signal_date and carries a later `engine_ran_at`, which is the only way to tell a replay from an original. |
 
 ## Levels and sizing
 

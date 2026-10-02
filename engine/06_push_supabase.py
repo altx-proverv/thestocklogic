@@ -9,7 +9,7 @@ Run: python3 engine/06_push_supabase.py
 
 import os, sys, json, logging, warnings
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timezone
 import pandas as pd
 import requests
 
@@ -21,6 +21,13 @@ except ModuleNotFoundError:
     from zone_entry import measurement_targets
 
 warnings.filterwarnings("ignore")
+
+from engine.provenance import engine_sha          # noqa: E402
+
+# Resolved once per process, not per row: the SHA cannot change mid-run, and a
+# subprocess per row would be absurd.
+ENGINE_SHA = engine_sha()
+RUN_AT = datetime.now(timezone.utc).isoformat()
 Path("reports").mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -235,6 +242,11 @@ def push_signals(target_date: str = None):
             # force on the night it was published; the backfill marks itself
             # separately so the two can never be confused.
             "sector_as_of":     "recorded",
+            # WHICH COMMIT WROTE THIS. Every era boundary in the record had to be
+            # inferred from which columns are null, which works only while the
+            # deployments land weeks apart.
+            "engine_sha":       ENGINE_SHA,
+            "engine_ran_at":    RUN_AT,
             "market_regime":    str(row.get("market_regime", "unknown")),
             "structure_trend":  str(row.get("structure_trend", "ranging")),
             "trade_type":       str(row.get("trade_type", "")),
@@ -322,6 +334,15 @@ def push_signals(target_date: str = None):
     # genuinely carries fewer fields -- no qty, risk or notional, because sizing
     # happens after the distance check that candidates fail. Its cleanup is scoped
     # to publication_kind=candidate so it cannot touch a signal row.
+    # FEATURES, after both publishes. Last deliberately: it is an analysis
+    # sidecar, and nothing about the screener or the trading loop should wait on it
+    # or fail with it.
+    try:
+        push_features(d.strftime("%Y-%m-%d"), headers)
+    except Exception as e:
+        log.error(f"signals_features write raised ({e}) — signals are published; "
+                  f"only the research sidecar is missing")
+
     try:
         push_candidates(d, headers, base_url)
     except Exception as e:
@@ -349,6 +370,139 @@ def notify_atlas(records: list):
     # into retired code. Removed entirely.
     log.info(f"ATLAS: {len(records)} zone-validated signals available for 09:37 entry")
 
+
+
+# The 54 columns 03b computes and this file used to discard. Names are taken
+# verbatim from the scored frame -- no renaming, no aliasing -- so a column added
+# upstream reaches the table by being added to this tuple and nowhere else. Seven
+# field-name mismatches in this repo came from a literal that renamed things on
+# the way through; this one deliberately does not.
+FEATURE_COLS = (
+    "adx", "adx_ranging", "adx_trending", "atr", "recent_bos_choch",
+    "zone_age_days", "zone_dist_pct",
+    "near_demand_ob", "near_supply_ob", "price_in_bull_fvg", "price_in_bear_fvg",
+    "bos_bull", "bos_bear", "choch_bull", "choch_bear",
+    "bull_liq_sweep", "bear_liq_sweep",
+    "active_demand_ob_high", "active_demand_ob_low",
+    "active_supply_ob_high", "active_supply_ob_low",
+    "active_bull_fvg_high", "active_bull_fvg_low",
+    "active_bear_fvg_high", "active_bear_fvg_low",
+    "advance_count", "decline_count", "nifty_close", "ad_ratio", "no_trade_zone",
+    "rs_5d", "rs_20d", "rs_positive",
+    "in_discount", "in_premium", "equilibrium",
+    "delivery_avg", "high_delivery", "institutional_buying",
+    "vol_avg20", "vol_spike", "vol_confirming",
+    "accumulation_score", "is_accumulation",
+    "close", "prev_close", "high", "low", "volume",
+    "is_warmup", "qualifies", "entry_valid",
+    "disqualify_reason", "reject_reason",
+)
+
+
+def _clean(v):
+    """JSON-safe, and NaN becomes NULL rather than the string 'nan'.
+
+    market_regime holds the literal string 'nan' on 567 rows of `signals` because
+    something upstream passed a float NaN through str(). That is the single worst
+    field in the record -- it passes NOT NULL, it is not NULL, and it equals
+    nothing. Every value here goes through this.
+    """
+    import math
+    if v is None:
+        return None
+    if isinstance(v, (bool,)):
+        return bool(v)
+    if isinstance(v, (int,)):
+        return int(v)
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        sv = str(v).strip()
+        return sv or None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+def push_features(day_str: str, headers: dict) -> int:
+    """Write signals_features for every row 03b PERSISTED, qualifying or not.
+
+    WHAT THAT DOES AND DOES NOT COVER, stated precisely because the gap matters.
+    03b writes two artifacts and discards the rest:
+
+      all_scores_v2.parquet   qualifying rows only -- the published signals
+      candidates_v2.parquet   valid unmitigated zones that did NOT qualify
+
+    So the negative class available here is the WATCHLIST: rows with real
+    geometry that failed the disqualifier block or the stop cap. The ~370,000
+    stock-days a night that are rejected outright -- no zone, no structure, warmup
+    -- are not persisted anywhere and cannot be recovered without 03b writing a
+    third artifact, which would be a different change and two orders of magnitude
+    more rows.
+    #
+    # That is arguably the negative class worth having anyway: rows that nearly
+    # qualified discriminate, and "had no active zone at all" does not. But it is
+    # a limitation, not a design choice, and it should not be read as one.
+
+    NEVER FATAL. This is an analysis sidecar: if it fails the batch has still
+    published, and taking the chain down over a feature table would trade a
+    working screener for a research input. Logged loudly and dropped.
+    """
+    frames = []
+    for f in (SIGNALS_FILE, CANDIDATES_FILE):
+        if not f.exists():
+            continue
+        try:
+            fr = pd.read_parquet(f)
+        except Exception as e:
+            log.warning(f"{f.name} unreadable for features: {e}")
+            continue
+        if "date" in fr.columns:
+            fr = fr[pd.to_datetime(fr["date"]).dt.strftime("%Y-%m-%d") == day_str]
+        if len(fr):
+            frames.append(fr)
+    if not frames:
+        log.info("no scored rows for features")
+        return 0
+    scored = pd.concat(frames, ignore_index=True)
+    # A symbol can appear in both artifacts across directions; the table key is
+    # (date, symbol, direction) so keep the LAST occurrence per key rather than
+    # letting the upsert decide arbitrarily.
+    if {"symbol", "direction"} <= set(scored.columns):
+        scored = scored.drop_duplicates(subset=["symbol", "direction"], keep="last")
+    rows = []
+    for _, r in scored.iterrows():
+        rec = {"signal_date": day_str,
+               "symbol": str(r.get("symbol", "")),
+               "direction": str(r.get("direction", "")).upper(),
+               "engine_sha": ENGINE_SHA}
+        for c in FEATURE_COLS:
+            rec[c] = _clean(r.get(c))
+        if rec["symbol"] and rec["direction"]:
+            rows.append(rec)
+    if not rows:
+        return 0
+    written = 0
+    try:
+        for i in range(0, len(rows), 500):
+            chunk = rows[i:i + 500]
+            rr = requests.post(
+                f"{SUPABASE_URL}/rest/v1/signals_features"
+                f"?on_conflict=signal_date,symbol,direction",
+                headers={**headers,
+                         "Prefer": "resolution=merge-duplicates,return=minimal"},
+                json=chunk, timeout=60)
+            if rr.status_code not in (200, 201, 204):
+                log.error(f"signals_features write failed: HTTP {rr.status_code} "
+                          f"{rr.text[:200]}")
+                return written
+            written += len(chunk)
+    except Exception as e:
+        log.error(f"signals_features write failed: {type(e).__name__}: {e}")
+        return written
+    log.info(f"signals_features: {written} row(s) for {day_str} "
+             f"({len(FEATURE_COLS)} columns each)")
+    return written
 
 
 def push_candidates(d, headers: dict, base_url: str) -> int:

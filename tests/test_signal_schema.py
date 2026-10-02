@@ -113,6 +113,71 @@ if doc.exists():
     for tag in ("RECORDED", "DERIVED", "CONSTANT", "DEPRECATED"):
         check(f"  marks {tag} fields", tag in txt, True)
 
+print()
+print("signals_features CARRIES WHAT 06_push USED TO DROP")
+print("-" * 78)
+import importlib.util
+spec = importlib.util.spec_from_file_location("p6", ROOT / "engine/06_push_supabase.py")
+p6 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(p6)
+check("FEATURE_COLS has 54 columns", len(p6.FEATURE_COLS), 54)
+check("  names are unique", len(set(p6.FEATURE_COLS)), 54)
+# every one must exist on the scored frame, or it writes NULL forever and nobody
+# notices -- which is the exact shape of the sector bug
+try:
+    import pandas as pd
+    d = pd.read_parquet(ROOT / "data/processed/signals_v2/all_scores_v2.parquet")
+    absent = [c for c in p6.FEATURE_COLS if c not in d.columns]
+    check("  every column exists on the scored frame", absent, [],
+          "a name that does not would write NULL forever")
+except FileNotFoundError:
+    print(f"  {'no local parquet — column names not verified':<56}SKIP")
+for want in ("adx", "zone_age_days", "advance_count", "decline_count",
+             "nifty_close", "disqualify_reason", "reject_reason", "rs_5d",
+             "rs_20d", "accumulation_score", "adx_ranging", "zone_dist_pct"):
+    check(f"  carries {want}", want in p6.FEATURE_COLS, True)
+check("  the eight zone families are all there",
+      sum(1 for c in p6.FEATURE_COLS if c.startswith("active_")), 8)
+
+print()
+print("NaN BECOMES NULL, NOT THE STRING 'nan'")
+print("-" * 78)
+# market_regime holds the literal 'nan' on 567 rows of signals because a float NaN
+# went through str(). It passes NOT NULL, it is not NULL, and it equals nothing.
+for val, want, label in ((float("nan"), None, "float nan"),
+                         (float("inf"), None, "inf"),
+                         (None, None, "None"),
+                         ("", None, "empty string"),
+                         ("nan", None, "the string 'nan'"),
+                         (True, True, "True"),
+                         (0, 0, "zero stays zero"),
+                         (0.0, 0.0, "0.0 stays 0.0"),
+                         ("demand_ob", "demand_ob", "a real string")):
+    check(f"  _clean({label})", p6._clean(val), want)
+
+print()
+print("PROVENANCE RESOLVES, AND NEVER RAISES")
+print("-" * 78)
+import os
+from engine.provenance import engine_sha, reset_cache
+reset_cache()
+sha = engine_sha()
+check("a SHA is produced", bool(sha) and sha != "", True, sha)
+check("  short form, not the full 40", len(sha) <= 12, True)
+reset_cache(); os.environ["ATLAS_SHA"] = "pinned123456789"
+check("ATLAS_SHA overrides git", engine_sha(), "pinned12345"[:11] + "6"[:1],
+      "truncated to 12")
+del os.environ["ATLAS_SHA"]; reset_cache()
+check("  and it is cached per process", engine_sha() == engine_sha(), True)
+push = (ROOT / "engine/06_push_supabase.py").read_text(encoding="utf-8")
+check("06_push stamps engine_sha on the signal row",
+      '"engine_sha":       ENGINE_SHA' in push, True)
+check("  and engine_ran_at", '"engine_ran_at":    RUN_AT' in push, True)
+check("  resolved once per process, not per row",
+      push.count("engine_sha()") , 1)
+check("features are written AFTER the publishes, and never fatally",
+      push.index("push_features(") > push.index("Verified in Supabase"), True)
+
 print("-" * 78)
 print("SIGNAL SCHEMA:", "correct" if ok else "*** DEFECTIVE ***")
 sys.exit(0 if ok else 1)
