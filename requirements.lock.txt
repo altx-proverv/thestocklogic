@@ -1,0 +1,105 @@
+# REQUIREMENTS LOCK — pinned to what the production box actually runs.
+#
+# WHY THIS FILE EXISTS. On the night of 2026-10-02 three separate defects reached
+# production in one evening, and all three were invisible locally for the same
+# reason: the dev venv ran pandas 2.3.3 / numpy 2.0.2 on Python 3.9, and the box
+# runs pandas 3.0.3 / numpy 2.4.6 on Python 3.13. The suite was green throughout.
+#
+#   * `series << 9`              pandas has no Series.__lshift__ — same on both,
+#                                but the sibling site that worked had a
+#                                .to_numpy() and masked the difference
+#   * int64 -> int16 masked set   pandas 2: FutureWarning and silent widening.
+#                                pandas 3: TypeError. 03b crashed and published
+#                                nothing.
+#   * the warning that said so    engine/03b_score.py suppressed it at import with
+#                                warnings.filterwarnings("ignore"), so pandas spent
+#                                a year giving notice to /dev/null.
+#
+# A test suite running different library semantics than production is not a test
+# suite for this class of defect. tests/test_environment.py now fails when the
+# running versions drift from the three below, so the gap becomes a red test
+# instead of a 9pm crash with nothing published.
+#
+# VERIFIED AGAINST THE BOX (reported 2026-10-03):
+#   pandas   3.0.3
+#   numpy    2.4.6
+#   pyarrow  24.0.0
+#
+# NOT YET VERIFIED: the box's Python minor version. pandas 3.0 requires >= 3.11,
+# so it is at least that; this venv uses 3.13.16. If the box differs, update
+# PYTHON_EXPECTED in tests/test_environment.py — a minor-version gap is a smaller
+# risk than the library gap was, but it is the same kind of risk.
+#
+# Everything below the trio is resolved locally, not read off the box. Treat the
+# three as authoritative and the rest as "what satisfied them on 2026-10-03".
+#
+# Regenerate:  ./venv/bin/pip freeze > requirements.lock.txt   (then restore this
+#              header, and re-confirm the trio against the box)
+
+# ── pinned to production, do not move without re-checking the box ──
+pandas==3.0.3    # verified against the box
+numpy==2.4.6    # verified against the box
+pyarrow==24.0.0    # verified against the box
+
+# ── resolved locally against the three above ──
+appdirs==1.4.4
+attrs==26.1.0
+beautifulsoup4==4.14.3
+brotli==1.2.0
+bs4==0.0.2
+cairocffi==1.7.1
+CairoSVG==2.8.2
+certifi==2026.4.22
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.1.8
+cssselect2==0.8.0
+cssselect==1.3.0
+curl_cffi==0.13.0
+defusedxml==0.7.1
+exceptiongroup==1.3.1
+fake-useragent==2.2.0
+frozendict==2.4.7
+h11==0.16.0
+idna==3.14
+importlib_resources==6.5.2
+jugaad-data==0.33.1
+lxml==6.1.0
+multitasking==0.0.13
+outcome==1.3.0.post0
+parse==1.22.1
+peewee==4.0.5
+pillow==11.3.0
+platformdirs==4.4.0
+protobuf==6.33.6
+pycparser==2.23
+pyee==13.0.1
+pyflakes==3.4.0
+pyotp==2.9.0
+pyppeteer==0.0.25
+pyquery==2.0.1
+PySocks==1.7.1
+python-dateutil==2.9.0.post0
+pytz==2026.2
+requests-html==0.10.0
+requests==2.32.5
+selenium==4.36.0
+six==1.17.0
+sniffio==1.3.1
+sortedcontainers==2.4.0
+soupsieve==2.8.3
+ta==0.11.0
+tinycss2==1.4.0
+tqdm==4.67.3
+trio-websocket==0.12.2
+trio==0.31.0
+typing_extensions==4.15.0
+tzdata==2026.2
+urllib3==2.6.3
+w3lib==2.3.1
+webencodings==0.5.1
+websocket-client==1.9.0
+websockets==15.0.1
+wsproto==1.2.0
+yfinance==1.2.0
+zipp==3.23.1

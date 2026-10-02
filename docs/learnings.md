@@ -510,3 +510,49 @@ immediately, with no partial mask and no warning machinery involved.
 3. When a defect needs several conditions to surface, test the invariant it
    violates rather than the symptom it produces. The symptom needs all the
    conditions; the invariant needs none.
+
+## Three crashes in one night, one root cause: the suite ran different semantics (2026-10-03)
+
+The sequence, all on 2026-10-02, all reaching production, all green locally:
+
+1. `series << 9` — pandas implements no `Series.__lshift__`. The sibling site that
+   worked had a `.to_numpy()` three lines earlier, which is what made the copy look
+   proven.
+2. `int64` values into an `int16` column through a masked `.loc` — **FutureWarning
+   and silent widening on pandas 2, TypeError on pandas 3.** 03b crashed and
+   nothing published.
+3. The warning that had been announcing (2) for a year was suppressed at import by
+   `warnings.filterwarnings("ignore")` in the module itself, and in three other
+   pipeline stages.
+
+The dev venv was **pandas 2.3.3 / numpy 2.0.2 on Python 3.9**. The box is **pandas
+3.0.3 / numpy 2.4.6 / pyarrow 24.0.0 on Python 3.13**. For this entire class of
+defect, the suite was not a weak test — it was testing a different program.
+
+The fix is three things, and only the first is obvious:
+
+- **Pin the venv to production and lock it.** `requirements.lock.txt` carries the
+  three verified-against-the-box versions and the reason the file exists. pandas 3
+  needs Python ≥ 3.11, so this also meant installing a newer interpreter — the
+  version gap was wide enough that it could not be closed by `pip install` alone,
+  which is itself the measure of how far it had drifted.
+- **Make the gap a test.** `tests/test_environment.py` runs *first* in the suite and
+  fails when the running versions drift from the lock. A README line does not
+  survive someone rebuilding a venv in six months.
+- **Assert the behaviour, not the version string.** The same test performs the
+  partial `int64 → int16` masked set and requires it to *raise*. If a future pandas
+  quietly goes back to widening, the pins are no longer protecting anything and
+  that needs to be visible too.
+
+**The lesson.** "The tests pass" is a statement about the environment the tests ran
+in. When that environment is not production's, the statement is about nothing. The
+divergence has to be asserted mechanically, because it is invisible by
+construction: every local run is green right up to the moment the deploy isn't.
+
+A footnote on the same page: the check for blanket warning suppression failed twice
+before it worked — first matching `filterwarnings("ignore")` inside
+`filterwarnings("ignore", category=RuntimeWarning)`, the narrowed call that *is* the
+fix; then, with the paren required, matching the comment above each narrowed call
+that quotes the old form in order to say it is gone. Seventh occurrence of a check
+failing on its own prose here. `tests/_srcutil.executable_source()` existed, and I
+reached for a regex first. Writing the helper does not create the habit of using it.

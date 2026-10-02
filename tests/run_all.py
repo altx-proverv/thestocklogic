@@ -32,9 +32,15 @@ ROOT = Path(__file__).resolve().parent.parent
 # Turning the warning into an error makes the local run behave like the box. If a
 # third-party library trips this and cannot be fixed here, narrow it with a
 # module-specific filter rather than removing this line.
+# Weak on its own: a module-level warnings.filterwarnings("ignore") runs at import
+# and overrides this, which is exactly how the pandas dtype deprecation went
+# unheard for a year. tests/test_environment.py is what actually guards it, by
+# asserting no pipeline module installs a blanket filter. Kept because it catches
+# deprecations in modules that have no filter of their own.
 os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
 
 SUITES = [
+    ("environment",     [sys.executable, "tests/test_environment.py"]),
     ("entry ordering", [sys.executable, "tests/test_entry_ordering.py"]),
     ("reconcile",      [sys.executable, "tests/test_reconcile.py"]),
     ("exits",          [sys.executable, "tests/test_exits.py"]),

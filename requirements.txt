@@ -1,0 +1,18 @@
+# Direct dependencies. The exact resolved set is requirements.lock.txt — install
+# from that, not from this file, unless you are deliberately re-resolving.
+#
+# THE THREE THAT MATTER are pinned to the production box, not to a range. pandas 3
+# turned a year-old FutureWarning into a TypeError and took 03b down; a range would
+# let that happen again on the next minor. See the header of requirements.lock.txt.
+pandas==3.0.3
+numpy==2.4.6
+pyarrow==24.0.0
+
+requests
+beautifulsoup4
+lxml
+pyotp
+python-dotenv
+yfinance
+jugaad-data
+pyflakes
