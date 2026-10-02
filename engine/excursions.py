@@ -66,6 +66,42 @@ def _headers():
 # INPUTS
 # ══════════════════════════════════════════════════════════════════
 
+# PostgREST caps a response at 1,000 rows and an explicit `limit` CANNOT raise it
+# -- limit=200000 returns 1,000 exactly like no limit at all, with HTTP 200 and no
+# warning anywhere. Every fetch here is over a table that crosses that line:
+# 2,787 detections, 845 signals and climbing, and one day_offset=1 row per
+# measured item. Unpaged, this module would have measured the newest 1,000
+# detections, declared the rest unmeasured every night, and re-walked them
+# forever. Paged in one place so a future caller cannot reintroduce it.
+PAGE = 1000
+
+
+def _get_all(path: str, params: str, hard_limit: int = 0) -> list:
+    """Every row matching `params`, following Range pages until one comes short.
+
+    `hard_limit` is the caller's own --limit: a deliberate cap for a test run,
+    which is a different thing from the transport's cap and is applied here
+    rather than handed to PostgREST.
+    """
+    out, offset = [], 0
+    while True:
+        url = f"{SUPABASE_URL}/rest/v1/{path}?{params}&limit={PAGE}&offset={offset}"
+        r = requests.get(url, headers=_headers(), timeout=60)
+        if r.status_code != 200:
+            return r                      # caller inspects and raises/degrades
+        chunk = r.json() or []
+        out += chunk
+        if len(chunk) < PAGE:
+            break
+        offset += PAGE
+        if hard_limit and len(out) >= hard_limit:
+            break
+        if offset > 500_000:              # a runaway loop is worse than a short read
+            log.error(f"{path}: stopped paging at {offset} rows — unexpected volume")
+            break
+    return out[:hard_limit] if hard_limit else out
+
+
 def fetch_signals(since: str = None, limit: int = 0) -> list:
     """Signals to measure, newest first.
 
@@ -74,36 +110,63 @@ def fetch_signals(since: str = None, limit: int = 0) -> list:
     not finished -- but a signal whose outcome is unresolved is exactly the one an
     exit study wants, because the 5-day window is what left it unresolved.
     """
-    url = (f"{SUPABASE_URL}/rest/v1/signals"
-           f"?select=signal_date,symbol,direction,entry_ref,entry_low,entry_high,sl"
-           f"&order=signal_date.desc")
+    params = ("select=signal_date,symbol,direction,entry_ref,entry_low,entry_high,sl"
+              "&order=signal_date.desc")
     if since:
-        url += f"&signal_date=gte.{since}"
-    if limit:
-        url += f"&limit={limit}"
-    r = requests.get(url, headers=_headers(), timeout=60)
-    if r.status_code != 200:
-        raise RuntimeError(f"signal fetch failed: HTTP {r.status_code} "
-                           f"{r.text[:200]}")
-    return r.json() or []
+        params += f"&signal_date=gte.{since}"
+    got = _get_all("signals", params, hard_limit=limit)
+    if not isinstance(got, list):
+        raise RuntimeError(f"signal fetch failed: HTTP {got.status_code} "
+                           f"{got.text[:200]}")
+    return got
+
+
+def fetch_detections(since: str = None, limit: int = 0) -> list:
+    """Intraday breakout detections from live_signals, kind='detection'.
+
+    A DIFFERENT ENTRY CONVENTION, and that is the whole reason source exists on
+    the table. A signal is filled at the next open because it is published after
+    the close. A detection already happened: rbe_engine fires when LTP crosses the
+    level, so the fill is that LTP on that day, and day_offset 1 is the detection
+    day itself rather than the one after.
+
+    Blending the two would produce a column that means "R from entry" for one
+    population and "R from tomorrow's open" for the other.
+    """
+    params = ("select=signal_date,symbol,direction,entry,sl,session,kind,signal_time"
+              "&kind=eq.detection&order=signal_date.desc")
+    if since:
+        params += f"&signal_date=gte.{since}"
+    got = _get_all("live_signals", params, hard_limit=limit)
+    if not isinstance(got, list):
+        if got.status_code in (400, 404) and "kind" in got.text:
+            log.warning("live_signals.kind does not exist — "
+                        "migrations/PENDING_live_signals_kind.sql not applied. "
+                        "No detections measured this run.")
+            return []
+        raise RuntimeError(f"detection fetch failed: HTTP {got.status_code} "
+                           f"{got.text[:200]}")
+    return got
 
 
 def existing_keys() -> set:
-    """(signal_date, symbol, direction) already measured, so a nightly run does
-    not re-walk the whole history every time."""
+    """(source, signal_date, symbol, direction) already measured, so a nightly run
+    does not re-walk the whole history every time."""
     keys = set()
     try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/signal_excursions"
-            f"?select=signal_date,symbol,direction&day_offset=eq.1&limit=100000",
-            headers=_headers(), timeout=60)
-        if r.status_code == 200:
-            for x in r.json() or []:
-                keys.add((str(x["signal_date"])[:10], x["symbol"],
+        got = _get_all("signal_excursions",
+                       "select=source,signal_date,symbol,direction"
+                       "&day_offset=eq.1&order=signal_date.desc")
+        if isinstance(got, list):
+            for x in got:
+                keys.add((str(x.get("source") or "signal"),
+                          str(x["signal_date"])[:10], x["symbol"],
                           str(x["direction"]).upper()))
-        elif r.status_code in (400, 404):
+        elif got.status_code in (400, 404):
             log.warning("signal_excursions not reachable — "
                         "migrations/PENDING_signal_excursions.sql not applied?")
+        else:
+            log.warning(f"existing keys HTTP {got.status_code} — will recompute")
     except Exception as e:
         log.warning(f"could not read existing keys ({e}) — will recompute")
     return keys
@@ -136,8 +199,14 @@ def bars(symbol: str):
 # MEASURE
 # ══════════════════════════════════════════════════════════════════
 
-def measure(sig: dict) -> tuple:
-    """(rows, skip_reason). rows is [] when the signal has no measurable path."""
+def measure(sig: dict, source: str = "signal") -> tuple:
+    """(rows, skip_reason). rows is [] when there is no measurable path.
+
+    source="signal"     EOD row. Fill at the next open, per update_outcomes.
+    source="detection"  intraday row. Fill at the recorded detection price, and
+                        the window starts on the detection day, because the entry
+                        already happened on it.
+    """
     import pandas as pd
     import numpy as np
 
@@ -153,11 +222,25 @@ def measure(sig: dict) -> tuple:
         # "no bars ever" are different facts about the same empty result.
         return [], f"bars end {str(d['date'].max())[:10]}, before the signal"
 
-    fwd = d[d["date"] > sd].head(WINDOW_DAYS).reset_index(drop=True)
+    # A detection was filled intraday on signal_date, so its own day is offset 1.
+    # A signal is published after the close, so its first session is the next one.
+    fwd = (d[d["date"] >= sd] if source == "detection" else d[d["date"] > sd]) \
+        .head(WINDOW_DAYS).reset_index(drop=True)
     if len(fwd) < 1:
         return [], "no session after the signal"
 
     is_long = str(sig.get("direction", "LONG")).upper() != "SHORT"
+
+    if source == "detection":
+        # No band and no gap test: the fill is the price the detection fired at.
+        try:
+            entry = float(sig["entry"]); stop = float(sig["sl"])
+        except (TypeError, ValueError, KeyError):
+            return [], "no detection entry or stop"
+        if not all(np.isfinite([entry, stop])) or entry <= 0:
+            return [], "unusable levels"
+        return _walk(fwd, entry, stop, is_long, sig, source)
+
     try:
         lo_band = float(sig["entry_low"]); hi_band = float(sig["entry_high"])
         stop = float(sig["sl"])
@@ -182,6 +265,12 @@ def measure(sig: dict) -> tuple:
             return [], "GAPPED_ABOVE_SL"
         entry = max(nopen, lo_band)
 
+    return _walk(fwd, entry, stop, is_long, sig, source)
+
+
+def _walk(fwd, entry, stop, is_long, sig, source):
+    """The path itself. Shared by both entry conventions so a change to how MFE is
+    accumulated cannot apply to one population and not the other."""
     risk = abs(entry - stop)
     if risk <= 0:
         return [], "zero risk per share"
@@ -214,8 +303,9 @@ def measure(sig: dict) -> tuple:
         run_mfe = max(run_mfe, fav / risk)
         run_mae = max(run_mae, adv / risk)
         rows.append({
+            "source": source,
             "signal_date": str(sig["signal_date"])[:10],
-            "symbol": sym,
+            "symbol": sig.get("symbol"),
             "direction": "LONG" if is_long else "SHORT",
             "day_offset": i + 1,
             "bar_date": str(bar["date"])[:10],
@@ -250,7 +340,7 @@ def write(rows: list) -> int:
         chunk = rows[i:i + 500]
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/signal_excursions"
-            f"?on_conflict=signal_date,symbol,direction,day_offset",
+            f"?on_conflict=source,signal_date,symbol,direction,day_offset",
             headers={**_headers(),
                      "Prefer": "resolution=merge-duplicates,return=minimal"},
             json=chunk, timeout=90)
@@ -282,20 +372,33 @@ def main() -> int:
         log.info("no signals to measure")
         return 0
 
+    # DETECTIONS TOO. 2,001 RBE rows have been published as calls since August
+    # and not one has ever been scored -- a published population outside the
+    # record, which is the wrong-side-zone problem in a different place. Measured
+    # here so they accumulate as a hypothesis rather than as unexamined claims.
+    try:
+        dets = fetch_detections(since=a.since, limit=a.limit)
+    except Exception as e:
+        log.warning(f"detections unavailable ({e}) — measuring signals only")
+        dets = []
+
     done = set() if a.backfill else existing_keys()
-    todo = [s for s in sigs
-            if (str(s["signal_date"])[:10], s["symbol"],
-                str(s.get("direction", "")).upper()) not in done]
-    log.info(f"{len(sigs)} signal(s) fetched, {len(done)} already measured, "
-             f"{len(todo)} to walk")
+    todo = [("signal", x) for x in sigs
+            if ("signal", str(x["signal_date"])[:10], x["symbol"],
+                str(x.get("direction", "")).upper()) not in done]
+    todo += [("detection", x) for x in dets
+             if ("detection", str(x["signal_date"])[:10], x["symbol"],
+                 str(x.get("direction", "")).upper()) not in done]
+    log.info(f"{len(sigs)} signal(s) + {len(dets)} detection(s) fetched, "
+             f"{len(done)} already measured, {len(todo)} to walk")
 
     all_rows, skips = [], {}
-    for s in todo:
-        rows, why = measure(s)
+    for source, s in todo:
+        rows, why = measure(s, source=source)
         if rows:
             all_rows.extend(rows)
         else:
-            skips[why] = skips.get(why, 0) + 1
+            skips[f"{source}: {why}"] = skips.get(f"{source}: {why}", 0) + 1
 
     log.info(f"{len(all_rows)} excursion row(s) from "
              f"{len(all_rows) // WINDOW_DAYS if all_rows else 0}+ signal(s)")

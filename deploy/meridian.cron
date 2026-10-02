@@ -44,13 +44,6 @@
 # job cannot live in that job, because the failure it guards against is the job
 # never starting.
 
-# ── THE EXCURSION RECORDER (ATLAS, not MERIDIAN — parked here until the
-#    chain's own crontab is version-controlled) ─────────────────────────
-#
-# 19:10 IST, after the EOD chain has published and update_outcomes has resolved.
-# Walks the 20-day path of every signal not already measured. Needs current bars,
-# which is why it runs on the box and not anywhere else.
-#
-# The one-off backfill for the existing record, run by hand once:
-#   cd /home/ubuntu/thestocklogic && venv/bin/python -m engine.excursions --backfill
-40 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.excursions >> /home/ubuntu/logs/excursions.log 2>&1
+# The excursion recorder used to be parked here. It is ATLAS, not MERIDIAN, and
+# now lives in deploy/learning.cron -- installing MERIDIAN must not install an
+# ATLAS job, and removing MERIDIAN must not remove one.

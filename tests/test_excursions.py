@@ -156,21 +156,8 @@ print("-" * 78)
 # over the source finds the explanation and reports it as the thing it warns
 # about. That has now caught me four times in this repo: the fix is always to
 # interrogate what executes, never the text that describes it.
-import ast
-
-
-def executable_source(path):
-    """Module source with every comment and docstring removed."""
-    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
-                             ast.ClassDef)) and node.body:
-            first = node.body[0]
-            if (isinstance(first, ast.Expr)
-                    and isinstance(first.value, ast.Constant)
-                    and isinstance(first.value.value, str)):
-                node.body = node.body[1:] or [ast.Pass()]
-    return ast.unparse(ast.fix_missing_locations(tree))
+from tests._srcutil import executable_source   # shared: the fifth repeat of
+                                                # this mistake is what moved it
 
 
 code = executable_source(ROOT / "engine/excursions.py")
@@ -186,6 +173,21 @@ cols = code.replace('"', "'").replace(" ", "")
 check("  reads only date/open/high/low/close",
       "columns=['date','open','high','low','close']" in cols, True)
 check("every row is stamped with the engine SHA", "engine_sha" in code, True)
+
+print()
+print("THE 1,000-ROW CAP — 2,787 DETECTIONS CANNOT ARRIVE IN ONE RESPONSE")
+print("-" * 78)
+# PostgREST returns 1,000 rows and HTTP 200 for limit=200000 exactly as for no
+# limit at all. Unpaged, this module measured the newest 1,000 of 2,787
+# detections, called the other 1,787 unmeasured on every subsequent night, and
+# re-walked them forever -- with nothing in the log to say so.
+check("fetches page with an offset", "offset" in code, True)
+check("no fetch asks for a limit the transport ignores",
+      "limit=200000" in code, False)
+check("one paging helper, not three copies", code.count("def _get_all") == 1, True)
+for fn in ("fetch_signals", "fetch_detections", "existing_keys"):
+    body = code.split(f"def {fn}")[1].split("\ndef ")[0]
+    check(f"  {fn} goes through it", "_get_all" in body, True)
 
 print("-" * 78)
 print("EXCURSIONS:", "correct" if ok else "*** DEFECTIVE ***")

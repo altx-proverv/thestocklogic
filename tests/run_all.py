@@ -44,6 +44,7 @@ SUITES = [
     ("meridian iv",     [sys.executable, "tests/test_meridian_iv.py"]),
     ("signal schema",   [sys.executable, "tests/test_signal_schema.py"]),
     ("excursions",      [sys.executable, "tests/test_excursions.py"]),
+    ("detection score",  [sys.executable, "tests/test_detection_scoring.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

@@ -546,7 +546,29 @@ async function fetchSectors(){
   return data.filter(function(s){return s.signal_date===latestDate;});
 }
 async function fetchLive(){
-  return (await sbGet('/rest/v1/live_signals?signal_date=eq.'+todayStr()+'&order=signal_time.asc')).rows;
+  /* select=* and NOT select=...,kind. PostgREST 400s on a column that does not
+     exist, and PENDING_live_signals_kind.sql is not applied yet -- naming the
+     column would take the whole live section down until it is. A bare * returns
+     kind the moment the column appears, so this needs no second edit. */
+  return (await sbGet('/rest/v1/live_signals?signal_date=eq.'+todayStr()
+    +'&order=signal_time.asc')).rows;
+}
+
+/* A row is a CALL only if something says so.
+   2,787 of the 2,941 rows in live_signals are intraday detections that were
+   published with entry, stop and two targets and counted in the headline, while
+   nothing ever scored them. On 688 of the 2,001 RBE rows target_2 is not even
+   beyond target_1, and in the worst case it sits on the losing side of entry --
+   so these were not merely unscored calls, they were partly incoherent ones.
+
+   Falls back to `session` while kind is unapplied, using the same mapping the
+   migration backfills with, so the page reads identically before and after. The
+   default is `detection` in both places: the safe answer is the one that claims
+   less. */
+function isCall(s){
+  if(!s) return false;
+  if(s.kind) return String(s.kind)==='call';
+  return String(s.session||'')==='btst';
 }
 async function fetchOutcomes(){
   return (await sbGet('/rest/v1/signal_outcomes?select=signal_id,outcome,pnl,exit_day,days_held')).rows;
@@ -948,7 +970,11 @@ async function render(){
   var allDates=Object.keys(byDate).sort().reverse();
   var latestDate=allDates[0];
   var today=todayStr();
-  var todayLive=(liveAll||[]).filter(function(s){return s.signal_date===today;});
+  var _liveToday=(liveAll||[]).filter(function(s){return s.signal_date===today;});
+  /* CALLS ONLY into the traded display and the headline counter. Detections get
+     their own section below, without levels. */
+  var todayLive=_liveToday.filter(isCall);
+  var todayDetections=_liveToday.filter(function(s){return !isCall(s);});
   window._allSignals=(eodAll||[]).concat(liveAll||[]);
   document.getElementById('liveLabel').textContent='LIVE';
 
@@ -1158,6 +1184,50 @@ async function render(){
     return h+'h '+(m%60)+'m ago';
   }
 
+  /* ── DETECTIONS ───────────────────────────────────────────────────────
+     Observations, rendered as observations. No entry, no stop, no target, no
+     grade, not counted anywhere: rbe_engine saw a condition -- opening range
+     cleared, prior day's high or low cleared, volume confirming -- and recorded
+     it. What it does NOT do is tell anyone to act, and the previous rendering
+     said otherwise with four price levels and a place in the long/short count.
+
+     Their outcomes accumulate in signal_excursions with source='detection', so
+     the hypothesis becomes measurable rather than implied. Until that has run for
+     a while the honest statement is that nothing is known about them yet, and the
+     footer says so. */
+  function buildDetections(rows){
+    if(!rows||!rows.length) return '';
+    var up=rows.filter(function(s){return String(s.direction).toUpperCase()!=='SHORT';}).length;
+    var h='<div class="det-wrap"><div class="det-head">'
+      +'<span class="det-title">INTRADAY BREAKOUT DETECTIONS</span>'
+      +'<span class="det-sub">'+rows.length+' today &middot; '+up+' up, '
+      +(rows.length-up)+' down. Conditions the engine observed during the session: '
+      +'opening range cleared, prior day&rsquo;s level cleared, volume confirming. '
+      +'<b>Not calls</b> &mdash; no entry, stop or target is implied, and none of '
+      +'this is in the accuracy record.</span></div>'
+      +'<div class="det-scroll"><table class="det"><thead><tr>'
+      +'<th>SYMBOL</th><th></th><th>TIME</th><th class="r">RVOL</th>'
+      +'<th class="r">PRIOR HIGH</th><th class="r">PRIOR LOW</th></tr></thead><tbody>';
+    for(var i=0;i<rows.length;i++){
+      var s=rows[i], isL=String(s.direction).toUpperCase()!=='SHORT';
+      h+='<tr><td class="det-sym">'+esc(s.symbol)+'</td>'
+        +'<td class="det-dir" style="color:'+(isL?'var(--green)':'var(--red)')+'">'
+        +(isL?'\u2191':'\u2193')+'</td>'
+        +'<td class="det-t">'+esc(s.signal_time||'&mdash;')+'</td>'
+        +'<td class="r">'+(s.rvol?parseFloat(s.rvol).toFixed(1)+'x':'&mdash;')+'</td>'
+        +'<td class="r det-lv">'+(s.prev_day_high?'\u20b9'+fmt(s.prev_day_high):'&mdash;')+'</td>'
+        +'<td class="r det-lv">'+(s.prev_day_low?'\u20b9'+fmt(s.prev_day_low):'&mdash;')+'</td>'
+        +'</tr>';
+    }
+    h+='</tbody></table></div>'
+      +'<p class="det-foot">A detection records that a condition occurred, nothing '
+      +'more. Whether these resolve favourably is being measured from today '
+      +'forward and is <b>not yet known</b> &mdash; until it is, treat them as '
+      +'observations about the tape rather than as a reason to do anything. '
+      +'\u26a0 Educational only &mdash; not advice.</p></div>';
+    return h;
+  }
+
   function buildLiveView(rows, istMin){
     var st = liveState(rows, istMin);
     if(st.kind==='closed' && !st.n) return '';
@@ -1323,6 +1393,7 @@ async function render(){
   }
   // Below the signals, never inside them.
   html+='<div id="liveViewHost">'+buildLiveView(liveZones, _istMin)+'</div>';
+  html+=buildDetections(todayDetections);
   html+=buildWatchlist(watchAll, batchDate);
 
   // Live signals date map for archive

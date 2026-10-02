@@ -271,3 +271,68 @@ assert the end state, from the outside, against the artefact itself.
 **What changed.** `migrations/README.md` now requires every file to end with a
 catalogue query returning one row of booleans, and says to apply one statement at
 a time. The repair file is written that way.
+
+## A transport limit that an explicit limit cannot raise (2026-10-02)
+
+`engine/excursions.py` was written to measure every signal and every detection
+incrementally: fetch them all, skip the ones already in `signal_excursions`, walk
+the rest. All three of its fetches were a single GET. PostgREST returns **at most
+1,000 rows**, and an explicit `limit` does not raise it:
+
+```
+  limit=(none)      -> 1000 rows   (table holds 2,941)
+  limit=2000        -> 1000 rows
+  limit=200000      -> 1000 rows
+```
+
+HTTP 200 every time. No warning, no `Content-Range` complaint, nothing in the
+log. `existing_keys()` even asked for `limit=200000` — which reads as a handled
+case and is the more dangerous shape, because the next person sees a number and
+assumes it was measured.
+
+The three consequences were all silent:
+
+| fetch | rows | what actually happened |
+|---|---|---|
+| `fetch_detections` | 2,787 | measures the newest 1,000 (36%), reports a complete run |
+| `fetch_signals` | 845 | fine today, truncates the day it crosses 1,000 — oldest first |
+| `existing_keys` | ~3,600 eventually | sees 1,000, calls the rest unmeasured, re-walks them every night forever |
+
+The one that matters is the third, because it defeats the incremental design
+without failing: the job keeps finishing, keeps writing identical rows, and the
+log keeps saying it measured N signals.
+
+**The lesson.** A paging limit is a property of the transport, not a parameter of
+the request. Asking for more is not the same as being given more, and a successful
+response is not evidence that it was complete. The only reliable test is whether
+the last page came back short — which is now the single `_get_all()` every fetch
+in both modules goes through, so the check cannot be omitted one call at a time.
+
+Related: the same class of defect as [a monkeypatched dependency tests the stub,
+not the code] — in both cases the code ran, returned, and was wrong, and a test
+over its output could not see it.
+
+## A check that matches its own rationale — the fifth time (2026-10-02)
+
+`tests/test_detection_scoring.py` asserted that `score_live_outcomes.py` does not
+try to raise the row cap with `limit=200000`. It failed. The module's own
+docstring says *"limit=200000 returns exactly 1,000"* — in order to explain why
+that approach is wrong. The check found the explanation and reported it as the
+defect.
+
+This has now happened five times in this repo: `MAX_ENTRY_DIST_PCT`, the MERIDIAN
+atlas-separation check, the no-keyword check, the no-swing-data check, and this
+one. Every time the fix was the same, and every time I wrote the next one the same
+wrong way. The pattern is not three coincidences and it is not five either — it is
+that a grep over source text cannot distinguish a prohibition from its own
+rationale, and the better a module documents why it avoids something, the more
+likely a text search over it fails.
+
+`tests/_srcutil.py` now holds `executable_source()` — `ast.parse`, strip every
+docstring, `ast.unparse` — so comments and prose are gone and only what executes
+remains. It is shared rather than copied precisely because the inline copy in
+`test_excursions.py` did not stop me writing the fifth one.
+
+**The lesson.** Interrogate the runtime object: the module namespace, the code
+object, the parsed tree. Never the file as text. And when the same fix lands
+twice, put it somewhere the third author has to find.

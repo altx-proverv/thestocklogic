@@ -1,0 +1,46 @@
+# ATLAS — THE LEARNING LOOP
+# =========================
+# Install:  crontab -l > /tmp/ct && cat deploy/learning.cron >> /tmp/ct \
+#           && crontab /tmp/ct && crontab -l | tail -12
+#
+# WHY ITS OWN FILE. These two lines were parked in deploy/meridian.cron, which
+# installs as a block: adding MERIDIAN would have added an ATLAS job, and removing
+# MERIDIAN would have silently removed the path recorder with it. MERIDIAN reads
+# nothing from ATLAS and writes nothing to it, and that has to hold in the deploy
+# surface as well as in the code.
+#
+# WHAT THIS LOOP IS. The pipeline records verdicts; this records the evidence
+# behind them. Every row in signal_outcomes exits at exactly -1.00R or +2.00R
+# because resolution writes the level it crossed as the fill, so no exit rule is
+# testable from it -- not a 3R target, not a trailing stop, not a time stop. These
+# two jobs write the path and then read it.
+#
+# THE BOX RUNS UTC. IST = UTC + 5:30, and these are written in UTC.
+#
+#   13:40 UTC = 19:10 IST
+#   13:55 UTC = 19:25 IST
+#
+# Both run Mon-Fri only. A weekend run would walk the same paths to the same
+# answer and write the same rows.
+
+# ── 1. THE PATH RECORDER ──────────────────────────────────────────────
+# After the EOD chain has published and update_outcomes has resolved. Walks the
+# 20-day forward path of every signal and every detection not already measured,
+# from the daily bars on the box -- which is why it runs here and nowhere else.
+# Incremental: existing_keys() skips what is already in the table.
+#
+# The one-off backfill for the existing record, run by hand once:
+#   cd /home/ubuntu/thestocklogic && venv/bin/python -m engine.excursions --backfill
+40 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.excursions >> /home/ubuntu/logs/excursions.log 2>&1
+
+# ── 2. THE DETECTION HYPOTHESIS ───────────────────────────────────────
+# 2,787 of the 2,941 rows in live_signals are intraday detections, published with
+# entry, stop and two targets since June, and not one has ever been scored. This
+# reads the paths written fifteen minutes earlier and reports what they did, at
+# 1.5R / 2R / 3R, with the ambiguous same-bar ties left as a range rather than
+# assigned to a side.
+#
+# REPORT ONLY. It writes nothing, to any table, and is wired to no threshold. The
+# output is a log an operator reads; acting on it is a separate decision taken
+# once a span longer than seven weeks has accumulated.
+55 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.score_live_outcomes >> /home/ubuntu/logs/detection_hypothesis.log 2>&1

@@ -28,6 +28,13 @@
 -- nothing computed from it can inherit that look-ahead.
 
 CREATE TABLE IF NOT EXISTS public.signal_excursions (
+  -- 'signal'    an EOD row from `signals`, entered at the next open
+  -- 'detection' an intraday row from `live_signals`, entered at the detection
+  --             price on the detection day. Same table so "do detections resolve
+  --             better than signals" is a GROUP BY rather than a join across two
+  --             schemas -- but the two have DIFFERENT entry conventions and the
+  --             column is what keeps that honest rather than blended.
+  source            text        NOT NULL DEFAULT 'signal',
   signal_date       date        NOT NULL,
   symbol            text        NOT NULL,
   direction         text        NOT NULL,
@@ -59,11 +66,18 @@ CREATE TABLE IF NOT EXISTS public.signal_excursions (
 
 ALTER TABLE public.signal_excursions
   ADD CONSTRAINT signal_excursions_key
-  UNIQUE (signal_date, symbol, direction, day_offset);
+  UNIQUE (source, signal_date, symbol, direction, day_offset);
+
+ALTER TABLE public.signal_excursions
+  ADD CONSTRAINT signal_excursions_source_chk
+  CHECK (source IN ('signal', 'detection')) NOT VALID;
+
+ALTER TABLE public.signal_excursions
+  VALIDATE CONSTRAINT signal_excursions_source_chk;
 
 -- The query every exit study makes: one signal's whole path, in order.
 CREATE INDEX IF NOT EXISTS signal_excursions_path_idx
-  ON public.signal_excursions (signal_date, symbol, direction, day_offset);
+  ON public.signal_excursions (source, signal_date, symbol, direction, day_offset);
 -- And the cross-sectional one: "what did everything do by day 5".
 CREATE INDEX IF NOT EXISTS signal_excursions_offset_idx
   ON public.signal_excursions (day_offset, signal_date DESC);
@@ -80,8 +94,12 @@ CREATE POLICY "anon read signal_excursions"
 COMMENT ON TABLE public.signal_excursions IS
   'The daily price path after entry, 20 trading days per signal, written by engine/excursions.py. Exists because every row in signal_outcomes exits at exactly -1R or +2R by construction, which makes no exit rule testable from it: a 3R target, a trailing stop or a time stop each need to know where price actually went, and the record only says which of two pre-set lines it crossed first. Carries high/low/close only -- no swing data -- so nothing computed from it can inherit the five-bar look-ahead that swing detection has mid-series.';
 
+COMMENT ON COLUMN public.signal_excursions.source IS
+  'signal = an EOD row from `signals`, filled at the NEXT open per update_outcomes'' convention. detection = an intraday row from `live_signals` (session=rbe), filled at the detection price on the detection day itself. The two entry conventions are genuinely different and this column is what stops them being averaged together.';
+
 COMMENT ON COLUMN public.signal_excursions.day_offset IS
-  '1 = the first session after signal_date, which is the entry session. Counts trading days present in the bar series, so a holiday does not consume an offset and offset 5 is always the fifth session traded.';
+  'For source=signal: 1 = the first session AFTER signal_date, which is the entry session. For source=detection: 1 = the detection day itself, because the fill happened intraday on it.
+   Counts trading days present in the bar series, so a holiday does not consume an offset and offset 5 is always the fifth session traded.';
 
 COMMENT ON COLUMN public.signal_excursions.mfe_r IS
   'Maximum favourable excursion from the fill, in R, cumulative to and including this bar. Signed so that favourable is positive for both sides: (high - entry) / risk for a long, (entry - low) / risk for a short. Cumulative rather than per-bar because the question an exit rule asks is "how far has this been in profit by now", not "how far did it move today".';
@@ -114,4 +132,8 @@ SELECT
   (SELECT count(*) = 4 FROM information_schema.columns
      WHERE table_name='signal_excursions'
        AND column_name IN ('mfe_r','mae_r','both_same_bar','engine_sha'))  AS key_columns,
+  (SELECT convalidated FROM pg_constraint
+     WHERE conname='signal_excursions_source_chk')                         AS source_check,
+  (SELECT count(*) = 1 FROM information_schema.columns
+     WHERE table_name='signal_excursions' AND column_name='source')        AS source_column,
   (SELECT obj_description('public.signal_excursions'::regclass) IS NOT NULL) AS table_comment;
