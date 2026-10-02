@@ -30,10 +30,16 @@
 CREATE TABLE IF NOT EXISTS public.signal_excursions (
   -- 'signal'    an EOD row from `signals`, entered at the next open
   -- 'detection' an intraday row from `live_signals`, entered at the detection
-  --             price on the detection day. Same table so "do detections resolve
-  --             better than signals" is a GROUP BY rather than a join across two
-  --             schemas -- but the two have DIFFERENT entry conventions and the
-  --             column is what keeps that honest rather than blended.
+  --             price on the detection day
+  -- 'reject'    a sampled stock-day from `reject_sample` that never qualified,
+  --             entered at the next open with a stop CONSTRUCTED from its ATR
+  --             band, because no stop was ever chosen for it. Its R is
+  --             counterfactual; a signal's is not.
+  --
+  -- Same table so "do qualifying days behave differently from rejected ones" is a
+  -- GROUP BY rather than a join across three schemas -- but the three have
+  -- genuinely DIFFERENT entry conventions and this column is what keeps them from
+  -- being averaged together.
   source            text        NOT NULL DEFAULT 'signal',
   signal_date       date        NOT NULL,
   symbol            text        NOT NULL,
@@ -70,7 +76,7 @@ ALTER TABLE public.signal_excursions
 
 ALTER TABLE public.signal_excursions
   ADD CONSTRAINT signal_excursions_source_chk
-  CHECK (source IN ('signal', 'detection')) NOT VALID;
+  CHECK (source IN ('signal', 'detection', 'reject')) NOT VALID;
 
 ALTER TABLE public.signal_excursions
   VALIDATE CONSTRAINT signal_excursions_source_chk;
@@ -95,7 +101,7 @@ COMMENT ON TABLE public.signal_excursions IS
   'The daily price path after entry, 20 trading days per signal, written by engine/excursions.py. Exists because every row in signal_outcomes exits at exactly -1R or +2R by construction, which makes no exit rule testable from it: a 3R target, a trailing stop or a time stop each need to know where price actually went, and the record only says which of two pre-set lines it crossed first. Carries high/low/close only -- no swing data -- so nothing computed from it can inherit the five-bar look-ahead that swing detection has mid-series.';
 
 COMMENT ON COLUMN public.signal_excursions.source IS
-  'signal = an EOD row from `signals`, filled at the NEXT open per update_outcomes'' convention. detection = an intraday row from `live_signals` (session=rbe), filled at the detection price on the detection day itself. The two entry conventions are genuinely different and this column is what stops them being averaged together.';
+  'signal = an EOD row from `signals`, filled at the NEXT open per update_outcomes'' convention. detection = an intraday row from `live_signals` (session=rbe), filled at the detection price on the detection day itself. reject = a sampled stock-day from reject_sample that never qualified, filled at the next open with a stop constructed from its own atr_pct clipped to the 0.5-5.0% band, because the engine never chose a stop for it -- its R is therefore counterfactual and must not be pooled with the other two without saying so. The three entry conventions are genuinely different and this column is what stops them being averaged together.';
 
 COMMENT ON COLUMN public.signal_excursions.day_offset IS
   'For source=signal: 1 = the first session AFTER signal_date, which is the entry session. For source=detection: 1 = the detection day itself, because the fill happened intraday on it.
@@ -134,6 +140,8 @@ SELECT
        AND column_name IN ('mfe_r','mae_r','both_same_bar','engine_sha'))  AS key_columns,
   (SELECT convalidated FROM pg_constraint
      WHERE conname='signal_excursions_source_chk')                         AS source_check,
+  (SELECT pg_get_constraintdef(oid) LIKE '%reject%' FROM pg_constraint
+     WHERE conname='signal_excursions_source_chk')                         AS reject_admitted,
   (SELECT count(*) = 1 FROM information_schema.columns
      WHERE table_name='signal_excursions' AND column_name='source')        AS source_column,
   (SELECT obj_description('public.signal_excursions'::regclass) IS NOT NULL) AS table_comment;

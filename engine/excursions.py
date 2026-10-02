@@ -53,7 +53,14 @@ log = logging.getLogger("EXCURSIONS")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 STOCKS_DIR = Path(__file__).resolve().parent.parent / "data/processed/stocks"
-WINDOW_DAYS = 20          # trading days of path recorded per signal
+WINDOW_DAYS = 20
+
+# A reject has no stop, so one is constructed to make its R comparable. These
+# mirror atlas/config.py's MIN_STOP_PCT / MAX_STOP_PCT so a counterfactual reject
+# is clipped to the same band a real trade would have been.
+REJECT_STOP_FALLBACK_PCT = 2.0
+MIN_STOP_PCT_REF = 0.5
+MAX_STOP_PCT_REF = 5.0          # trading days of path recorded per signal
 GAP_TOLERANCE = 0.005     # the 0.5% the entry convention allows past the band
 
 
@@ -149,6 +156,47 @@ def fetch_detections(since: str = None, limit: int = 0) -> list:
     return got
 
 
+def fetch_rejects(since: str = None, limit: int = 0) -> list:
+    """Sampled rejected stock-days, for the membership test.
+
+    THE THIRD ENTRY CONVENTION, and the one that needs the most care. A reject has
+    no entry band and no stop, because it never became a setup -- so there is
+    nothing to fill at and nothing to risk. A path still has to be measured for it,
+    or the question "did the filters select better-than-random stock-days" has only
+    one side.
+
+    The convention is deliberately the most neutral available: fill at the NEXT
+    OPEN, exactly as a signal does, and size the risk off the same ATR band the
+    engine would have used had the row qualified. That makes R comparable across
+    the two populations without inventing a stop the engine never chose.
+
+    A reject's R is therefore counterfactual and a signal's is not. The `source`
+    column is what keeps the two from being averaged, and no consumer should pool
+    them without saying which question it is asking.
+    """
+    params = ("select=sample_date,symbol,direction,close,atr_pct,"
+              "disqualify_reason,gates_failed&order=sample_date.desc")
+    if since:
+        params += f"&sample_date=gte.{since}"
+    got = _get_all("reject_sample", params, hard_limit=limit)
+    if not isinstance(got, list):
+        if got.status_code in (400, 404):
+            log.warning("reject_sample not reachable — "
+                        "migrations/PENDING_reject_sample.sql not applied. "
+                        "No rejects measured this run.")
+            return []
+        raise RuntimeError(f"reject fetch failed: HTTP {got.status_code} "
+                           f"{got.text[:200]}")
+    # Normalised onto the shape measure() expects, so the walker needs no third
+    # branch: signal_date is the key name everywhere downstream.
+    out = []
+    for r in got:
+        r = dict(r)
+        r["signal_date"] = r.pop("sample_date")
+        out.append(r)
+    return out
+
+
 def existing_keys() -> set:
     """(source, signal_date, symbol, direction) already measured, so a nightly run
     does not re-walk the whole history every time."""
@@ -230,6 +278,28 @@ def measure(sig: dict, source: str = "signal") -> tuple:
         return [], "no session after the signal"
 
     is_long = str(sig.get("direction", "LONG")).upper() != "SHORT"
+
+    if source == "reject":
+        # NO STOP EXISTS, so one is constructed from the same ATR band the engine
+        # would have applied. REJECT_STOP_ATR is the midpoint of the configured
+        # 0.5-5.0% band expressed in ATR terms, and the fallback is used only when
+        # atr_pct is missing -- a constructed stop is a stated assumption, a
+        # silently-zero one would make every R infinite.
+        try:
+            entry = float(fwd.iloc[0]["open"])
+        except (TypeError, ValueError, KeyError):
+            return [], "no open on the next session"
+        atr = sig.get("atr_pct")
+        try:
+            atr = float(atr)
+        except (TypeError, ValueError):
+            atr = float("nan")
+        pct = atr if np.isfinite(atr) and atr > 0 else REJECT_STOP_FALLBACK_PCT
+        pct = min(max(pct, MIN_STOP_PCT_REF), MAX_STOP_PCT_REF)
+        stop = entry * (1 - pct / 100.0) if is_long else entry * (1 + pct / 100.0)
+        if entry <= 0:
+            return [], "unusable open"
+        return _walk(fwd, entry, stop, is_long, sig, source)
 
     if source == "detection":
         # No band and no gap test: the fill is the price the detection fired at.
@@ -382,6 +452,15 @@ def main() -> int:
         log.warning(f"detections unavailable ({e}) — measuring signals only")
         dets = []
 
+    # REJECTS, the negative class for the membership test. Sampled at k=10 per
+    # qualifying case by engine/reject_sample, so this is ~36 rows a night rather
+    # than 464.
+    try:
+        rejs = fetch_rejects(since=a.since, limit=a.limit)
+    except Exception as e:
+        log.warning(f"rejects unavailable ({e}) — measuring signals and detections only")
+        rejs = []
+
     done = set() if a.backfill else existing_keys()
     todo = [("signal", x) for x in sigs
             if ("signal", str(x["signal_date"])[:10], x["symbol"],
@@ -389,8 +468,12 @@ def main() -> int:
     todo += [("detection", x) for x in dets
              if ("detection", str(x["signal_date"])[:10], x["symbol"],
                  str(x.get("direction", "")).upper()) not in done]
-    log.info(f"{len(sigs)} signal(s) + {len(dets)} detection(s) fetched, "
-             f"{len(done)} already measured, {len(todo)} to walk")
+    todo += [("reject", x) for x in rejs
+             if ("reject", str(x["signal_date"])[:10], x["symbol"],
+                 str(x.get("direction", "")).upper()) not in done]
+    log.info(f"{len(sigs)} signal(s) + {len(dets)} detection(s) + "
+             f"{len(rejs)} reject(s) fetched, {len(done)} already measured, "
+             f"{len(todo)} to walk")
 
     all_rows, skips = [], {}
     for source, s in todo:

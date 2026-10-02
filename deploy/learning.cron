@@ -24,6 +24,7 @@
 # answer and write the same rows.
 
 # ── 1. THE PATH RECORDER ──────────────────────────────────────────────
+# Walks signals, detections AND sampled rejects — the third is why §2 runs first.
 # After the EOD chain has published and update_outcomes has resolved. Walks the
 # 20-day forward path of every signal and every detection not already measured,
 # from the daily bars on the box -- which is why it runs here and nowhere else.
@@ -33,7 +34,20 @@
 #   cd /home/ubuntu/thestocklogic && venv/bin/python -m engine.excursions --backfill
 40 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.excursions >> /home/ubuntu/logs/excursions.log 2>&1
 
-# ── 2. THE DETECTION HYPOTHESIS ───────────────────────────────────────
+# ── 2. THE NEGATIVE CLASS ─────────────────────────────────────────────
+# Draws 10 rejected stock-days per qualifying one from all_rows_v2.parquet, which
+# 03b writes for the latest date only (~464 rows, against 365k if the whole
+# rescored history were kept). ~36 rows a night.
+#
+# BEFORE the excursion recorder, so tonight's sample gets its forward path walked
+# on tonight's run rather than waiting a day. 13:30 UTC = 19:00 IST, after the EOD
+# chain has finished scoring.
+#
+# This is the only measurement of whether qualifying means anything: every other
+# analysis compares winners against losers and cannot ask the prior question.
+30 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.reject_sample >> /home/ubuntu/logs/reject_sample.log 2>&1
+
+# ── 3. THE DETECTION HYPOTHESIS ───────────────────────────────────────
 # 2,787 of the 2,941 rows in live_signals are intraday detections, published with
 # entry, stop and two targets since June, and not one has ever been scored. This
 # reads the paths written fifteen minutes earlier and reports what they did, at

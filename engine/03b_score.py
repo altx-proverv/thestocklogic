@@ -9,6 +9,7 @@ Run: python3 engine/03b_score.py
 import os, sys, logging, warnings
 from pathlib import Path
 import numpy as np
+from collections import OrderedDict
 import pandas as pd
 from collections import Counter
 from tqdm import tqdm
@@ -86,6 +87,86 @@ def _warn_missing_cols(df: pd.DataFrame):
                     f"{', '.join(missing)}. Scores are biased until this is fixed.")
 
 
+GATE_ORDER = (
+    "warmup", "no_trade_zone", "very_low_volume", "atr_too_high",
+    "bear_regime_no_reversal", "adq_ranging_market",
+    "weekly_structure_misaligned", "no_smc_signal", "no_recent_bos_choch",
+)
+# Bit i in gates_failed_mask is GATE_ORDER[i]. Bit 9 is added later, after
+# compute_zone_entries, for a row whose entry geometry is unusable -- that gate
+# lives at a different stage and cannot be evaluated here.
+GATE_ZONE_ENTRY_BIT = 9
+
+
+def gate_conditions(df: pd.DataFrame) -> tuple:
+    """(conds, feats).
+
+    conds  {gate name: raw boolean Series}, in funnel order, with NO short-circuit.
+    feats  the derived Series the gates are built from, returned rather than
+           recomputed because the scoring block below needs the same ones. They
+           used to be locals of score_vectorized; moving the gate conditions out
+           without returning them is what broke 14 names on the first attempt.
+
+    Each value is the gate's own condition evaluated against every row,
+    independent of whether an earlier gate already rejected it. The caller
+    short-circuits for disqualify_reason and does not for gates_failed.
+
+    Verbatim from the inline block this replaced, including the .get() defaults --
+    a missing column must keep defaulting the way it did (rvol 1.0, atr_pct 2.0,
+    regime "unknown", flags 0) or the funnel counts move for reasons that have
+    nothing to do with the market.
+    """
+    def col(name, default):
+        return df.get(name, pd.Series(default, index=df.index)).fillna(default)
+
+    direction_col = (df.get("direction", pd.Series("long", index=df.index))
+                     if "direction" in df.columns
+                     else pd.Series("long", index=df.index))
+
+    rvol        = col("rvol", 1.0)
+    atr_pct     = col("atr_pct", 2.0)
+    regime      = col("market_regime", "unknown")
+    bull_liq    = col("bull_liq_sweep", 0)
+    choch_b     = col("choch_bull", 0)
+    adx_ranging = col("adx_ranging", 0)
+    weekly_bull = col("weekly_bullish", 0)
+    weekly_bear = col("weekly_bearish", 0)
+
+    long_smc  = (col("near_demand_ob", 0) + col("price_in_bull_fvg", 0)
+                 + col("bos_bull", 0) + col("choch_bull", 0) + col("bull_liq_sweep", 0))
+    short_smc = (col("near_supply_ob", 0) + col("price_in_bear_fvg", 0)
+                 + col("bos_bear", 0) + col("bear_liq_sweep", 0))
+    is_long, is_short = direction_col == "long", direction_col == "short"
+
+    g = OrderedDict()
+    g["warmup"]                      = df.get("is_warmup", pd.Series(False, index=df.index)) == True
+    g["no_trade_zone"]               = col("no_trade_zone", 0) == 1
+    g["very_low_volume"]             = rvol < 0.5
+    g["atr_too_high"]                = atr_pct > 8.0
+    g["bear_regime_no_reversal"]     = (is_long & (regime == "bear")
+                                        & (bull_liq == 0) & (choch_b == 0))
+    g["adq_ranging_market"]          = adx_ranging == 1
+    g["weekly_structure_misaligned"] = ((is_long & (weekly_bear == 1))
+                                        | (is_short & (weekly_bull == 1)))
+    g["no_smc_signal"]               = ((is_long & (long_smc == 0))
+                                        | (is_short & (short_smc == 0)))
+    g["no_recent_bos_choch"]         = col("recent_bos_choch", 0) == 0
+    assert tuple(g) == GATE_ORDER, "gate order drifted from GATE_ORDER"
+
+    feats = {
+        "direction_col": direction_col, "rvol": rvol, "atr_pct": atr_pct,
+        "regime": regime, "bull_liq": bull_liq, "choch_b": choch_b,
+        "adx_ranging": adx_ranging, "weekly_bull": weekly_bull,
+        "weekly_bear": weekly_bear, "long_smc": long_smc, "short_smc": short_smc,
+        "near_ob": col("near_demand_ob", 0), "bull_fvg": col("price_in_bull_fvg", 0),
+        "bos_bull": col("bos_bull", 0), "choch_b2": col("choch_bull", 0),
+        "sup_ob": col("near_supply_ob", 0), "bear_fvg": col("price_in_bear_fvg", 0),
+        "bos_bear": col("bos_bear", 0), "liq_bull": col("bull_liq_sweep", 0),
+        "liq_bear": col("bear_liq_sweep", 0),
+    }
+    return g, feats
+
+
 def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
                      screen=None) -> pd.DataFrame:
     """
@@ -104,81 +185,53 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
     df["sector_bias"] = df["sector"].map(sector_bias).fillna("avoid")
 
     # ── DISQUALIFIERS (vectorized) ────────────────────────────────
-    df["disqualified"]       = False
-    df["disqualify_reason"]  = ""
+    # DECLARED ONCE, CONSUMED TWICE. Every gate's raw condition is built in
+    # gate_conditions() and used for two different things:
+    #
+    #   disqualify_reason  short-circuited, first failure wins. Unchanged -- each
+    #                      gate is still masked on (~disqualified), so a row
+    #                      reports the first gate it failed and the funnel tally
+    #                      reads exactly as it did before.
+    #   gates_failed       NOT short-circuited. How many gates this row's features
+    #                      fail in total, plus a bitmask of which.
+    #
+    # The second one exists because the first cannot answer "was this a near
+    # miss". A row whose disqualify_reason is `warmup` may also fail nine other
+    # gates; a row that fails only `no_recent_bos_choch` is a completely different
+    # negative, and for the question "what separates a setup from a non-setup" it
+    # is the only interesting kind. Short-circuited, the two are indistinguishable.
+    #
+    # Both read the same dict so they cannot drift. Writing the conditions out
+    # twice -- once to short-circuit, once to count -- is how update_outcomes and
+    # trade_review came to hold the same abs() bug in two places.
+    conds, _f = gate_conditions(df)
+    # Rebound as locals, because the scoring dimensions below were written
+    # against these names and reading them from a dict at every use site would be
+    # a large diff for no benefit.
+    direction_col = _f["direction_col"]; rvol = _f["rvol"]; atr_pct = _f["atr_pct"]
+    regime = _f["regime"]; near_ob = _f["near_ob"]; bull_fvg = _f["bull_fvg"]
+    bos_bull = _f["bos_bull"]; choch_b2 = _f["choch_b2"]; sup_ob = _f["sup_ob"]
+    bear_fvg = _f["bear_fvg"]; bos_bear = _f["bos_bear"]; liq_bull = _f["liq_bull"]
+    liq_bear = _f["liq_bear"]
 
-    # Warmup
-    mask = df["is_warmup"] == True
-    df.loc[mask, "disqualified"]      = True
-    df.loc[mask, "disqualify_reason"] = "warmup"
+    df["disqualified"]      = False
+    df["disqualify_reason"] = ""
+    for name, cond in conds.items():
+        mask = (~df["disqualified"]) & cond
+        df.loc[mask, "disqualified"]      = True
+        df.loc[mask, "disqualify_reason"] = name
 
-    # No trade zone
-    mask = (~df["disqualified"]) & (df.get("no_trade_zone", pd.Series(0, index=df.index)) == 1)
-    df.loc[mask, "disqualified"]      = True
-    df.loc[mask, "disqualify_reason"] = "no_trade_zone"
-
-    # Very low volume
-    rvol = df.get("rvol", pd.Series(1.0, index=df.index)).fillna(1.0)
-    mask = (~df["disqualified"]) & (rvol < 0.5)
-    df.loc[mask, "disqualified"]      = True
-    df.loc[mask, "disqualify_reason"] = "very_low_volume"
-
-    # ATR too high
-    atr_pct = df.get("atr_pct", pd.Series(2.0, index=df.index)).fillna(2.0)
-    mask = (~df["disqualified"]) & (atr_pct > 8.0)
-    df.loc[mask, "disqualified"]      = True
-    df.loc[mask, "disqualify_reason"] = "atr_too_high"
-
-    # Bear regime no reversal (long only)
-    regime   = df.get("market_regime", pd.Series("unknown", index=df.index)).fillna("unknown")
-    bull_liq = df.get("bull_liq_sweep", pd.Series(0, index=df.index)).fillna(0)
-    choch_b  = df.get("choch_bull", pd.Series(0, index=df.index)).fillna(0)
-    direction_col = df.get("direction", pd.Series("long", index=df.index)) if "direction" in df.columns else pd.Series("long", index=df.index)
-    mask = (~df["disqualified"]) & (direction_col == "long") & \
-           (regime == "bear") & (bull_liq == 0) & (choch_b == 0)
-    df.loc[mask, "disqualified"]      = True
-    df.loc[mask, "disqualify_reason"] = "bear_regime_no_reversal"
-
-    # ADX ranging disqualifier
-    adx_ranging = df.get("adx_ranging", pd.Series(0, index=df.index)).fillna(0)
-    mask = (~df["disqualified"]) & (adx_ranging == 1)
-    df.loc[mask, "disqualified"]      = True
-    df.loc[mask, "disqualify_reason"] = "adq_ranging_market"
-
-    # Weekly structure misalignment disqualifier
-    weekly_bull = df.get("weekly_bullish", pd.Series(0, index=df.index)).fillna(0)
-    weekly_bear = df.get("weekly_bearish", pd.Series(0, index=df.index)).fillna(0)
-    mask_long_weak  = (~df["disqualified"]) & (direction_col=="long")  & (weekly_bear==1)
-    mask_short_weak = (~df["disqualified"]) & (direction_col=="short") & (weekly_bull==1)
-    df.loc[mask_long_weak | mask_short_weak, "disqualified"]      = True
-    df.loc[mask_long_weak | mask_short_weak, "disqualify_reason"] = "weekly_structure_misaligned"
-
-    # SMC signal columns
-    near_ob  = df.get("near_demand_ob",    pd.Series(0, index=df.index)).fillna(0)
-    bull_fvg = df.get("price_in_bull_fvg", pd.Series(0, index=df.index)).fillna(0)
-    bos_bull = df.get("bos_bull",          pd.Series(0, index=df.index)).fillna(0)
-    choch_b2 = df.get("choch_bull",        pd.Series(0, index=df.index)).fillna(0)
-    sup_ob   = df.get("near_supply_ob",    pd.Series(0, index=df.index)).fillna(0)
-    bear_fvg = df.get("price_in_bear_fvg", pd.Series(0, index=df.index)).fillna(0)
-    bos_bear = df.get("bos_bear",          pd.Series(0, index=df.index)).fillna(0)
-    liq_bull = df.get("bull_liq_sweep",    pd.Series(0, index=df.index)).fillna(0)
-    liq_bear = df.get("bear_liq_sweep",    pd.Series(0, index=df.index)).fillna(0)
-
-    long_smc  = near_ob + bull_fvg + bos_bull + choch_b2 + liq_bull
-    short_smc = sup_ob  + bear_fvg + bos_bear + liq_bear
-
-    # Hard gate 1: no SMC signal at all
-    mask_long  = (~df["disqualified"]) & (direction_col == "long")  & (long_smc  == 0)
-    mask_short = (~df["disqualified"]) & (direction_col == "short") & (short_smc == 0)
-    df.loc[mask_long | mask_short, "disqualified"]      = True
-    df.loc[mask_long | mask_short, "disqualify_reason"] = "no_smc_signal"
-
-    # Hard gate 2: BOS or CHOCH must have occurred within last 9 trading days
-    # Without structure confirmation, OB alone is insufficient
-    recent_bos = df.get("recent_bos_choch", pd.Series(0, index=df.index)).fillna(0)
-    mask_no_struct = (~df["disqualified"]) & (recent_bos == 0)
-    df.loc[mask_no_struct, "disqualified"]      = True
-    df.loc[mask_no_struct, "disqualify_reason"] = "no_recent_bos_choch"
+    # The unconditioned view. int8 is enough for 9 gates and keeps the frame small
+    # at ~183k rows per direction.
+    failed = np.zeros(len(df), dtype=np.int16)
+    bits   = np.zeros(len(df), dtype=np.int32)
+    for i, (name, cond) in enumerate(conds.items()):
+        c = cond.to_numpy(dtype=bool, na_value=False) if hasattr(cond, "to_numpy") \
+            else np.asarray(cond, dtype=bool)
+        failed += c
+        bits   |= (c.astype(np.int32) << i)
+    df["gates_failed"]      = failed
+    df["gates_failed_mask"] = bits
 
     # ── SCREEN HOOK ───────────────────────────────────────────────
     # accumulation.py's contract, verbatim: "Call AFTER 03b's disqualifier
@@ -395,6 +448,16 @@ def compute_trade_levels_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[invalid, "disqualify_reason"] = df.loc[invalid, "reject_reason"]
     df.loc[invalid, "qualifies"]         = False
 
+    # Gate 10, counted at the stage it actually runs at. compute_zone_entries
+    # needs the zone and the swing stop, neither of which exists in the
+    # disqualifier block, so this cannot be folded into gate_conditions. A row
+    # with a usable setup and an unusable stop is the nearest miss there is and
+    # must be distinguishable from one that failed nine feature gates.
+    if "gates_failed" in df.columns:
+        df["gates_failed"] = df["gates_failed"].fillna(0).astype(int) + invalid.astype(int)
+        df["gates_failed_mask"] = (df["gates_failed_mask"].fillna(0).astype(int)
+                                   | (invalid.astype(int) << GATE_ZONE_ENTRY_BIT))
+
     return df
 
 
@@ -513,6 +576,43 @@ def process_direction(combined: pd.DataFrame, direction: str,
                 df.loc[qual_mask, col] = levels[col].values
 
     return df
+
+
+def _latest_slice(df: pd.DataFrame) -> pd.DataFrame:
+    """The most recent date's rows from one batch, rejects included.
+
+    A batch covers up to 100 symbols over the whole history, so this is ~100 rows
+    out of ~78,000. Taken per batch because the frame is deleted immediately after
+    to keep memory flat, and the global maximum date is not known until every
+    batch has been read -- _write_all_rows does the final narrowing.
+    """
+    if df is None or df.empty or "date" not in df.columns:
+        return df.head(0) if df is not None else pd.DataFrame()
+    return df[df["date"] == df["date"].max()].copy()
+
+
+def _write_all_rows(parts: list) -> None:
+    """all_rows_v2.parquet -- every row for the latest date, qualifying or not.
+
+    This is the ONLY artifact that carries the rejected population, and
+    engine/reject_sample refuses to run without it rather than sampling the
+    qualifying set and calling the result a control group.
+    """
+    parts = [p for p in parts if p is not None and len(p)]
+    if not parts:
+        log.warning("no rows captured for all_rows_v2 — the reject sampler will "
+                    "have nothing to draw from tonight")
+        return
+    allr = pd.concat(parts, ignore_index=True)
+    # Narrow to the single global maximum: batches can disagree if a symbol's
+    # history is short, and a frame holding two dates would silently double the
+    # sampler's population.
+    latest = allr["date"].max()
+    allr = allr[allr["date"] == latest]
+    allr.to_parquet(SIGNALS_DIR / "all_rows_v2.parquet", index=False)
+    log.info(f"All rows for {str(latest)[:10]}: {len(allr):,} "
+             f"({int(allr['disqualified'].sum()):,} rejected, "
+             f"{int((~allr['disqualified']).sum()):,} qualifying)")
 
 
 def build_playbooks(scored: pd.DataFrame) -> pd.DataFrame:
@@ -710,6 +810,13 @@ def main():
     # before it checks the band and the distance -- but qty is not, because sizing
     # happens after. That is correct: enter_trade re-sizes from the live price.
     candidates = []
+    # THE REJECTS, LATEST DATE ONLY. process_direction's frame holds every row --
+    # qualifying and rejected -- and is then filtered to the qualifying ones and
+    # deleted, which is why the negative class has never been persisted. Only the
+    # most recent date is kept: that is ~232 symbols x 2 directions = 464 rows,
+    # against 365k if the whole rescored history were written. engine/reject_sample
+    # draws from this; nothing else reads it.
+    all_rows = []
 
     for n, total, batch in smc_batches(batch_size):
         log.info(f"Batch {n}/{total}: {batch['symbol'].nunique()} stocks, "
@@ -718,12 +825,14 @@ def main():
         longs = process_direction(batch, "long", sector_bias, symbol_sector)
         tally(longs, stats, dq_reasons, "long")
         candidates.append(_watchlist(longs))
+        all_rows.append(_latest_slice(longs))
         longs_q = longs[longs["qualifies"]].copy()
         del longs
 
         shorts = process_direction(batch, "short", sector_bias, symbol_sector)
         tally(shorts, stats, dq_reasons, "short")
         candidates.append(_watchlist(shorts))
+        all_rows.append(_latest_slice(shorts))
         shorts_q = shorts[shorts["qualifies"]].copy()
         del shorts
         del batch
@@ -747,6 +856,11 @@ def main():
             else scored.head(0))
     cand.to_parquet(SIGNALS_DIR / "candidates_v2.parquet", index=False)
     log.info(f"Candidates (valid but not at the zone at close): {len(cand):,}")
+
+    # The negative class. Written even when empty, for the same reason as
+    # candidates_v2: a consumer must be able to tell "nothing was rejected" from
+    # "03b did not get this far".
+    _write_all_rows(all_rows)
 
         # Build playbooks
     log.info("\n── Step 3: Building playbooks ──")

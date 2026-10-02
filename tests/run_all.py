@@ -46,6 +46,8 @@ SUITES = [
     ("excursions",      [sys.executable, "tests/test_excursions.py"]),
     ("detection score",  [sys.executable, "tests/test_detection_scoring.py"]),
     ("outcome integrity",[sys.executable, "tests/test_outcome_integrity.py"]),
+    ("gate audit",       [sys.executable, "tests/test_gate_audit.py"]),
+    ("reject sample",    [sys.executable, "tests/test_reject_sample.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

@@ -29,11 +29,12 @@
 -- P&L. engine/trade_review.py carried the same abs() in its own copy of the block
 -- and is fixed too. This file repairs what those two already wrote.
 --
--- WHAT THIS DOES TO THE PUBLISHED FIGURE. It lowers it, which is the point. The
--- resolved hit rate is 22.2% as published and 18.8% counting only rows that
--- realised +1R or better. The basis change in (A) is on its own mildly
--- FAVOURABLE -- a clean 2R off the fill measures -0.318R against the recorded
--- -0.346R -- so the overstatement is entirely (B) and (C).
+-- WHAT THIS DOES TO THE PUBLISHED FIGURE. It makes it MEAN something, which is
+-- not the same as making it smaller -- see the detailed note at step 3. The
+-- overstatement is in (B) and (C): 10 false wins of which 7 lost money. The basis
+-- change in (A) is on its own mildly favourable. Net, the headline rate moves
+-- 22.2% -> ~23.2% while the resolved population shrinks by ~13 rows and every
+-- remaining win becomes a true 2R of the risk actually taken.
 --
 -- NO IDs ANYWHERE IN THIS FILE. 06_push_supabase deletes and re-inserts a whole
 -- date on every run, so signals.id for a given row changes nightly. Every
@@ -160,10 +161,32 @@ UPDATE public.signal_outcomes
 -- AFTER APPLYING: run the resolver so these come back on the honest basis.
 --   cd /home/ubuntu/thestocklogic && venv/bin/python -m engine.update_outcomes
 --
--- EXPECT THE FIGURE TO FALL. The resolved hit rate is 22.2% as published and
--- 18.8% counting only rows that realised +1R or better. Rows whose target was
--- never beyond the fill now return entry_status='BAD_TARGET' and outcome='SKIP'
--- rather than a win.
+-- WHAT TO EXPECT, PRECISELY. Three different numbers get confused here, and an
+-- earlier version of this note confused two of them.
+--
+--   22.2%  the published figure: 65 WIN_T1 of 293, scored against a target
+--          derived from entry_ref, with 10 false wins inside it.
+--   18.8%  the OLD record restated honestly -- of those same 293, how many
+--          actually realised +1R or better. This measures the SIZE OF THE
+--          OVERSTATEMENT. It is not what this migration leaves behind.
+--   ~23%   what the re-resolved record will SHOW. Modelled on 284 rebuilt
+--          paths: 63 WIN_T1, 208 LOSS, 9 AMBIGUOUS, 4 OPEN -> 23.2% of decided.
+--
+-- So THE HEADLINE RATE GOES SLIGHTLY UP, and the record still gets stricter,
+-- because what changes is what a win MEANS: 65 wins at a median 2.08R of a risk
+-- nobody took, 10 under +1R and 7 of them losing money, become 63 wins at exactly
+-- 2R of the risk actually taken and none false. Expectancy improves from -0.3459R
+-- to about -0.303R for the same reason -- the losses were always honest, only the
+-- wins were not.
+--
+-- COVERAGE FALLS, which is the real cost. About 13 of 284 move to AMBIGUOUS (the
+-- stop and the target touched in one bar, order unknowable) or OPEN, and
+-- AMBIGUOUS is deliberately not in DECIDED, so those rows leave the resolved set
+-- instead of being assigned to a side. Today none do. The record gets smaller and
+-- more honest at once; that is the trade step 3 makes.
+--
+-- These are modelled from an independent bar source, so the box's own parquets
+-- will shift the counts by a row or two. The direction and the shape hold.
 --
 -- signal_marks needs no reset: mark_signals recomputes every resolution from
 -- signals on each run and upserts with resolution=merge-duplicates, so the
