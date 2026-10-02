@@ -391,3 +391,70 @@ magnitude, so the check proves it is scoped rather than merely finding nothing.
 on prose that discusses the string, and once on adjacent code where the string is
 correct. Both are symptoms of the same thing — the unit of the assertion was a
 character range when it should have been a syntax node. Name the node.
+
+## pandas has no Series `<<`, and the two sites looked identical (2026-10-02)
+
+`gates_failed_mask` is built twice. In `score_vectorized`:
+
+```python
+c = cond.to_numpy(dtype=bool, na_value=False)
+bits |= (c.astype(np.int32) << i)          # ndarray — fine
+```
+
+and in `compute_trade_levels_vectorized`:
+
+```python
+df["gates_failed_mask"] | (invalid.astype(int) << GATE_ZONE_ENTRY_BIT)
+```
+
+`invalid` is a column. pandas implements `&`, `|` and `^` on a Series and does
+**not** implement `<<` or `>>`, so the second raises
+`TypeError: unsupported operand type(s) for <<: 'Series' and 'int'`. 03b died on
+the box, nothing qualified, no parquet was written, and the thing downstream of it
+had nothing to read.
+
+The two expressions read as the same operation. The difference is that one had a
+`.to_numpy()` three lines earlier and the other did not — and the one that did was
+written first, which is what made the second look already-proven.
+
+**A second defect was hiding behind it.** `gates_failed` and `gates_failed_mask`
+were missing from `process_direction`'s column-propagation list, so once the shift
+worked the values were computed and immediately discarded. Three lines above that
+list sits a comment warning that exactly this happens. Fixing the crash would have
+produced a column that was always zero, which is worse than a crash: a reject
+sampler recording every zone-validation rejection as failing nothing.
+
+**Why the suite passed.** The test rebuilt the mask itself with numpy arrays
+rather than calling the production functions. A test that reimplements the thing
+it checks passes whatever the reimplementation does — the same shape as [a
+monkeypatched dependency tests the stub, not the code], and the third instance of
+that class in one session. The fix is the same every time: call the real function
+on a real frame.
+
+**The lesson.** When one expression is copied to a second site, the thing that
+made it correct may not have come with it. And "`&` works on a Series" is not
+evidence that `<<` does — NumPy semantics are available on pandas objects
+selectively, not wholesale. Run the production path.
+
+## A recovered row is a case, not a control (2026-10-02)
+
+Running the real pipeline to verify the above surfaced something the synthetic
+fixture could not. The accumulation screen runs *after* 03b's disqualifier block
+and can un-disqualify a row: it clears `disqualified` and `disqualify_reason`
+while `gates_failed` keeps its count. So a **qualifying** row can carry
+`gates_failed >= 1`.
+
+The test asserted "qualifying rows fail no gates". True of the fixture, false in
+production.
+
+This is not a bug — `gates_failed` means "this row's features failed a gate", not
+"this row was rejected", and recording the failure of a recovered row is the
+useful behaviour. But it sets a trap for the analysis it exists to serve: defining
+the control group as `gates_failed >= 1` instead of `disqualified == True` would
+put every screen-recovered row on the wrong side of the comparison, and the
+membership test would measure the accumulation screen rather than the filters.
+
+**The lesson.** A derived column's meaning is fixed by where in the pipeline it is
+computed, not by what its name suggests. When a later stage can reverse an earlier
+decision, any column written before that stage records the earlier decision
+forever — so the definition of a group has to name the stage it comes from.
