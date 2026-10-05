@@ -148,6 +148,47 @@ table.lv tbody tr:hover td{background:rgba(255,255,255,0.03)}
 .lv-watch{font-size:9px;letter-spacing:1.1px;color:var(--muted2)}
 .lv-foot{font-size:10.5px;color:var(--muted2);line-height:1.6;padding:11px 14px 13px;margin:0;border-top:1px solid var(--line2);max-width:86ch}
 .lv-foot b{color:var(--muted);font-weight:600}
+/* ── INTRADAY BREAKOUT DETECTIONS ───────────────────────────────────────
+   buildDetections() shipped on 2 October with none of these rules. The block
+   rendered the whole time -- 22 rows, visible, white text -- as a transparent
+   268px-wide table 1,900px down the page with no border, padding or background,
+   which read as nothing having rendered at all.
+
+   Deliberately QUIETER than .lv-*: dimmer header, no hover emphasis, no colour on
+   the numbers. These are observations, not calls, and the styling should not lend
+   them the weight of the signal cards above. The one thing given real emphasis is
+   the "not calls" line, because that is the claim the block exists to make. */
+.det-wrap{margin:18px 0;border:1px solid var(--line2);background:rgba(255,255,255,0.012)}
+.det-head{padding:11px 14px;border-bottom:1px solid var(--line2)}
+.det-title{font-size:10px;letter-spacing:2px;color:var(--muted2);display:block}
+.det-sub{font-size:11px;color:var(--muted2);display:block;margin-top:5px;
+  line-height:1.5;max-width:82ch}
+.det-sub b{color:var(--muted);font-weight:600}
+.det-scroll{overflow-x:auto;max-height:360px;overflow-y:auto}
+table.det{border-collapse:collapse;width:100%;font-size:11.5px;
+  font-variant-numeric:tabular-nums}
+table.det th{position:sticky;top:0;background:var(--bg);text-align:left;
+  font-weight:500;font-size:9.5px;letter-spacing:1.4px;color:var(--muted2);
+  padding:7px 12px;border-bottom:1px solid var(--line2);white-space:nowrap;z-index:1}
+table.det td{padding:5px 12px;border-bottom:1px solid rgba(255,255,255,0.035);
+  white-space:nowrap;color:var(--muted2)}
+table.det td.r,table.det th.r{text-align:right}
+table.det tbody tr:hover td{background:rgba(255,255,255,0.025)}
+.det-sym{color:var(--muted);font-weight:600;letter-spacing:0.4px}
+.det-dir{padding-left:0 !important;padding-right:0 !important;text-align:center}
+.det-t{color:var(--muted2);font-size:11px}
+/* The prior-day levels are CONTEXT, not instructions. Dimmer than the symbol so
+   nobody reads them as an entry and a stop, which is the only way this block
+   could mislead. */
+.det-lv{color:var(--muted2);opacity:0.72}
+.det-foot{font-size:10.5px;color:var(--muted2);line-height:1.6;
+  padding:11px 14px 13px;margin:0;border-top:1px solid var(--line2);max-width:86ch}
+.det-foot b{color:var(--muted);font-weight:600}
+@media(max-width:720px){
+  .det-sub,.det-foot{font-size:10.5px}
+  table.det{font-size:11px}
+  table.det th,table.det td{padding:5px 9px}
+}
 @media(max-width:640px){.lv-foot,.lv-sub{font-size:10px}table.lv td,table.lv th{padding-left:8px;padding-right:8px}}
 .wl-wrap{margin:14px 0 4px}
 .wl-btn{width:100%;background:none;border:1px solid var(--line);color:var(--muted);

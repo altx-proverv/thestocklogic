@@ -626,3 +626,50 @@ the code had conflated them. A write that must not stop the system still has to 
 able to complain. And a count of zero rows is not proof of a silent failure — under
 RLS with no policy PostgREST returns 200 and an empty list — so the *pattern* is
 enumerable from code in a way the symptom is not.
+
+## It was rendering the whole time (2026-10-05)
+
+"The detections aren't showing." Three days of that, and every diagnosis I reached
+for was wrong in the same way — I kept checking whether the data arrived and the
+markup was produced. Both were fine:
+
+```
+rows fetched:            22
+todayDetections:         22
+buildDetections length:  5592
+```
+
+So I loaded the live page and asked the DOM instead:
+
+```
+detWrapPresent: true      detRows: 22
+display: block            visibility: visible      opacity: 1
+color: rgb(255,255,255)   height: 610px            top: 1927px
+background: rgba(0,0,0,0) width(table): 268px
+```
+
+Present, visible, twenty-two rows. **The eleven CSS classes it emits had no rules
+at all** — I wrote the builder and never wrote the stylesheet. A transparent
+268-pixel table with no border or padding, nineteen hundred pixels down a dark
+page, reads precisely like nothing having rendered.
+
+**Why no test could see it.** Every test in this area asks whether the right HTML
+was produced. The HTML was correct. The defect lived entirely in the gap between
+"emitted" and "visible", which nothing was looking at.
+
+`tests/test_page_styles.py` now checks that every class any page emits has a CSS
+rule. The pages were already clean — zero unstyled classes across all seven once
+compound selectors (`.ftab.long.active`) are counted — so it can be strict rather
+than advisory. Removing the new rules makes it fail on all eleven.
+
+Getting the extractor right took two passes, both failures being the same mistake
+as the check itself: naively splitting `class="sc'+(ctr?' sc-counter':'')+'"`
+harvests the *expression* halves and reports `cls`, `stCls`, `res-` and `LONG` as
+unstyled. Four false positives across four pages would have made the check noise
+and got it switched off, which is worse than not having it.
+
+**The lesson.** "Did we build the right output" and "can a person see it" are
+different questions, and a page is the one place where only the second one matters.
+When a user says something is not showing and the data is provably there, stop
+reading the source and go look at the rendered page — the answer was one DOM query
+away for three days.

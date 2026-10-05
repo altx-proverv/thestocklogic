@@ -60,6 +60,7 @@ SUITES = [
     ("tier1 sources",   [sys.executable, "tests/test_tier1_sources.py"]),
     ("batch & report",  [sys.executable, "tests/test_batch_and_report.py"]),
     ("page claims",     [sys.executable, "tests/test_page_claims.py"]),
+    ("page styles",      [sys.executable, "tests/test_page_styles.py"]),
     ("market flash",    [sys.executable, "tests/test_market_flash.py"]),
     ("meridian iv",     [sys.executable, "tests/test_meridian_iv.py"]),
     ("signal schema",   [sys.executable, "tests/test_signal_schema.py"]),
