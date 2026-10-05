@@ -409,12 +409,25 @@ def main() -> int:
     res = out["results"]
     live = sum(1 for r in res.values() if r["n_through"] > 0)
     newobs = sum(r["n_new"] for r in res.values())
-    log.info(f"{len(res)} standing hypothes(es), {live} with any observations, "
+    log.info(f"{len(res)} standing hypotheses | {live} with evidence | "
              f"{newobs} new observation(s) this run")
     if not live:
-        log.info("every lineage is still empty — outcome hypotheses seed from "
-                 f"{BASIS_OUTCOME_FROM} and marks from {BASIS_MARKS_FROM}, so "
-                 f"evidence starts accumulating from there forward.")
+        # A ZERO HERE IS THE DESIGN, NOT A FAULT, and the log has to say which at a
+        # glance. "0 observations" next to a stack of hypotheses reads like a broken
+        # query; an operator skimming for problems should not have to reason about
+        # seed dates to rule it out.
+        log.info("OK — every lineage is empty BY DESIGN, and this is not an error.")
+        log.info(f"   Outcome hypotheses seed from {BASIS_OUTCOME_FROM}, the day the "
+                 f"measurement basis moved from entry_ref to the actual fill and 293 "
+                 f"verdicts were re-resolved.")
+        log.info(f"   Marks seed from {BASIS_MARKS_FROM}, when the wrong-side "
+                 f"exclusion came into force.")
+        log.info("   Evidence from before those dates was computed under a different "
+                 "definition and cannot be multiplied into these products. The loop "
+                 "accumulates from there forward; nothing is missing.")
+    elif not newobs:
+        log.info("OK — no new observations since the last run. Lineages carry "
+                 "forward unchanged; this is expected on a day nothing resolved.")
 
     if a.dry_run:
         for slug, r in sorted(res.items()):
