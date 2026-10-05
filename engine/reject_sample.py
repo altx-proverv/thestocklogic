@@ -79,7 +79,7 @@ log = logging.getLogger("REJECT-SAMPLE")
 
 SUPABASE_URL = "https://eibdlcanpudjgmkjxrga.supabase.co"
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-SIGNALS_DIR = Path("data/signals")
+from engine.paths import ALL_ROWS
 
 CONTROLS_PER_CASE = 10          # see the note above; past 10 the curve is flat
 MIN_PER_STRATUM = 1             # every stratum present gets at least one row
@@ -145,12 +145,16 @@ def load_scored(day: str = None) -> pd.DataFrame:
     reads the all-rows artifact and fails loudly when it is absent rather than
     sampling from the qualifying set and calling it a control group.
     """
-    path = SIGNALS_DIR / "all_rows_v2.parquet"
+    path = ALL_ROWS
     if not path.exists():
         raise SampleUnavailable(
-            f"{path} does not exist. 03b must be run with --write-all-rows for "
-            f"the reject population to be sampleable; all_scores_v2.parquet holds "
-            f"only the rows that qualified and is not a control group.")
+            f"{path} does not exist. 03b writes it unconditionally at the end of "
+            f"its run -- there is no flag to enable, and an earlier version of this "
+            f"message wrongly told the operator to add one. If the file is absent "
+            f"either 03b did not reach the end of its run, or it found no rows for "
+            f"the latest date. all_scores_v2.parquet holds only the rows that "
+            f"qualified and is NOT a control group, so this refuses rather than "
+            f"falling back to it.")
     df = pd.read_parquet(path)
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])

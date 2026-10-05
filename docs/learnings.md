@@ -710,3 +710,56 @@ to share a minute without anyone seeing it.
 **The lesson.** Infrastructure that lives only on the machine cannot be reviewed,
 cannot be tested, and cannot be rebuilt. The absence of a cron line is a silent
 failure with no log line anywhere — there is no error to find, because nothing ran.
+
+## An error message that invented its own fix (2026-10-05)
+
+`reject_sample` could not find `all_rows_v2.parquet` and said:
+
+> 03b must be run with `--write-all-rows` for the reject population to be sampleable
+
+There is no such flag. `_write_all_rows` is called unconditionally at the end of
+03b's run, and the file *was* written — to
+`data/processed/signals_v2/`, while the sampler looked in `data/signals/`. One
+constant, retyped in two modules, pointing at two directories.
+
+The message did real damage beyond being wrong. The operator read it and proposed
+adding `--write-all-rows` to the crontab's 03b line, which would have failed in a
+new way and buried the actual cause one level deeper. **A speculative remedy in an
+error message is worse than no remedy**: it is the one part of the output a reader
+is most likely to act on without checking, and it carries all the authority of the
+code that printed it.
+
+The reason the constant was duplicated: 03b is `engine/03b_score.py`, and a module
+beginning with a digit cannot be imported by name. So the path was retyped instead
+of shared. That is a real obstacle and not a good enough reason — `engine/paths.py`
+can be imported by everyone, and now is.
+
+**Two lessons.** Only name a remedy you have verified exists; otherwise say what is
+missing and stop. And when an import is awkward, the thing to move is the constant,
+not the typing.
+
+## A cron job that failed before its own redirect (2026-10-05)
+
+`market_flash` produced **no log file at all** on its first scheduled night. Not an
+empty one — none.
+
+```
+20 13 * * 1-5 cd /home/ubuntu/thestocklogic && set -a && . /etc/atlas.env && set +a && … >> reports/market_flash.log 2>&1
+```
+
+`/etc/atlas.env` is root-owned, mode 600. Cron runs as `ubuntu`. The source failed,
+the `&&` chain short-circuited, python never ran — and because the redirect belongs
+to the final command, the log file was never created.
+
+That is the worst failure mode a scheduled job has. Every other kind leaves
+something: a traceback, an empty file, a timestamp. This leaves nothing, and
+"no log file" reads as "the line is missing from the crontab" — which is precisely
+where the investigation went first.
+
+The pattern was copied from the systemd units, where it is correct: they run as root
+and use `EnvironmentFile`. Copying it into cron carried the syntax and dropped the
+privilege.
+
+**The lesson.** Anything a cron line does *before* its redirect is invisible when it
+fails. Keep the command simple and put the environment in the crontab's own variable
+header, which cron reads with the crontab's privileges and not the shell's.

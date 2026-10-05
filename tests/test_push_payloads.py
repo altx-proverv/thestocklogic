@@ -132,6 +132,48 @@ unexplained = sorted((sig - cand) - NULLABLE)
 check("every column candidates omit is accounted for", not unexplained,
       f"unexplained: {unexplained}")
 
+print("\n── a deferred migration makes a writer quiet, not broken ──")
+# push_features POSTed to a table that does not exist every night since the
+# migration was deferred: two parquets parsed, a frame built, a 404 taken, logged
+# and continued. Work for nothing, and a nightly 404 in the log that reads like a
+# fault and buries the real ones.
+check("_features_table_exists exists", hasattr(p6, "_features_table_exists"))
+check("it is cached per process", "_FEATURES_TABLE" in SRC)
+check("push_features returns before doing any work",
+      SRC.index("_features_table_exists(headers)") < SRC.index("frames = []"))
+check("the skip is logged at info, not warning",
+      'log.info("signals_features does not exist' in SRC)
+
+real = p6.requests.get
+try:
+    p6._FEATURES_TABLE = None
+    p6.requests.get = fake(404)
+    check("  a 404 skips", p6._features_table_exists({}) is False)
+    p6._FEATURES_TABLE = None
+    p6.requests.get = fake(200)
+    check("  a 200 proceeds", p6._features_table_exists({}) is True)
+finally:
+    p6.requests.get = real
+
+print("\n── the artifact paths are defined once ──")
+# 03b wrote all_rows_v2.parquet to data/processed/signals_v2/ and reject_sample read
+# it from data/signals/. The file was written correctly every night and the sampler
+# reported it missing, with an error naming a --write-all-rows flag that does not
+# exist -- so the suggested fix would have been a second wrong turn.
+from engine.paths import ALL_ROWS, ALL_SCORES, CANDIDATES
+import importlib.util as _ilu
+_s = _ilu.spec_from_file_location("s3b", ROOT / "engine/03b_score.py")
+_m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m)
+from engine import reject_sample as _rs
+check("03b and reject_sample agree on all_rows_v2",
+      _m.ALL_ROWS == _rs.ALL_ROWS == ALL_ROWS, f"{_m.ALL_ROWS} vs {_rs.ALL_ROWS}")
+check("06_push agrees on the other two",
+      p6.SIGNALS_FILE == ALL_SCORES and p6.CANDIDATES_FILE == CANDIDATES)
+check("nobody retypes the directory",
+      'Path("data/signals")' not in _rs_src if (_rs_src := (ROOT / "engine/reject_sample.py").read_text()) else True)
+check("the error no longer invents a flag",
+      "--write-all-rows" not in _rs_src)
+
 print()
 if FAILS:
     print(f"FAILED {len(FAILS)}: {FAILS}")

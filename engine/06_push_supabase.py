@@ -54,10 +54,10 @@ log = logging.getLogger(__name__)
 SUPABASE_URL     = os.environ.get("SUPABASE_URL",
                    "https://eibdlcanpudjgmkjxrga.supabase.co")
 SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY", "")
-SIGNALS_FILE     = Path("data/processed/signals_v2/all_scores_v2.parquet")
+from engine.paths import ALL_SCORES as SIGNALS_FILE   # noqa: E402
 # Valid setups whose price was not at the zone at the close, within one ATR of it.
 # The loop watches these; near_zone re-tests the distance live every cycle.
-CANDIDATES_FILE  = Path("data/processed/signals_v2/candidates_v2.parquet")
+from engine.paths import CANDIDATES as CANDIDATES_FILE  # noqa: E402
 # MIN_SCORE removed. 03b retired the score gate ("score is non-predictive per
 # validation -- disqualifiers alone decide qualification"), but this copy
 # survived and was the real filter: it dropped every accumulation setup, which
@@ -474,6 +474,36 @@ def _clean(v):
     return f
 
 
+_FEATURES_TABLE = None
+
+
+def _features_table_exists(headers: dict) -> bool:
+    """Is public.signals_features there? Probed once per process.
+
+    Same reasoning as _signals_has, one level up: that guards a COLUMN the publisher
+    names, this guards the whole TABLE. A deferred migration should make a writer
+    quiet, not make it fail nightly -- otherwise the log fills with 404s that look
+    like a broken pipeline and the real faults get lost among them.
+    """
+    global _FEATURES_TABLE
+    if _FEATURES_TABLE is None:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/signals_features?select=signal_date&limit=1",
+                headers=headers, timeout=10)
+            _FEATURES_TABLE = r.status_code in (200, 206)
+            if not _FEATURES_TABLE:
+                log.info("signals_features does not exist — skipping the feature "
+                         "write. Apply migrations/"
+                         "PENDING_signals_features_provenance.sql when the learning "
+                         "loop needs it; nothing reads it until then.")
+        except Exception as e:
+            log.warning(f"could not probe signals_features ({e}) — skipping the "
+                        f"feature write")
+            _FEATURES_TABLE = False
+    return _FEATURES_TABLE
+
+
 def push_features(day_str: str, headers: dict) -> int:
     """Write signals_features for every row 03b PERSISTED, qualifying or not.
 
@@ -498,6 +528,17 @@ def push_features(day_str: str, headers: dict) -> int:
     published, and taking the chain down over a feature table would trade a
     working screener for a research input. Logged loudly and dropped.
     """
+    # DOES THE TABLE EXIST? signals_features is created by
+    # PENDING_signals_features_provenance.sql, deliberately deferred -- "nothing
+    # reads it for months". Until it is applied this function parsed two parquets,
+    # built the frame, POSTed it and took a 404, every night, logging and
+    # continuing. Work for nothing and a line in the log that looks like a fault.
+    #
+    # Checked once per process, before any of that work. Apply the migration and it
+    # starts writing with no code change; leave it deferred and it costs nothing.
+    if not _features_table_exists(headers):
+        return 0
+
     frames = []
     for f in (SIGNALS_FILE, CANDIDATES_FILE):
         if not f.exists():

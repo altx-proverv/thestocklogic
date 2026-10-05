@@ -37,8 +37,10 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger(__name__)
 
 SMC_DIR     = Path("data/processed/smc")
-SIGNALS_DIR = Path("data/processed/signals_v2")
-PLAYBOOKS   = Path("data/processed/signals_v2/playbooks")
+# Imported, not retyped: reject_sample had its own copy pointing at a
+# different directory, and the artifact it needed was written all along.
+from engine.paths import SIGNALS_DIR, ALL_ROWS   # noqa: E402
+from engine.paths import PLAYBOOKS               # noqa: E402
 
 TOP_N_LONG    = 5
 TOP_N_SHORT   = 2
@@ -681,7 +683,7 @@ def _write_all_rows(parts: list) -> None:
     # sampler's population.
     latest = allr["date"].max()
     allr = allr[allr["date"] == latest]
-    allr.to_parquet(SIGNALS_DIR / "all_rows_v2.parquet", index=False)
+    allr.to_parquet(ALL_ROWS, index=False)
     log.info(f"All rows for {str(latest)[:10]}: {len(allr):,} "
              f"({int(allr['disqualified'].sum()):,} rejected, "
              f"{int((~allr['disqualified']).sum()):,} qualifying)")

@@ -169,8 +169,21 @@ MAILTO=""
 #
 # 19:05 IST — resolve yesterday's signals against today's bars
 35 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/update_outcomes.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1
-# 18:50 IST — the desk note, from the figures the chain just published
-20 13 * * 1-5 cd /home/ubuntu/thestocklogic && set -a && . /etc/atlas.env && set +a && /home/ubuntu/thestocklogic/venv/bin/python -m engine.market_flash >> /home/ubuntu/thestocklogic/reports/market_flash.log 2>&1
+# 18:50 IST — the desk note, from the figures the chain just published.
+#
+# NO `. /etc/atlas.env` HERE, and that is why this job produced no log file at all
+# on its first night. /etc/atlas.env is root-owned and chmod 600; cron runs as
+# ubuntu. The source failed with permission denied, the && chain short-circuited,
+# python never ran, and the redirect never created the file -- a job that fails
+# BEFORE its redirect leaves no trace at all, which is the worst way for a cron job
+# to fail. The pattern was copied from the systemd units, which run as root and use
+# EnvironmentFile.
+#
+# ANTHROPIC_API_KEY belongs in the crontab's own variable header alongside the other
+# credentials. Without it market_flash takes its template path, which is permanent
+# infrastructure rather than a fallback: the page always has a flash and it is never
+# yesterday's prose.
+20 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.market_flash >> /home/ubuntu/thestocklogic/reports/market_flash.log 2>&1
 # 19:00 IST — the negative class: 10 rejected stock-days per qualifying one, from
 # all_rows_v2.parquet which 03b writes for the latest date only
 30 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.reject_sample >> /home/ubuntu/thestocklogic/reports/reject_sample.log 2>&1

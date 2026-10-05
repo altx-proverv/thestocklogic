@@ -53,6 +53,20 @@ check("it gives a command that preserves the variables",
       "crontab -l | grep -E" in _hdr and "A-Za-z0-9_]*=" in _hdr)
 check("it still warns against appending", "APPEND EITHER" in _hdr)
 
+print("\n── no job sources a file cron cannot read ──")
+# market_flash produced NO LOG FILE on its first night: `. /etc/atlas.env` is
+# root-owned and chmod 600, cron runs as ubuntu, the source failed, the && chain
+# short-circuited and python never ran -- so the redirect never created the file. A
+# job that fails BEFORE its redirect leaves no trace anywhere, which is the worst
+# way for a scheduled job to fail. The pattern came from the systemd units, which
+# run as root with EnvironmentFile.
+_c = CRON.read_text(encoding="utf-8") if CRON.exists() else ""
+_execlines = [l for l in _c.splitlines()
+              if l.strip() and not l.lstrip().startswith("#")]
+rooted = [l[:60] for l in _execlines if "/etc/atlas.env" in l]
+check("no job sources /etc/atlas.env", not rooted, f"{rooted}")
+check("the reason is recorded in the file", "root-owned and chmod 600" in _c)
+
 print("\n── the authority exists and is the only one ──")
 check("deploy/crontab.box exists", CRON.exists())
 src = CRON.read_text(encoding="utf-8") if CRON.exists() else ""

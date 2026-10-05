@@ -127,9 +127,21 @@ check("the seed is a function of the date only",
 print("\n── it refuses to run on the wrong artifact ──")
 import inspect
 src = inspect.getsource(RS.load_scored)
-check("all_scores_v2 is NOT the source", "all_scores_v2" in src and "all_rows_v2" in src)
-check("it says why all_scores_v2 cannot be the control group",
-      "not a control group" in src)
+# THE FILENAME MOVED to engine/paths.py, so asserting the literal is in this module
+# is now asserting where a constant is typed rather than which file is read. 03b
+# wrote all_rows_v2.parquet to one directory and this module read another; the fix
+# was one shared definition, and the check follows it.
+from engine.paths import ALL_ROWS, ALL_SCORES
+check("the source is all_rows_v2, from the shared path",
+      RS.ALL_ROWS == ALL_ROWS and ALL_ROWS.name == "all_rows_v2.parquet")
+check("  and it is NOT the qualifying-only artifact",
+      RS.ALL_ROWS != ALL_SCORES)
+check("  and both point at the same directory 03b writes to",
+      ALL_ROWS.parent == ALL_SCORES.parent)
+check("it says why the qualifying artifact cannot be the control group",
+      "NOT a control group" in src)
+check("  and it no longer names a flag that does not exist",
+      "--write-all-rows" not in src)
 check("it requires the gate-audit columns",
       "gates_failed" in src and "raise SampleUnavailable" in src)
 
