@@ -5,15 +5,46 @@
 # separate fragments, which meant four places to look and no way to see a collision
 # or a gap. They are folded in here and deleted.
 #
-# INSTALL — REPLACE, NEVER APPEND:
-#     crontab -l > ~/crontab.before.$(date +%F)       # keep the old one
-#     diff <(grep -vE '^\s*(#|$)' ~/crontab.before.*) \
-#          <(grep -vE '^\s*(#|$)' deploy/crontab.box) # read this before applying
-#     crontab deploy/crontab.box
-#     crontab -l | grep -c .                          # confirm
+# ██ INSTALL — MERGE. DO NOT RUN `crontab deploy/crontab.box`. ██
 #
-# Appending would double every job, and `rbe_engine` holds a websocket for the
-# whole session — two of those is two sets of detections written for every tick.
+# THIS FILE CARRIES NO CREDENTIALS AND THE LIVE CRONTAB CARRIES NINETEEN.
+# Installing this file on its own replaces the whole crontab, which deletes the
+# environment-variable header every job depends on. Nothing would error: cron would
+# run all 27 jobs with no keys, every Supabase write would 401, every broker login
+# would fail, and the logs would fill with authentication errors that look like a
+# provider outage. That is a worse failure than the schedule being unversioned,
+# and an earlier revision of this header told you to do exactly it.
+#
+# The variable block is deliberately NOT committed -- it holds live tokens, and
+# this repo is the thing that gets deployed to a public web host.
+#
+#     # 1. back up, always
+#     crontab -l > ~/crontab.before.$(date +%F)
+#
+#     # 2. take the VARIABLE HEADER from the live crontab (every VAR=value line
+#     #    above the first job), and the JOBS from this file
+#     crontab -l | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > /tmp/ct.new
+#     grep -vE '^[A-Za-z_][A-Za-z0-9_]*=' deploy/crontab.box >> /tmp/ct.new
+#
+#     # 3. READ IT before applying -- confirm the variable count and the job count
+#     grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' /tmp/ct.new    # expect 19
+#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 27
+#     diff <(grep -E '^[0-9*@]' ~/crontab.before.*) <(grep -E '^[0-9*@]' /tmp/ct.new)
+#
+#     # 4. apply
+#     crontab /tmp/ct.new
+#
+# Step 2 takes the header from the LIVE crontab rather than from a file, so a
+# credential rotated on the box is never silently reverted to an older value.
+#
+# AND DO NOT APPEND EITHER. Appending doubles every job, and `rbe_engine` holds a
+# websocket for the whole session -- two of those is two sets of detections written
+# for every tick, into a table whose upsert key would not catch it.
+#
+# SHELL, PATH and MAILTO below are the only variables this file sets, because they
+# are not secret and a wrong PATH is a failure mode of its own. If the live crontab
+# also sets them, its values win in step 2 -- which is correct: the box knows its
+# own paths.
 #
 # THE BOX RUNS UTC. IST = UTC + 5:30. Times are given in both because every
 # decision here is about the Indian market session (09:15-15:30 IST).

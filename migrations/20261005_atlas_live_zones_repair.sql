@@ -61,9 +61,15 @@ ALTER TABLE public.atlas_live_zones
 -- VERIFY. All true. One statement at a time -- see migrations/README.md.
 -- ─────────────────────────────────────────────────────────────────────
 
+-- CORRECTED 2026-10-05 AFTER APPLYING: this read `= 16` and the table has 18.
+-- The count came from the column list in PENDING_atlas_live_zones.sql and I forgot
+-- that the live table already carried signal_date and updated_at, which that file
+-- never declared. The migration was right and the check was wrong -- the more
+-- annoying way round, because a failing verify on a correct apply invites someone
+-- to re-run statements that already succeeded.
 SELECT
-  (SELECT count(*) = 16 FROM information_schema.columns
-     WHERE table_schema='public' AND table_name='atlas_live_zones')      AS all_16_columns,
+  (SELECT count(*) = 18 FROM information_schema.columns
+     WHERE table_schema='public' AND table_name='atlas_live_zones')      AS all_18_columns,
   (SELECT count(*) = 7 FROM information_schema.columns
      WHERE table_schema='public' AND table_name='atlas_live_zones'
        AND column_name IN ('id','inside','held','sl','setup_name',

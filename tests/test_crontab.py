@@ -37,6 +37,22 @@ def check(name, cond, detail=""):
         FAILS.append(name)
 
 
+print("\n── the install instruction cannot destroy the credential header ──")
+# The first version of this file said "REPLACE, NEVER APPEND" and gave
+# `crontab deploy/crontab.box` as the command. The live crontab carries nineteen
+# environment variables holding broker tokens and the Supabase service key; this
+# file carries three non-secret ones. Running that command would have deleted all
+# nineteen, and nothing would have errored at install time -- every job would simply
+# start failing to authenticate.
+_hdr = CRON.read_text(encoding="utf-8") if CRON.exists() else ""
+check("the header says MERGE, not replace",
+      "MERGE" in _hdr and "DO NOT RUN `crontab deploy/crontab.box`" in _hdr)
+check("it says why — the credential header is not in this file",
+      "CARRIES NO CREDENTIALS" in _hdr)
+check("it gives a command that preserves the variables",
+      "crontab -l | grep -E" in _hdr and "A-Za-z0-9_]*=" in _hdr)
+check("it still warns against appending", "APPEND EITHER" in _hdr)
+
 print("\n── the authority exists and is the only one ──")
 check("deploy/crontab.box exists", CRON.exists())
 src = CRON.read_text(encoding="utf-8") if CRON.exists() else ""
