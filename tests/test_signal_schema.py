@@ -170,9 +170,19 @@ check("ATLAS_SHA overrides git", engine_sha(), "pinned12345"[:11] + "6"[:1],
 del os.environ["ATLAS_SHA"]; reset_cache()
 check("  and it is cached per process", engine_sha() == engine_sha(), True)
 push = (ROOT / "engine/06_push_supabase.py").read_text(encoding="utf-8")
+# STAMPED BEHIND A PROBE, not as an unconditional payload key. These two columns
+# do not exist on `signals` yet -- PENDING_signals_features_provenance.sql is
+# deferred -- and PostgREST discards an entire insert that names an unknown column.
+# Sending them unconditionally would have published nothing on 2026-10-05, so the
+# assertion is that they are stamped WHEN THE COLUMN EXISTS, not that the key is
+# always present.
 check("06_push stamps engine_sha on the signal row",
-      '"engine_sha":       ENGINE_SHA' in push, True)
-check("  and engine_ran_at", '"engine_ran_at":    RUN_AT' in push, True)
+      '_r["engine_sha"] = ENGINE_SHA' in push, True)
+check("  and engine_ran_at", '_r["engine_ran_at"] = RUN_AT' in push, True)
+check("  only when signals.engine_sha exists",
+      '_signals_has("engine_sha", headers)' in push, True)
+check("  and the batch still publishes when it does not",
+      "publishing without it" in push, True)
 check("  resolved once per process, not per row",
       push.count("engine_sha()") , 1)
 check("features are written AFTER the publishes, and never fatally",
