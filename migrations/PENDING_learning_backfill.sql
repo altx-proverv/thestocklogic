@@ -106,6 +106,19 @@ ON CONFLICT (slug) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────
 -- 4. THE DETECTION MEASUREMENT — first night, 2026-10-05
+--
+-- CORRECTED 2026-10-06: this INSERT listed twelve columns and supplied eleven
+-- values -- `family` was missing -- so every value from basis_version onward was
+-- shifted one place and 'standing' would have been inserted into a date column.
+-- Postgres rejects the count mismatch before it gets that far, which is the one
+-- piece of luck in it. Found by the operator running it, not by review.
+-- tools/check_inserts.py now counts columns against values for every INSERT in
+-- every migration, and tests/test_migrations.py runs it.
+--
+-- family is 'detection-breakeven' and not 'stratum-breakeven': the population is
+-- signal_excursions rather than signal_outcomes, and a detection is filled at the
+-- price it fired at on its own day rather than at the next open. Pooling the two
+-- would average two different conventions.
 -- ─────────────────────────────────────────────────────────────────────
 -- STANDING, not closed: 2,832 detections have been published and none was ever
 -- scored. The first 91 excursion rows landed on 2026-10-05. It seeds from there
@@ -120,6 +133,7 @@ VALUES
    '33.3% a 2R target needs to break even?',
    'signal_excursions where source = detection',
    'first-touch rate at +2R vs 1/(1+2)', 0.3333333333, 'greater',
+   'detection-breakeven',
    'detection-path-v1', '2026-10-05', 'standing', 'backfill-2026-10-06',
    '2,832 detections published since 2026-08-14 with entry, stop and two targets, '
    'and not one scored until now. On 688 of the 2,001 RBE rows target_2 is not even '
