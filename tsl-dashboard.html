@@ -406,8 +406,10 @@ function capOf(dir){
 
    It said "each sized at the Rs1L notional cap" long after that stopped being
    true. v_capital_window was rebuilt on real notional in migration
-   20260821201337 -- shorts charged 20% MIS margin -- because sizing is a DUAL
-   cap: Rs3,000 risk OR Rs1,00,000 notional, whichever binds first. A wide stop
+   20260821201337 -- shorts charged 20% MIS margin -- because sizing WAS a DUAL
+   cap: Rs3,000 risk OR Rs1,00,000 notional, whichever binds first. Since
+   2026-10-06 it is a fixed Rs10,000 notional and risk is whatever the stop
+   implies -- see atlas_trades.sizing_basis, which distinguishes the two. A wide stop
    is capped by RISK and deploys far less than Rs1L (measured: Rs45,000 to
    Rs97,020 across the sizing cases). The numbers below were already correct;
    only this caption was still describing the superseded basis. */

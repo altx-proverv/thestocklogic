@@ -444,7 +444,7 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
            NOW STAMPED: tools/stamp_config.py rewrites the <!--stamp:*--> spans
            from atlas/config.py, and tests/test_page_claims.py fails if they
            drift, so this cannot go stale unnoticed a second time. -->
-      <div class="how-card"><div class="how-name">Risk Defined</div><div class="how-desc">Max <!--stamp:risk_per_trade-->&#8377;3,000<!--/stamp--> risk per trade. SL at structure. No fixed target &mdash; winners are trailed. You decide and place manually.</div></div>
+      <div class="how-card"><div class="how-name">Position Size</div><div class="how-desc">Every position is <!--stamp:position_size-->&#8377;10,000<!--/stamp--> notional. Risk is whatever the structural stop implies &mdash; <!--stamp:risk_per_trade-->~&#8377;200<!--/stamp--> at a 2% stop, not a fixed budget. SL at structure. No fixed target &mdash; winners are trailed. You decide and place manually.</div></div>
     </div>
   </div>
 </div>

@@ -23,6 +23,26 @@ log = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+_COLS = {}
+
+
+def _trades_has(col: str) -> bool:
+    """One probe per column per process. Same reason as everywhere else: PostgREST
+    rejects the whole PATCH for one unknown key, and marking a trade CLOSED matters
+    more than recording its costs."""
+    if col not in _COLS:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/atlas_trades?select={col}&limit=1",
+                headers=_headers(), timeout=10)
+            _COLS[col] = r.status_code in (200, 206)
+            if not _COLS[col]:
+                log.info(f"atlas_trades.{col} does not exist — closing without it")
+        except Exception:
+            _COLS[col] = False
+    return _COLS[col]
+
+
 def _num(v, default: float = 0.0) -> float:
     """Coerce a PostgREST value to float. NULL columns arrive as None, and
     dict.get(key, 0) does NOT protect against that -- the default only applies
@@ -147,13 +167,29 @@ def close_trade(trade: dict, exit_price: float, exit_reason: str) -> bool:
     # on atlas_trades at all, so it was always the 0 default -- see the note
     # below on why no capital is released.
 
-    # Calculate P&L
+    # Calculate P&L — GROSS, which is what `pnl` has always meant and what the
+    # learning loop measures. Costs are recorded beside it, never folded in: the
+    # hit-rate hypotheses must not end up testing the broker's fee schedule as well
+    # as the engine's edge.
     if direction == "LONG":
         pnl = (exit_price - entry) * qty
     else:
         pnl = (entry - exit_price) * qty
 
     pnl = round(pnl, 2)
+
+    # NET, separately. At the Rs10,000 instrument size costs are 5% of 1R on an
+    # intraday short and 11% on a delivery long -- immaterial at the old
+    # Rs1,00,000 notional, material now. The rates are UNVERIFIED until checked
+    # against a contract note; see atlas/risk/costs.py.
+    try:
+        from atlas.risk.costs import net_pnl
+        product = trade.get("product") or ("CNC" if direction == "LONG" else "MIS")
+        pnl_net, costs_inr = net_pnl(pnl, entry, exit_price, qty, product)
+    except Exception as e:
+        log.warning(f"could not compute costs for {symbol} ({e}) — "
+                    f"recording gross only")
+        pnl_net, costs_inr = None, None
 
     # Update atlas_trades
     r = requests.patch(
@@ -166,6 +202,13 @@ def close_trade(trade: dict, exit_price: float, exit_reason: str) -> bool:
             "pnl":         pnl,
             "exit_reason": exit_reason,
             "updated_at":  now.isoformat(),
+            # Conditional, like every other optional column on this table: one
+            # unknown key rejects the whole PATCH and the trade would never be
+            # marked closed.
+            **({"costs_inr": costs_inr} if costs_inr is not None
+               and _trades_has("costs_inr") else {}),
+            **({"pnl_net": pnl_net} if pnl_net is not None
+               and _trades_has("pnl_net") else {}),
         }
     )
 

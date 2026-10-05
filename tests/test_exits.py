@@ -378,9 +378,26 @@ def main() -> int:
     check("  and the kill switch still reads the balance itself",
           "can_afford" in ks, True, "an independent fail-closed authority")
     # per-trade bounds are untouched; only the aggregate went
-    check("per-trade risk cap still applies", CFG.MAX_RISK_PER_TRADE, 3000.0)
+    # THE RISK BUDGET IS NO LONGER THE SIZING RULE. ATLAS restarted live on
+    # 2026-10-06 as a measuring instrument at a fixed Rs10,000 notional, and in that
+    # mode MAX_RISK_PER_TRADE is not consulted at all -- risk is whatever the stop
+    # implies, about Rs205 at the median. The constant is kept because real sizing
+    # returns and because backtest/config.py still sizes that way.
+    check("the sizing mode is the fixed notional", CFG.SIZING_MODE,
+          "fixed_notional")
+    check("  target notional", CFG.FIXED_NOTIONAL_PER_TRADE, 10000.0)
+    check("  quantity multiple is 1, not 5", CFG.QUANTITY_MULTIPLE, 1)
+    check("the risk budget is retained but unused", CFG.MAX_RISK_PER_TRADE, 3000.0)
     check("per-trade notional cap still applies",
           CFG.MAX_NOTIONAL_PER_TRADE, 100000.0)
+    # and the live sizer must not report a budget it is not using
+    from atlas.risk.position_sizing import size_for_trade
+    _r = size_for_trade(1000.0, 980.0, "LONG")
+    check("the live sizer reports no risk_budget",
+          "risk_budget" not in _r, True)
+    check("  it reports the realised size instead", _r.get("notional_pct"), 100.0)
+    check("  and which rule produced it", _r.get("sizing_basis"),
+          "fixed-notional-10000-mult1-v1")
 
     # ── THE SIZER IS TOLD WHAT THE ACCOUNT HOLDS ──────────────────────
     # This branch was dead for the life of the module: size_by_risk() accepted
@@ -410,10 +427,21 @@ def main() -> int:
     check("  binding cap is the balance, not the notional", r.get("binding_cap"), "funds")
     check("  and real risk is reported, not assumed Rs3,000",
           r["risk_actual"] < 3000.0, True, f"Rs{r['risk_actual']:,.0f} at {r['qty']} shares")
-    # and it still refuses when even the minimum lot is unaffordable
+    # AND IT STILL REFUSES WHEN ONE SHARE IS UNAFFORDABLE.
+    #
+    # The threshold moved with QUANTITY_MULTIPLE. At 5 a Rs4,000 balance could not
+    # buy a lot of a Rs1,000 stock and was refused; at 1 it buys three shares, which
+    # is correct and is the point of the change -- 21% of signals were being rejected
+    # for owning no multiple of five. So the case has to be a balance below ONE
+    # share, which is the only level at which refusing is still right.
     tiny = SBR(entry_price=1000.0, stop_price=970.0, direction="LONG",
                available_funds=4000.0 / 1.02)
-    check("  a balance below one lot still refuses", tiny["qty"], 0)
+    check("  a Rs4,000 balance now buys 3 shares of a Rs1,000 stock",
+          tiny["qty"], 3, "multiple 1; at 5 this was refused outright")
+    none = SBR(entry_price=1000.0, stop_price=970.0, direction="LONG",
+               available_funds=600.0)
+    check("  a balance below ONE share still refuses", none["qty"], 0)
+    check("    and says why", "insufficient funds" in str(none.get("error", "")), True)
 
     from atlas.config import (CANDIDATE_MAX_ATR_MULTIPLE as ATRMULT,
                               CANDIDATE_MAX_DIST_PCT as ABSCAP)

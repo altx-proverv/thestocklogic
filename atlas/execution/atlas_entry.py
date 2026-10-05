@@ -79,7 +79,7 @@ from atlas.config import (
     ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
-from atlas.risk.position_sizing import size_by_risk
+from atlas.risk.position_sizing import size_for_trade
 from atlas.risk.kill_switch import check as kill_switch_check
 from atlas.risk import breaker
 from atlas.risk.funds import available_funds, FundsUnavailable
@@ -668,14 +668,25 @@ def enter_trade(signal: dict) -> dict:
         return {"status": "BLOCKED_NO_FUNDS_DATA",
                 "reason": f"broker funds unreadable: {e}"}
 
-    sizing = size_by_risk(entry_price=ltp, stop_price=stop_price, direction=direction,
-                          available_funds=spendable)
+    # size_for_trade dispatches on SIZING_MODE. In fixed_notional mode the quantity
+    # comes from the Rs10,000 target and risk is whatever the stop implies -- there
+    # is no risk budget to report and the result carries no risk_budget key.
+    sizing = size_for_trade(entry_price=ltp, stop_price=stop_price,
+                            direction=direction, available_funds=spendable)
     if sizing.get("qty", 0) <= 0:
         return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
     if sizing.get("binding_cap") == "funds":
         log.info(f"{symbol}: sized to the balance — {sizing['qty']} shares, "
                  f"Rs{sizing['capital_required']:,.0f} of Rs{spendable:,.0f} spendable "
-                 f"(risk Rs{sizing['risk_actual']:,.0f}, under the Rs3,000 budget)")
+                 f"(risk Rs{sizing['risk_actual']:,.0f})")
+    if sizing.get("oversized"):
+        # The share price exceeds the whole target, so one share was taken anyway.
+        # Deliberate -- the instrument must not be blind to MRF or MARUTI because of
+        # its own test size -- but the record has to say so.
+        log.warning(f"{symbol}: OVERSIZED — one share at Rs{ltp:,.0f} is "
+                    f"{sizing['notional_pct']:.0f}% of the Rs"
+                    f"{sizing['target_notional']:,.0f} target, risk "
+                    f"Rs{sizing['risk_actual']:,.0f}")
 
     # GATE 6 -- live broker funds, net of resting GTTs. FAILS CLOSED at Gate 5,
     # where the balance is read: unreadable means BLOCKED_NO_FUNDS_DATA before a
@@ -935,6 +946,14 @@ def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
         "notional": sizing["notional"], "product": sizing["product"],
         "binding_cap": sizing["binding_cap"], "regime": ctx.get("regime", ""),
         "capital_required": sizing["capital_required"],
+        # The realised size, not the intended one, and which rule produced it.
+        # When real sizing returns the record will hold both regimes and nothing
+        # else would tell them apart -- the same gap the measurement-basis change
+        # left in the outcome record.
+        "notional_pct": sizing.get("notional_pct"),
+        "target_notional": sizing.get("target_notional"),
+        "oversized": sizing.get("oversized", False),
+        "sizing_basis": sizing.get("sizing_basis"),
         "setup_name": signal.get("setup_name", ""), "session": signal.get("session", ""),
         "score": signal.get("score", 0), "grade": signal.get("grade", ""),
         "sector": signal.get("sector", ""), "zone_source": signal.get("zone_source", ""),
@@ -960,27 +979,45 @@ def _build_intent(signal, symbol, direction, price, sizing, ctx) -> dict:
 #
 # Fails to False: not sending the column costs a row that reconcile fills in by
 # direction. Sending one that does not exist costs the entry.
-_TRADES_HAS_PRODUCT = None
+
+
+_TRADES_COLS = {}
+
+
+def _trades_has(col: str, why: str = "") -> bool:
+    """Does atlas_trades have this column? One probe per column per process.
+
+    GENERALISED FROM _trades_has_product, which existed because PostgREST rejects
+    the WHOLE insert for one unknown key -- so a column that has not been migrated
+    yet must be omitted rather than allowed to take the trade down with it. The
+    sizing restart adds eight more optional columns and eight copies of that
+    function would have been the wrong answer.
+
+    An absent column is reported ONCE, at warning, naming what is lost. Silently
+    dropping a field is how atlas_live_zones went a month without a row.
+    """
+    if col not in _TRADES_COLS:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/atlas_trades?select={col}&limit=1",
+                headers=_headers(), timeout=10)
+            _TRADES_COLS[col] = r.status_code in (200, 206)
+            if not _TRADES_COLS[col]:
+                log.warning(f"atlas_trades.{col} does not exist — reserving "
+                            f"without it. {why}".rstrip())
+        except Exception as e:
+            log.warning(f"could not probe atlas_trades.{col} ({e}) — "
+                        f"reserving without it")
+            _TRADES_COLS[col] = False
+    return _TRADES_COLS[col]
 
 
 def _trades_has_product() -> bool:
-    global _TRADES_HAS_PRODUCT
-    if _TRADES_HAS_PRODUCT is None:
-        try:
-            r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/atlas_trades?select=product&limit=1",
-                headers=_headers(), timeout=10)
-            _TRADES_HAS_PRODUCT = (r.status_code == 200)
-            if not _TRADES_HAS_PRODUCT:
-                log.warning("atlas_trades.product does not exist — reserving "
-                            "without it. Apply "
-                            "migrations/PENDING_atlas_trades_product.sql; exits "
-                            "dispatch on this column.")
-        except Exception as e:
-            log.warning(f"could not probe atlas_trades.product ({e}) — "
-                        f"reserving without it")
-            _TRADES_HAS_PRODUCT = False
-    return _TRADES_HAS_PRODUCT
+    """Kept as a named call site: exits dispatch on this column, so its absence is
+    a different kind of problem from a missing analytical field."""
+    return _trades_has("product",
+                       "Apply migrations/PENDING_atlas_trades_product.sql; "
+                       "exits dispatch on this column.")
 
 
 def _reserve_intent(intent: dict) -> tuple:
@@ -1021,6 +1058,25 @@ def _reserve_intent(intent: dict) -> tuple:
         # rejects the whole INSERT for one unknown key. A reserve that fails takes
         # the entry with it, so this must not be the thing that stops a trade.
         **({"product": intent["product"]} if _trades_has_product() else {}),
+        # THE SIZING RECORD. Same conditional pattern and the same reason: one
+        # unknown key would reject the insert and take the entry with it.
+        **({"notional": intent.get("notional")}
+           if _trades_has("notional", "realised position size is not recorded.")
+           else {}),
+        **({"notional_pct": intent.get("notional_pct")}
+           if _trades_has("notional_pct", "size against target is not recorded.")
+           else {}),
+        **({"target_notional": intent.get("target_notional")}
+           if _trades_has("target_notional") else {}),
+        **({"oversized": intent.get("oversized", False)}
+           if _trades_has("oversized",
+                          "forced single-share trades are not flagged.") else {}),
+        **({"sizing_basis": intent.get("sizing_basis")}
+           if _trades_has("sizing_basis",
+                          "the two sizing regimes will be indistinguishable.")
+           else {}),
+        **({"risk_inr": intent.get("risk_actual")}
+           if _trades_has("risk_inr") else {}),
         "notes": (f"RESERVED before order placement — stop Rs"
                   f"{intent.get('stop_price', 0)} | risk Rs"
                   f"{intent.get('risk_actual', 0):,.0f}"),

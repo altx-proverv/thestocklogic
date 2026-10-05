@@ -110,14 +110,43 @@ MIN_RR               = 0.0       # undefined with open targets
 # binding constraint and it is answered live by the broker, not by a stored
 # number -- see atlas/risk/funds.py.
 
-# Rule 1 — INR at risk if the structural stop is hit. Quantity is DERIVED from
-# this and the stop distance; see risk/position_sizing.py.
+# ══════════════════════════════════════════════════════════════════
+# SIZING MODE — ATLAS IS A MEASURING INSTRUMENT, NOT A CAPITAL ALLOCATION
+# ══════════════════════════════════════════════════════════════════
+#
+# Restarted live on 2026-10-06 at a fixed Rs10,000 notional per trade. The record
+# stopped in September and the learning loop needs live outcomes; Rs10,000 is small
+# enough that a bad month costs a few thousand and large enough that intraday costs
+# stay proportionate -- at a 2% stop, costs are 5% of 1R on a short and 11% on a
+# delivery long.
+#
+# RISK IS NO LONGER AN INPUT in this mode. Quantity comes from the notional and the
+# risk is whatever the stop implies -- about Rs205 at the median against the old
+# Rs3,000 budget. MAX_RISK_PER_TRADE is therefore NOT consulted when
+# SIZING_MODE == "fixed_notional", and the sizer does not report a risk_budget,
+# because a figure of 3,000 would be false and atlas_trades.risk_inr would inherit it.
+SIZING_MODE = "fixed_notional"           # "fixed_notional" | "risk_budget"
+FIXED_NOTIONAL_PER_TRADE = 10000.0       # Rs10,000, the TARGET not a ceiling
+
+# Rule 1 — INR at risk if the structural stop is hit. The sizing rule for
+# SIZING_MODE == "risk_budget" only; quantity is DERIVED from this and the stop
+# distance. Kept because real sizing returns, and because backtest/config.py still
+# sizes this way and its basis must not change silently.
 MAX_RISK_PER_TRADE = 3000.0
 
-# Rule 2 — quantity must be a multiple of this
-QUANTITY_MULTIPLE = 5
+# Rule 2 — quantity must be a multiple of this.
+#
+# WAS 5, AND THAT WAS A HOUSE RULE, NOT A MARKET CONSTRAINT: Indian cash equity
+# trades in single shares for both CNC and MIS. At a Rs10,000 notional a multiple of
+# 5 requires 10000/price >= 5, i.e. price <= Rs2,000, which rejected 310 of 1,484
+# published signals -- 21% -- for nothing. At 1 the rejection rate is 3.2% and the
+# median position lands within Rs3 of target.
+QUANTITY_MULTIPLE = 1
 
 # Rule 3 — max notional exposure per trade
+# Rule 3 — the per-trade notional ceiling, for SIZING_MODE == "risk_budget".
+# Not consulted in fixed_notional mode, where FIXED_NOTIONAL_PER_TRADE is the
+# target instead.
 MAX_NOTIONAL_PER_TRADE = 100000.0        # ₹1,00,000
 
 # Rule 4 — new entries per day. This is now a real limit rather than a

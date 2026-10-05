@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from atlas.config import (
     MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
     SHORT_MARGIN_PCT_ESTIMATE, MIN_STOP_PCT, MAX_STOP_PCT,
+    SIZING_MODE, FIXED_NOTIONAL_PER_TRADE,
 )
 
 log = logging.getLogger("ATLAS-SIZE")
@@ -152,6 +153,139 @@ def size_by_risk(entry_price: float, stop_price: float, direction: str,
         "binding_cap":      binding,
         "reason":           reason,
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# FIXED-NOTIONAL SIZING — the measuring instrument
+# ══════════════════════════════════════════════════════════════════
+
+def _round_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
+    """Nearest multiple of m, half UP, never below one multiple.
+
+    ROUND, NOT FLOOR, and the difference is not cosmetic. Flooring makes every
+    stock between Rs5,000 and Rs10,000 a half-sized position purely on share
+    price: a Rs6,000 stock gets one share at Rs6,000 instead of two at Rs12,000.
+    Measured across 1,484 published signals, flooring to a multiple of 5 put the
+    median position 10.7% off target; rounding to the nearest single share puts it
+    1.7% off, and the median realised notional within Rs3 of Rs10,000.
+
+    Half UP rather than Python's banker's rounding, so the rule is predictable at
+    the .5 boundary rather than depending on whether the lower candidate is even.
+
+    NEVER ZERO. A stock priced above the target rounds to 0 and is lifted to one
+    share, deliberately: the instrument must not be blind to MRF, MARUTI or
+    ABBOTINDIA because of its own test size. Those trades are flagged `oversized`
+    and carry their realised notional, so the record knows.
+    """
+    return max(m, int(floor(n / m + 0.5)) * m)
+
+
+def _apply_funds_cap(qty: int, entry_price: float, risk_per_share: float,
+                     direction: str, available_funds: float) -> tuple:
+    """(qty, binding) after fitting the position to the balance.
+
+    ONE funds path, shared by both sizing modes. Duplicating it per mode is how
+    the dead available_funds branch survived for the life of the module.
+    """
+    d = (direction or "").upper()
+    per_share = entry_price if d == "LONG" else entry_price * SHORT_MARGIN_PCT_ESTIMATE
+    need = qty * per_share
+    if available_funds is None or need <= available_funds:
+        return qty, None
+    reduced = _round_to_multiple(available_funds / per_share)
+    # _round_to_multiple never returns 0, so a balance that cannot afford even one
+    # share must be caught explicitly rather than by the rounding.
+    if reduced * per_share > available_funds:
+        return 0, "funds"
+    log.warning(f"reduced {qty} -> {reduced} to fit available funds")
+    return reduced, "funds"
+
+
+def size_fixed_notional(entry_price: float, stop_price: float, direction: str,
+                        target_notional: float = FIXED_NOTIONAL_PER_TRADE,
+                        available_funds: float = None) -> dict:
+    """Quantity from a target notional. Risk is an OUTPUT, not a budget.
+
+    There is no risk_budget in the result on purpose. Reporting Rs3,000 while
+    sizing from Rs10,000 of notional would be false, and atlas_trades.risk_inr
+    reads risk_actual straight through.
+    """
+    d = (direction or "").upper()
+    ok, stop_pct, reason = validate_stop(entry_price, stop_price, d)
+    if not ok:
+        return {"qty": 0, "error": reason, "stop_pct": stop_pct,
+                "sizing_basis": SIZING_BASIS}
+
+    risk_per_share = abs(entry_price - stop_price)
+    qty = _round_to_multiple(target_notional / entry_price)
+    binding = "notional"
+
+    qty, fb = _apply_funds_cap(qty, entry_price, risk_per_share, d, available_funds)
+    if fb:
+        binding = fb
+    if qty <= 0:
+        per_share = (entry_price if d == "LONG"
+                     else entry_price * SHORT_MARGIN_PCT_ESTIMATE)
+        return {"qty": 0,
+                "error": (f"insufficient funds: one share needs "
+                          f"Rs{per_share:,.0f}, have "
+                          f"Rs{(available_funds or 0):,.0f}"),
+                "stop_pct": stop_pct, "sizing_basis": SIZING_BASIS}
+
+    notional = qty * entry_price
+    capital_required = (notional if d == "LONG"
+                        else notional * SHORT_MARGIN_PCT_ESTIMATE)
+    return {
+        "qty":              qty,
+        "entry_price":      round(entry_price, 2),
+        "stop_price":       round(stop_price, 2),
+        "stop_pct":         round(stop_pct * 100, 2),
+        "risk_per_share":   round(risk_per_share, 2),
+        # AN OUTPUT. What the stop implies at this size -- about Rs205 at the
+        # median across the published record, against the Rs3,000 the previous
+        # mode budgeted.
+        "risk_actual":      round(qty * risk_per_share, 2),
+        "notional":         round(notional, 2),
+        "target_notional":  target_notional,
+        # The realised size as a share of the target, recorded on every trade so
+        # the record carries what was actually taken rather than what was intended.
+        # Two bands are structurally biased and it is arithmetic, not a finding:
+        # Rs6,666-10,000 can never reach target (quantity is 1 and the price is
+        # below the target), and above Rs10,000 can never be under.
+        "notional_pct":     round(100.0 * notional / target_notional, 1),
+        # Price exceeded the target, so one share was taken regardless.
+        "oversized":        bool(entry_price > target_notional),
+        "capital_required": round(capital_required, 2),
+        "product":          "CNC" if d == "LONG" else "MIS",
+        "binding_cap":      binding,
+        "sizing_basis":     SIZING_BASIS,
+        "reason":           reason,
+    }
+
+
+SIZING_BASIS = (f"fixed-notional-{int(FIXED_NOTIONAL_PER_TRADE)}-mult{QUANTITY_MULTIPLE}-v1"
+                if SIZING_MODE == "fixed_notional"
+                else f"risk-{int(MAX_RISK_PER_TRADE)}-notional-"
+                     f"{int(MAX_NOTIONAL_PER_TRADE)}-mult{QUANTITY_MULTIPLE}-v1")
+
+
+def size_for_trade(entry_price: float, stop_price: float, direction: str,
+                   available_funds: float = None) -> dict:
+    """THE ONE ENTRY POINT the live path calls. Dispatches on SIZING_MODE.
+
+    size_by_risk stays exactly as it was: backtest/config.py sizes that way and its
+    basis must not change silently underneath a stored result.
+    """
+    if SIZING_MODE == "fixed_notional":
+        return size_fixed_notional(entry_price, stop_price, direction,
+                                   available_funds=available_funds)
+    out = size_by_risk(entry_price, stop_price, direction,
+                       available_funds=available_funds)
+    out.setdefault("sizing_basis", SIZING_BASIS)
+    out.setdefault("target_notional", MAX_NOTIONAL_PER_TRADE)
+    out.setdefault("notional_pct", None)
+    out.setdefault("oversized", False)
+    return out
 
 
 if __name__ == "__main__":

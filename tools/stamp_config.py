@@ -51,7 +51,8 @@ MARK = re.compile(r"(<!--stamp:([a-z0-9_]+)-->)(.*?)(<!--/stamp-->)", re.S)
 def values() -> dict:
     """The source of truth. Rupee figures use &#8377; so the pages stay ASCII."""
     from atlas.config import (MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
-                              MAX_TRADES_PER_DAY, MIN_STOP_PCT, MAX_STOP_PCT)
+                              MAX_TRADES_PER_DAY, MIN_STOP_PCT, MAX_STOP_PCT,
+                              SIZING_MODE, FIXED_NOTIONAL_PER_TRADE)
     from engine.universe import ALL_SYMBOLS
     from engine.trading_calendar import NSE_HOLIDAYS, CALENDAR_COVERAGE
     # The entry-distance gate was removed on 2026-10-01. Stamped as "none" rather
@@ -72,9 +73,26 @@ def values() -> dict:
         groups.append(str(head))
         return "&#8377;" + ",".join(reversed(groups)) + f",{last3:03d}"
 
+    # THE PAGES MUST NOT CLAIM A RISK BUDGET THAT IS NOT IN FORCE. In
+    # fixed_notional mode quantity comes from the Rs10,000 target and risk is
+    # whatever the stop implies -- about Rs205 at the median, not Rs3,000. A page
+    # saying "Max Rs3,000 risk per trade" while sizing at Rs10,000 of notional is a
+    # false claim to a subscriber, which is the class of thing this stamper exists
+    # to prevent.
+    _fixed = SIZING_MODE == "fixed_notional"
     v = {
-        "risk_per_trade":     rupees(MAX_RISK_PER_TRADE),
-        "max_notional":       rupees(MAX_NOTIONAL_PER_TRADE),
+        # A FIGURE, NOT A SENTENCE. The first version of this stamped a whole
+        # clause into a card whose prose already read "Max ... risk per trade",
+        # producing "Max whatever the structural stop implies ... risk per trade".
+        # A stamp replaces a NUMBER; the sentence around it is the page's job, and
+        # when the meaning changes the sentence has to change too.
+        "risk_per_trade":     ("~" + rupees(200) if _fixed
+                               else rupees(MAX_RISK_PER_TRADE)),
+        "position_size":      (rupees(FIXED_NOTIONAL_PER_TRADE) if _fixed
+                               else rupees(MAX_NOTIONAL_PER_TRADE)),
+        "max_notional":       (rupees(FIXED_NOTIONAL_PER_TRADE)
+                               + " per trade, fixed"
+                               if _fixed else rupees(MAX_NOTIONAL_PER_TRADE)),
         "max_trades_per_day": str(MAX_TRADES_PER_DAY),
         "universe_count":     str(len(ALL_SYMBOLS)),
         "stop_band":          f"{MIN_STOP_PCT}%&ndash;{MAX_STOP_PCT}%",

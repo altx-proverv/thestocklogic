@@ -44,6 +44,7 @@ SUITES = [
     ("entry ordering", [sys.executable, "tests/test_entry_ordering.py"]),
     ("reconcile",      [sys.executable, "tests/test_reconcile.py"]),
     ("exits",          [sys.executable, "tests/test_exits.py"]),
+    ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),
     ("unit files",     [sys.executable, "tests/test_unit_files.py"]),

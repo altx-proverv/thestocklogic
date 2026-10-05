@@ -101,6 +101,13 @@ def _rules_line() -> str:
     # No per-day entry count any more: Gate 3 is gone and the only bound on
     # total exposure is live broker funds. Printing "max 0 entries/day" from the
     # retired constant would be worse than printing nothing.
+    from atlas.config import SIZING_MODE, FIXED_NOTIONAL_PER_TRADE
+    if SIZING_MODE == "fixed_notional":
+        # No risk budget to quote: quantity comes from the notional and risk is
+        # whatever the stop implies.
+        return (f"Fixed ₹{FIXED_NOTIONAL_PER_TRADE:,.0f} notional/trade · "
+                f"risk = stop distance (~₹200 at 2%) · "
+                f"entries bounded by live broker funds")
     return (f"Risk/trade ₹{MAX_RISK_PER_TRADE:,.0f} · "
             f"max notional ₹{MAX_NOTIONAL_PER_TRADE:,.0f} · "
             f"entries bounded by live broker funds")
