@@ -522,12 +522,24 @@ def push_live_zones(state, rows: list, entered: set) -> bool:
     old cycle_at -- which the page must detect anyway for a dead loop, so the two
     cases share one check and no DELETE is needed.
 
-    NEVER FATAL, AND DELIBERATELY NOT THROUGH THE BREAKER. breaker.record_read
-    counts consecutive failures toward a self-halt, and it exists for risk inputs
-    -- the signal batch, the ledger, the quote feed. Routing a reporting write
-    through it would let the site's table being unwritable stop ATLAS trading,
-    which is backwards. The loop's job is trading; this is a side effect of it.
-    Logged once per cycle and dropped.
+    NEVER FATAL, BUT NO LONGER SILENT. breaker.record_read counts consecutive
+    failures toward a self-halt and exists for risk inputs -- the signal batch, the
+    ledger, the quote feed. Routing a reporting write through THAT would let the
+    site's table being unwritable stop ATLAS trading, which is backwards, and is
+    still not done.
+
+    What "logged once per cycle and dropped" actually bought was silence.
+    atlas_live_zones was created with 9 of its 16 columns, PostgREST rejects an
+    insert naming an unknown column by discarding the whole payload, and this
+    function therefore failed on every cycle of every session from the day the live
+    view shipped until 2026-10-05 -- 0 rows written, no alert, and nothing in two
+    separate audits that both read "applied". A log line is only a signal if
+    somebody reads it.
+
+    So it goes through breaker.record_reporting_write, which counts, alerts ONCE at
+    four consecutive failures, alerts again on recovery, and always returns
+    may-continue. The write still cannot halt trading; it can no longer fail
+    unnoticed for a month.
     """
     if not rows:
         return True
@@ -553,10 +565,16 @@ def push_live_zones(state, rows: list, entered: set) -> bool:
         if r.status_code not in (200, 201, 204):
             log.warning(f"live view not written: HTTP {r.status_code} "
                         f"{r.text[:160]}")
+            breaker.record_reporting_write(
+                False, "atlas_live_zones",
+                f"HTTP {r.status_code} {r.text[:200]}")
             return False
+        breaker.record_reporting_write(True, "atlas_live_zones")
         return True
     except Exception as e:
         log.warning(f"live view not written: {type(e).__name__}: {e}")
+        breaker.record_reporting_write(
+            False, "atlas_live_zones", f"{type(e).__name__}: {e}")
         return False
 
 

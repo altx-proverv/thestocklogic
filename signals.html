@@ -314,6 +314,16 @@ footer{border-top:1px solid var(--line);padding:18px 28px;display:flex;justify-c
 </style>
 </head>
 <body>
+<!-- THE NSE TRADING CALENDAR, FOR THE BROWSER.
+     engine/trading_calendar.py is the source of truth and nothing served it here,
+     so every session calculation on this page skipped weekends only. Friday 2
+     October 2026 was a holiday: Thursday's batch was correctly current for Monday
+     the 5th, and the page printed "NO SIGNALS for Fri, 2 Oct" over it.
+     Written by tools/stamp_config.py --write. tests/test_page_claims.py --check
+     fails the suite if this and the calendar ever disagree, and
+     tests/signals_holidays.js proves the page reads it. Do not hand-edit. -->
+<span id="nseHolidays" hidden><!--stamp:nse_holidays-->2026-01-26,2026-03-18,2026-04-02,2026-04-06,2026-04-14,2026-04-17,2026-05-01,2026-08-15,2026-10-02,2026-10-21,2026-10-22,2026-11-05,2026-11-20,2026-12-25<!--/stamp--></span>
+<span id="holidayCoverageTo" hidden><!--stamp:holiday_coverage_to-->2026<!--/stamp--></span>
 <nav>
   <a href="/" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"><span class="logo-name">THE STOCK LOGIC</span></a>
   <div style="display:flex;align-items:center;gap:4px;margin-left:20px">
@@ -990,9 +1000,59 @@ async function render(){
   // day" was pulled straight back to the SAME date, so nextTD(today)===today.
   // byDate[tomorrow] was therefore byDate[today], and the identical batch
   // rendered under both "Today's Trades" and "Tomorrow's Watchlist".
+  /* ── NSE HOLIDAYS, STAMPED FROM engine/trading_calendar.py ──────────
+     Friday 2 October 2026 was a holiday. Thursday's batch was therefore the
+     CURRENT one for Monday the 5th, and this page said "NO SIGNALS for Fri, 2
+     Oct", marked a valid batch stale, and zeroed its own long/short counter --
+     three false statements from one missing list.
+
+     The rule has always been TRADING days, never calendar days: a batch carries
+     to the next trading session however many non-trading days sit between, and
+     "no signals" must never show while a valid batch exists for the session.
+
+     Not duplicated here. tools/stamp_config.py writes the span below from
+     NSE_HOLIDAYS, and tests/test_page_claims.py --check fails the suite the moment
+     the page and the calendar disagree. A hand-kept copy is how four other
+     operator-facing figures went stale. */
+  var HOLIDAYS = (function(){
+    var el = document.getElementById('nseHolidays');
+    var raw = el ? String(el.textContent || '').trim() : '';
+    var set = Object.create(null), n = 0;
+    raw.split(',').forEach(function(d){
+      d = d.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) { set[d] = true; n++; }
+    });
+    /* FAIL LOUD IN THE CONSOLE, not on the page. An empty list is the state this
+       whole block exists to fix, and it degrades to weekend-only stepping -- which
+       is wrong but no worse than before. Silence is what let it run for a day. */
+    if (!n) console.warn('[signals] NSE holiday list is empty — the stamp span is '
+      + 'missing or unstamped. Session dates will skip weekends only, and a '
+      + 'holiday will read as a missing batch. Run tools/stamp_config.py --write.');
+    return {has: function(d){ return !!set[d]; }, n: n};
+  })();
+  var HOLIDAY_COVERAGE_TO = (function(){
+    var el = document.getElementById('holidayCoverageTo');
+    var y = el ? parseInt(String(el.textContent || '').trim(), 10) : 0;
+    return isFinite(y) && y > 2000 ? y : 0;
+  })();
+
+  function isTradingDay(ds){
+    var p=ds.split('-'),d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+    var wd=d.getUTCDay();
+    if(wd===0||wd===6) return false;
+    return !HOLIDAYS.has(ds);
+  }
+
+  /* The next TRADING day. Steps over weekends AND holidays; bounded so a bad
+     stamp cannot spin. 12 is well past the longest NSE closure (Diwali week plus
+     a weekend) and far short of a hang. */
   function nextTD(ds){
     var p=ds.split('-'),d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
-    do{d.setUTCDate(d.getUTCDate()+1);}while(d.getUTCDay()===0||d.getUTCDay()===6);
+    for(var i=0;i<12;i++){
+      d.setUTCDate(d.getUTCDate()+1);
+      var s=d.toISOString().split('T')[0];
+      if(isTradingDay(s)) return s;
+    }
     return d.toISOString().split('T')[0];
   }
   function fmtDate(ds){
@@ -1031,16 +1091,48 @@ async function render(){
   // current batch is the one for today; after it, for the next session. Without
   // that split, every afternoon between the 15:15 close and the evening run
   // would look like a failure when it is simply not published yet.
-  function weekdayOrNext(ds){
-    var p=ds.split('-'),d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
-    return (d.getUTCDay()===0||d.getUTCDay()===6)?nextTD(ds):ds;
-  }
+  function tradingDayOrNext(ds){ return isTradingDay(ds)?ds:nextTD(ds); }
   var _published=_istMin>=19*60;           // the 18:35 chain, with slack
-  var expectedSession=_published?nextTD(today):weekdayOrNext(today);
-  // NOTE: nextTD skips weekends only. On an NSE holiday expectedSession is a day
-  // early and this reports a missing batch that was never due. The holiday list
-  // lives in engine/trading_calendar.py and is not served to the browser.
-  var isStale=sessionDate<expectedSession;
+  var expectedSession=_published?nextTD(today):tradingDayOrNext(today);
+
+  /* STALE MEANS THE BATCH IS FOR A SESSION ALREADY PAST. Both sides are now
+     trading days, so a holiday no longer makes expectedSession run ahead of a
+     batch that is perfectly current -- which is what printed "NO SIGNALS" over a
+     valid Thursday batch on Monday 5 October.
+
+     Past the stamped window the page CANNOT know, so it does not guess: it stops
+     claiming staleness rather than asserting a batch is old on the strength of a
+     calendar it does not have. A wrong "no signals" is the more damaging error of
+     the two -- it tells a reader there is nothing when there is. */
+  var _canKnow = HOLIDAYS.n > 0 && !(HOLIDAY_COVERAGE_TO > 0
+    && parseInt(expectedSession.slice(0,4),10) > HOLIDAY_COVERAGE_TO);
+  if(!_canKnow) console.warn('[signals] holiday list empty or expired past '
+    + HOLIDAY_COVERAGE_TO + '; falling back to the unambiguous-gap test for '
+    + 'staleness. Extend NSE_HOLIDAYS and run tools/stamp_config.py --write.');
+
+  /* WHEN THE CALENDAR IS KNOWN, compare trading days directly.
+
+     WHEN IT IS NOT, neither extreme is acceptable. Suppressing staleness outright
+     would render a genuinely old batch as today's trades, which is the more
+     dangerous of the two errors. Keeping weekend-only stepping reproduces the
+     false "NO SIGNALS" that a single holiday caused.
+
+     So the fallback claims staleness only on a gap no closure explains. The
+     numbers, measured rather than guessed, with the list absent so every weekday
+     looks open:
+
+       one holiday (2 Oct 2026)          gap 3 days
+       Diwali cluster (21-22 Oct 2026)   gap 2 days
+       three-day cluster (Oct 2025)      gap 3 days
+       the real outage (25 Sep -> 5 Oct) gap 7 days
+
+     Six separates them with room on both sides. The longest run of consecutive
+     weekday holidays anywhere in the 2023-2026 list is three, so this cannot be
+     tripped by a closure; four or more would trip it, which has never happened and
+     only matters while the list is missing anyway. */
+  var _gapDays = Math.round(
+    (Date.parse(expectedSession) - Date.parse(sessionDate)) / 86400000);
+  var isStale = _canKnow ? (sessionDate < expectedSession) : (_gapDays > 6);
 
   // The reason, only when we actually have one. This used to say "06_push
   // suppresses LONG signals in a bearish regime", which stopped being true when

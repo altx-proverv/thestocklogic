@@ -86,6 +86,11 @@ SENTINEL = Path(os.environ.get(
 MAX_CONSECUTIVE_READ_FAILURES  = 3
 MAX_CONSECUTIVE_WRITE_FAILURES = 2
 MAX_CONSECUTIVE_ORDER_REJECTS  = 5
+# A reporting write gets more rope than a risk input and NEVER halts -- see
+# record_reporting_write. Four cycles is about twenty minutes of the market-hours
+# loop: long enough that a Supabase blip stays quiet, short enough that a broken
+# schema is reported inside the first session rather than the next audit.
+MAX_CONSECUTIVE_REPORTING_FAILURES = 4
 
 _consecutive = {}
 
@@ -291,9 +296,11 @@ def record_read(ok: bool, what: str, detail: str = "") -> bool:
 
     Deliberately NOT done in the same change as the live view, because this
     changes when ATLAS stops trading and that deserves its own commit and its own
-    test. Note the asymmetry it does not touch: market_open.push_live_zones never
-    calls this at all, because a reporting write that cannot reach Supabase must
-    not count toward a trading halt.
+    test. Note the asymmetry it does not touch: market_open.push_live_zones does
+    not call this, because a reporting write that cannot reach Supabase must not
+    count toward a trading halt. As of 2026-10-05 it calls
+    record_reporting_write instead, which alerts without halting -- the silence
+    was the problem, not the absence of a halt.
     """
     key = f"read:{what}"
     if ok:
@@ -306,6 +313,60 @@ def record_read(ok: bool, what: str, detail: str = "") -> bool:
         halt(f"{what} unreadable",
              f"{n} consecutive failures — last: {detail}")
         return False
+    return True
+
+
+def record_reporting_write(ok: bool, what: str, detail: str = "") -> bool:
+    """Report a write that feeds the SITE, not the trading decision. Never halts.
+
+    WHY THIS IS NOT record_read. market_open.push_live_zones deliberately avoided
+    the breaker because a reporting table that cannot be written must not stop
+    ATLAS trading -- record_read halts after three consecutive failures, and the
+    live view being broken is not a reason to stop taking setups. That reasoning
+    still holds and this function does not change it.
+
+    WHAT IT FIXES IS THE OTHER HALF. Not calling the breaker at all meant the
+    failure was invisible: atlas_live_zones was missing seven columns, PostgREST
+    rejected every payload whole, and the write failed on every cycle of every
+    session from the day the live view shipped until 2026-10-05 -- 0 rows, no
+    alert, nothing in any audit. "Logged once per cycle and dropped" is only
+    adequate if somebody reads the log.
+
+    So: count, alert ONCE at the threshold, alert again when it recovers, and
+    always return True. The counter is per `what`, so two reporting writes failing
+    for different reasons do not mask each other.
+    """
+    key = f"report:{what}"
+    if ok:
+        n = _consecutive.get(key, 0)
+        _consecutive[key] = 0
+        if n >= MAX_CONSECUTIVE_REPORTING_FAILURES:
+            # RECOVERY IS ALSO NEWS. An alert that never closes trains the
+            # operator to ignore the channel.
+            log.info(f"{what} write recovered after {n} consecutive failures")
+            try:
+                from atlas.reporting.telegram import send
+                send(f"✅ <b>{what}</b> write recovered after {n} failed cycles.")
+            except Exception as e:
+                log.warning(f"could not send recovery alert: {e}")
+        return True
+
+    n = _consecutive.get(key, 0) + 1
+    _consecutive[key] = n
+    log.error(f"{what} write failed ({n}): {detail}")
+    if n == MAX_CONSECUTIVE_REPORTING_FAILURES:
+        # EXACTLY ONCE, on the crossing. A per-cycle alert for a broken schema is
+        # a hundred messages a session and gets muted, which returns us to silence
+        # by a different route.
+        log.error(f"{what} has failed {n} consecutive cycles — alerting")
+        try:
+            from atlas.reporting.telegram import send
+            send(f"⚠️ <b>{what}</b> write has failed {n} cycles in a row.\n"
+                 f"<code>{detail[:300]}</code>\n\n"
+                 f"Reporting only — ATLAS is NOT halted and continues to trade. "
+                 f"The site will be stale until this is fixed.")
+        except Exception as e:
+            log.warning(f"could not send reporting-write alert: {e}")
     return True
 
 
@@ -395,6 +456,33 @@ if __name__ == "__main__":
     fresh(); record_ledger_write(False, 400, "deterministic", phase="reserve")
     _consecutive.clear()                       # everything in memory is gone
     cases.append(("halt survives losing all memory", is_halted()[0], True))
+
+    # A REPORTING WRITE MUST NEVER HALT, however long it fails for. The live view
+    # was unwritable for a month because its failure was silent; the fix for that
+    # is an alert, NOT a halt. A broken site table stopping ATLAS from trading
+    # would be a worse bug than the one being fixed.
+    fresh()
+    for _ in range(MAX_CONSECUTIVE_REPORTING_FAILURES * 3):
+        record_reporting_write(False, "atlas_live_zones", "column does not exist")
+    cases.append((f"{MAX_CONSECUTIVE_REPORTING_FAILURES * 3} reporting-write failures",
+                  is_halted()[0], False))
+    # and it still reports may-continue on every one of them
+    cases.append(("reporting write returns may-continue",
+                  not record_reporting_write(False, "x", "y"), False))
+    # recovery clears the counter, so the next outage alerts again
+    fresh()
+    for _ in range(MAX_CONSECUTIVE_REPORTING_FAILURES):
+        record_reporting_write(False, "atlas_live_zones", "boom")
+    record_reporting_write(True, "atlas_live_zones")
+    cases.append(("recovery clears the reporting counter",
+                  _consecutive.get("report:atlas_live_zones", 0) != 0, False))
+    # the counter is per-target, so two broken writes do not mask each other
+    fresh()
+    record_reporting_write(False, "a", "x")
+    record_reporting_write(False, "b", "x")
+    cases.append(("reporting counters are per-target",
+                  _consecutive.get("report:a") != 1
+                  or _consecutive.get("report:b") != 1, False))
 
     for label, got, want in cases:
         good = got == want

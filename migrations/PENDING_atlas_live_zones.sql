@@ -1,3 +1,8 @@
+-- SUPERSEDED FOR REPAIR PURPOSES by PENDING_atlas_live_zones_repair.sql.
+-- This file opens with CREATE TABLE IF NOT EXISTS and the table already exists
+-- with 9 of 16 columns, so re-running it is a no-op that reports success. Apply
+-- the repair file instead; this one stays as the record of what the table was
+-- meant to be.
 -- ─────────────────────────────────────────────────────────────────────
 -- STATUS 2026-10-03: PARTIALLY APPLIED, AND THE LIVE VIEW IS DEAD UNTIL IT IS NOT.
 --

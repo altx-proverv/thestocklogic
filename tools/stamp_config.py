@@ -36,6 +36,7 @@ from __future__ import annotations
 import re
 import sys
 import argparse
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +53,7 @@ def values() -> dict:
     from atlas.config import (MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
                               MAX_TRADES_PER_DAY, MIN_STOP_PCT, MAX_STOP_PCT)
     from engine.universe import ALL_SYMBOLS
+    from engine.trading_calendar import NSE_HOLIDAYS, CALENDAR_COVERAGE
     # The entry-distance gate was removed on 2026-10-01. Stamped as "none" rather
     # than omitted, because a page that simply stops mentioning a threshold reads
     # as an oversight; one that says there isn't one reads as a decision.
@@ -80,6 +82,33 @@ def values() -> dict:
     v["entry_distance"] = ("none — taken at market when price reaches the zone"
                            if MAX_ENTRY_DIST_PCT is None
                            else f"{MAX_ENTRY_DIST_PCT:.2f}%")
+
+    # THE NSE HOLIDAY LIST, FOR THE BROWSER.
+    #
+    # Every page computes "the session a reader is entitled to signals for" by
+    # stepping forward from a date, and every one of them skipped weekends only.
+    # Friday 2 October 2026 was a holiday, so Thursday's batch was correctly the
+    # current one for Monday the 5th -- and the page said "NO SIGNALS for Fri, 2
+    # Oct", labelled a valid batch stale, and zeroed its own counter. The rule has
+    # always been TRADING days: a batch carries to the next trading session however
+    # many non-trading days sit between.
+    #
+    # The list lives in engine/trading_calendar.py and nothing served it to the
+    # browser, which is the whole reason the page could not know. Stamped rather
+    # than duplicated, so tests/test_page_claims.py --check fails the moment the
+    # two disagree -- the same guarantee the rupee figures get.
+    #
+    # BOUNDED TO THE CURRENT AND NEXT CALENDAR YEAR. The page only ever steps a
+    # few days forward from a recent date, so 2023 holidays are dead weight in
+    # every page load. Past years stay in trading_calendar.py for the backfill.
+    this_year = date.today().year
+    window = sorted(h for h in NSE_HOLIDAYS
+                    if this_year <= int(h[:4]) <= this_year + 1)
+    v["nse_holidays"] = ",".join(window)
+    # The year the stamped window runs out, so the page can say it does not know
+    # rather than treating January as fully open. CALENDAR_COVERAGE is the list's
+    # own limit; the stamped window cannot exceed it.
+    v["holiday_coverage_to"] = str(min(this_year + 1, CALENDAR_COVERAGE[1]))
     return v
 
 

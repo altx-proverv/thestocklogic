@@ -81,6 +81,7 @@ if shutil.which("node"):
     SUITES += [
         ("signals batch state", ["node", "tests/signals_batch_state.js"]),
         ("signals live view",   ["node", "tests/signals_live_view.js"]),
+        ("signals holidays",    ["node", "tests/signals_holidays.js"]),
     ]
 else:
     SUITES += [("signals page logic (SKIPPED — node not installed)",

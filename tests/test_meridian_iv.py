@@ -306,7 +306,10 @@ for f in ("meridian/config.py", "meridian/iv_recorder.py",
             mods.add(node.module.split(".")[0])
     check(f"{f} imports nothing from atlas.*", "atlas" in mods, False,
           "imports: " + ", ".join(sorted(mods)) if mods else "no imports")
-mig = (ROOT / "migrations/PENDING_meridian_iv_recorder.sql").read_text()
+# Resolved by stem, not by filename: the PENDING_ prefix disappears when the
+# migration is applied, and this suite tests the SQL, not its status.
+from tests._srcutil import migration
+mig = migration("meridian_iv_recorder")
 check("the recorder writes only meridian_ tables",
       all(t in code for t in ("meridian_iv_daily", "meridian_iv_strikes",
                               "meridian_recorder_runs")), True)

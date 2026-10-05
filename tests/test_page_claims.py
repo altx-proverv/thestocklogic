@@ -110,7 +110,8 @@ def main() -> int:
     check("an absent rr renders as an open target instead",
           "open target" in signals)
     # 3. THE CAPITAL BASIS. v_capital_window was rebuilt on real notional.
-    mig = read("migrations/20260821201337_aggregates_real_notional_peak_and_avg.sql")
+    from tests._srcutil import migration
+    mig = migration("aggregates_real_notional_peak_and_avg")
     check("the capital view is built on real notional (premise holds)",
           "DROP VIEW IF EXISTS public.v_capital_window" in mig)
     check("the dashboard no longer claims a flat Rs1L basis",

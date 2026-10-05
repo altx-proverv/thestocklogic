@@ -23,15 +23,45 @@ function extract(name) {
   return src.slice(i, k + 1);
 }
 
+/* nextTD and isTradingDay both read the stamped holiday list, so the span has to
+   be in place before they are evaluated. weekdayOrNext became tradingDayOrNext on
+   2026-10-05, when a missing holiday list made this page print "NO SIGNALS" over a
+   perfectly current batch -- see tests/signals_holidays.js, which owns the
+   calendar cases. This file keeps owning the freshness cases. */
+const _hol = (src.match(/id="nseHolidays"[^>]*>(?:<!--stamp:nse_holidays-->)?([^<]*)/) || ['', ''])[1].trim();
+const _cov = (src.match(/id="holidayCoverageTo"[^>]*>(?:<!--stamp:holiday_coverage_to-->)?(\d{4})/) || ['', ''])[1];
+if (!/\d{4}-\d{2}-\d{2}/.test(_hol)) {
+  throw new Error('signals.html has no stamped NSE holiday list — run ' +
+                  'tools/stamp_config.py --write');
+}
+global.document = {
+  getElementById: (id) => ({
+    textContent: id === 'nseHolidays' ? _hol
+               : id === 'holidayCoverageTo' ? _cov : ''
+  })
+};
+function extractVar(name) {
+  const i = src.indexOf('var ' + name + ' = (function()');
+  if (i < 0) throw new Error('signals.html no longer defines ' + name);
+  let j = src.indexOf('{', i), depth = 0, k = j;
+  for (; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}') { depth--; if (!depth) break; }
+  }
+  return src.slice(i, src.indexOf(';', k) + 1);
+}
+eval(extractVar('HOLIDAYS').replace(/^var /, 'global.'));
+eval(extractVar('HOLIDAY_COVERAGE_TO').replace(/^var /, 'global.'));
+eval(extract('isTradingDay'));
 eval(extract('nextTD'));
-eval(extract('weekdayOrNext'));
+eval(extract('tradingDayOrNext'));
 
 // The rule under test, stated once here and asserted below. It mirrors the page:
 // before ~19:00 IST the current batch is the one for today; after the 18:35
 // chain, for the next session.
 function verdict(today, istMin, batchDate) {
   const sessionDate = nextTD(batchDate);
-  const expected = (istMin >= 19 * 60) ? nextTD(today) : weekdayOrNext(today);
+  const expected = (istMin >= 19 * 60) ? nextTD(today) : tradingDayOrNext(today);
   return { sessionDate, expected, stale: sessionDate < expected };
 }
 

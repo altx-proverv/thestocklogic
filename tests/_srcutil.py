@@ -38,3 +38,29 @@ def normalised(path) -> str:
     """executable_source with quotes and spacing flattened, so a check matches on
     content rather than on how ast.unparse chose to format it."""
     return executable_source(path).replace('"', "'").replace(" ", "")
+
+
+def migration(stem: str):
+    """The migration whose name ends in `stem`, pending or applied.
+
+    A migration is named PENDING_<stem>.sql while it waits and
+    <timestamp>_<stem>.sql once it has been applied, so a test that hardcodes
+    either filename breaks the day the other one is true. tests/test_meridian_iv.py
+    did exactly that: renaming six applied files on 2026-10-03 failed a suite that
+    was testing the SQL's content, which had not changed at all.
+
+    Resolves by suffix so the test follows the file through the rename, and raises
+    with both names it looked for rather than returning an empty string -- a
+    migration assertion that silently passes over missing SQL is worse than no
+    assertion.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "migrations"
+    hits = sorted(root.glob(f"PENDING_{stem}.sql")) + \
+        sorted(root.glob(f"*_{stem}.sql"))
+    if not hits:
+        raise FileNotFoundError(
+            f"no migration matching PENDING_{stem}.sql or *_{stem}.sql in "
+            f"{root}. If it was renamed, rename the stem here too; if it was "
+            f"deleted, this assertion has nothing left to check.")
+    return hits[0].read_text(encoding="utf-8")

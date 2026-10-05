@@ -556,3 +556,73 @@ fix; then, with the paren required, matching the comment above each narrowed cal
 that quotes the old form in order to say it is gone. Seventh occurrence of a check
 failing on its own prose here. `tests/_srcutil.executable_source()` existed, and I
 reached for a regex first. Writing the helper does not create the habit of using it.
+
+## A calendar the browser does not have (2026-10-05)
+
+Friday 2 October was an NSE holiday. Thursday's batch was therefore the current
+one for Monday the 5th, and signals.html said:
+
+> **NO SIGNALS** — for Fri, 2 Oct
+
+with the long/short counter zeroed to agree with itself. Three false statements
+from one cause: the session stepper skipped weekends only, because
+`NSE_HOLIDAYS` lives in `engine/trading_calendar.py` and nothing served it to the
+browser.
+
+The comment warning about this was already in the file, written when the staleness
+check was built:
+
+```js
+// NOTE: nextTD skips weekends only. On an NSE holiday expectedSession is a day
+// early and this reports a missing batch that was never due.
+```
+
+A known defect with a note beside it is still a defect. It shipped, and then it
+fired on the first holiday that followed.
+
+**Two things worth keeping from the fix.** The list is *stamped*, not copied —
+`tools/stamp_config.py` writes it into a span and `test_page_claims.py --check`
+fails the suite if page and calendar disagree, the same guarantee the rupee
+figures already had. And the fallback, for when the stamp is missing, took real
+thought: suppressing staleness entirely would render a genuinely old batch as
+today's trades, while weekend-only stepping reproduces the bug. So the degraded
+path claims staleness only on a gap no closure explains, and the threshold came
+from measuring the cases rather than reasoning about them —
+
+```
+one holiday           gap 3 days
+Diwali cluster        gap 2 days
+three-day cluster     gap 3 days
+the real outage       gap 7 days     <- the case it must catch
+```
+
+My first threshold was 8, chosen from "the longest closure is five days". The real
+outage is a seven-day gap, so it would never have fired at all. **A threshold
+derived from the thing you are excluding is not the same as one that catches the
+thing you are looking for.** Both numbers have to be measured.
+
+## Twenty-five writes that log their own rejection and continue (2026-10-05)
+
+`atlas_live_zones` was created with 9 of its 16 columns. PostgREST discards an
+entire insert when it names an unknown column, so `push_live_zones` failed on
+every cycle of every session from the day the live view shipped: 0 rows, no alert,
+and *two separate audits* that both reported the migration as applied.
+
+The write was deliberately not routed through the breaker, and that reasoning was
+sound — a reporting table must not halt trading. What it missed is that "logged
+once per cycle and dropped" is only a signal if somebody reads the log.
+
+So the fix is a third channel, not a reclassification: `record_reporting_write`
+counts, alerts once at four consecutive failures, alerts again on recovery, and
+always returns may-continue. Halting behaviour unchanged; silence removed.
+
+An `ast` sweep then found **25 more** write paths in the same shape — check the
+status, log it, continue. Most are demonstrably working, which is exactly why the
+pattern survives: it is invisible until the day the schema moves underneath one of
+them.
+
+**The lesson.** "Never fatal" and "never noticed" are different requirements and
+the code had conflated them. A write that must not stop the system still has to be
+able to complain. And a count of zero rows is not proof of a silent failure — under
+RLS with no policy PostgREST returns 200 and an empty list — so the *pattern* is
+enumerable from code in a way the symptom is not.
