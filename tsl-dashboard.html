@@ -714,8 +714,25 @@ async function load(){
       /* RESOLVED, not marked to market: each signal measured against its own
          stop and target, fixed the moment one is hit. An unresolved signal is
          excluded rather than counted as zero -- it has no result yet, and
-         zeroing it would be a claim rather than a measurement. */
-      card('Indicative P&amp;L', rup(W.indicative_pnl), signCls(W.indicative_pnl), '');
+         zeroing it would be a claim rather than a measurement.
+
+         AND THE ENTRY MUST HAVE BEEN ACHIEVABLE. This card read +Rs2,58,518 on
+         2026-10-06 and the honest figure was -Rs38,397: of 202 resolved positions
+         only 27 had an entry that was ever reachable, and the other 175 had gapped
+         past the band at the next open. mark_signals assumes a fill at entry_ref
+         and does not check, so a gap UP through a long's entry made the trade both
+         impossible to take and profitable to score. v_signal_window now excludes
+         them.
+
+         THE SAMPLE SIZE IS STATED, NOT HIDDEN. 27 positions over 20 days is a
+         small number and a defensible one; a quarter-lakh with no n beside it was
+         neither. If the figure is too thin to mean anything the reader should be
+         able to see that from the card rather than having to ask. */
+      card('Indicative P&amp;L', rup(W.indicative_pnl), signCls(W.indicative_pnl),
+           (W.n_resolved_positions!==undefined && W.n_resolved_positions!==null
+             ? W.n_resolved_positions+' enterable position'
+               +(W.n_resolved_positions===1?'':'s')+' over '+(W.window_days||20)+' days'
+             : ''));
 
     drawChart(asc);
 
@@ -776,6 +793,19 @@ async function load(){
                    rup(W.indicative_pnl_all_pub)+'. That is a signal-quality figure — how '+
                    'everything published performed — and not a P&amp;L: the repeats overlap in '+
                    'time and no book ever held them.'
+                 : '')
+             + (W.n_excluded_unenterable
+                 ? '<br><br><b>'+W.n_excluded_unenterable+' signals are excluded because their '+
+                   'entry was never achievable</b> — price gapped past the entry band at the '+
+                   'next open, so no fill was possible. They are excluded rather than scored: '+
+                   'marking them from the published entry price counted trades nobody could '+
+                   'have taken, and because a gap through the entry is what makes a signal '+
+                   'both unenterable and profitable to mark, including them pushed this figure '+
+                   'positive when the enterable subset was negative.'
+                 : '')
+             + (W.n_excluded_wrong_side
+                 ? '<br>A further '+W.n_excluded_wrong_side+' are excluded for a wrong-side '+
+                   'entry zone, a defect fixed on 30 September.'
                  : '');
     }
 

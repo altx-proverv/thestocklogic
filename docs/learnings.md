@@ -763,3 +763,40 @@ privilege.
 **The lesson.** Anything a cron line does *before* its redirect is invisible when it
 fails. Keep the command simple and put the environment in the crontab's own variable
 header, which cron reads with the crontab's privileges and not the shell's.
+
+## A profit figure built on trades that could not be taken (2026-10-06)
+
+The dashboard showed **+₹2,58,518** indicative P&L over a 20-day window while the
+resolved record stood at −0.21R per trade and 26.2% against a 33.3% breakeven. Both
+numbers were correctly computed. Only one was measuring something that could have
+happened.
+
+| | n | total |
+|---|---|---|
+| entry never achievable | 175 | **+₹296,915** |
+| entry FEASIBLE | 27 | **−₹38,397** |
+| what the page showed | 202 | +₹258,518 |
+
+Unenterable trades were **114.9%** of the headline. `update_outcomes` validates the
+next open against the entry band and marks a gap-through as `MISSED`;
+`mark_signals` performs no entry check at all and assumes a fill at `entry_ref`.
+
+**The bias is structural, and that is the part worth keeping.** A gap *up* through a
+long's entry band is exactly what makes the trade both impossible to enter and
+profitable when scored from `entry_ref`. The measurement selected for the moves that
+made the price unreachable. The resolution mix shows it cleanly: among unenterable
+rows, 76 TARGET to 9 STOP (89%); among feasible rows, 3 TARGET to 21 STOP (12.5%) —
+which is the 26.2% resolved hit rate, arrived at independently.
+
+**Why no test caught it.** Every check in this area asked whether the arithmetic was
+right. It was. Nothing asked whether the population was one that could be traded, and
+the two scoring paths had drifted into different definitions of a signal's fate
+without either being wrong on its own terms.
+
+**The lesson generalises past this bug.** Any measure that assumes a fill is
+selecting on the price path, because the same movement that makes a fill impossible
+is usually the movement that makes the mark look good. The question to ask of a
+backtest or a scoring view is not "is the P&L computed correctly" but "could this
+position have been held". And when two systems score the same events to different
+answers, reconciling them is not housekeeping — one of them is wrong about what it is
+measuring, and finding out which is the whole of the work.
