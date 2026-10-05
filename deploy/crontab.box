@@ -1,0 +1,180 @@
+# THE STOCK LOGIC — THE BOX'S CRONTAB, VERSIONED
+# ==============================================
+# This file IS the schedule. Nothing else in deploy/ carries cron lines any more:
+# fundamentals.cron, learning.cron, market_flash.cron and meridian.cron were four
+# separate fragments, which meant four places to look and no way to see a collision
+# or a gap. They are folded in here and deleted.
+#
+# INSTALL — REPLACE, NEVER APPEND:
+#     crontab -l > ~/crontab.before.$(date +%F)       # keep the old one
+#     diff <(grep -vE '^\s*(#|$)' ~/crontab.before.*) \
+#          <(grep -vE '^\s*(#|$)' deploy/crontab.box) # read this before applying
+#     crontab deploy/crontab.box
+#     crontab -l | grep -c .                          # confirm
+#
+# Appending would double every job, and `rbe_engine` holds a websocket for the
+# whole session — two of those is two sets of detections written for every tick.
+#
+# THE BOX RUNS UTC. IST = UTC + 5:30. Times are given in both because every
+# decision here is about the Indian market session (09:15-15:30 IST).
+#
+# systemd, NOT cron, runs three things — atlas-market-hours.timer (the entry
+# loop, currently DISABLED while ATLAS is paused), atlas-mis-squareoff.timer and
+# atlas-engine-report.timer. Their units are in deploy/ and are installed
+# separately with systemctl.
+#
+# ── WHAT CHANGED FROM WHAT THE BOX WAS RUNNING ON 2026-10-05 ─────────
+#
+#   REMOVED  atlas/signal/decay.py, every 10 minutes, 8 hours a day.
+#            The file was deleted on 2026-10-02 as dead code. The cron line
+#            survived it and has been failing 48 times a day into reports/atlas.log
+#            ever since -- a missing-file error on a job nobody was reading the log
+#            for. tests/test_crontab.py now fails if this file references a path
+#            that does not exist.
+#
+#   MOVED    atlas/reporting/daily_report.py, 35 13 -> 45 13.
+#            It shared a minute with update_outcomes.py and READS what that job
+#            writes. Starting them together means the report is built from
+#            whatever portion of the outcome update had landed, which is a
+#            different number every night and never the right one.
+#
+#   ADDED    the four learning jobs. market_flash, reject_sample, excursions and
+#            score_live_outcomes were written, tested, merged -- and never
+#            installed. signal_excursions and reject_sample are empty because
+#            nothing has ever run, not because they are waiting for tonight; the
+#            page has shown "no market note" every session for the same reason.
+#
+#   LOGS     the four new jobs write to reports/, like the fifteen that came
+#            before them, rather than /home/ubuntu/logs/. One place to look, and no
+#            dependency on a directory outside the repo existing.
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MAILTO=""
+
+# ══════════════════════════════════════════════════════════════════
+# DEPLOY — every 5 minutes, all day, every day
+# ══════════════════════════════════════════════════════════════════
+# The only way code reaches the box. A commit on main is live within five
+# minutes; nothing is pushed to the box by hand. `reset --hard` means an edit made
+# ON the box is destroyed on the next tick, which is why no job may write to a
+# tracked file.
+*/5 * * * * cd /home/ubuntu/thestocklogic && git fetch origin +refs/heads/main:refs/remotes/origin/main >> /home/ubuntu/thestocklogic/reports/git_sync.log 2>&1 && git reset --hard origin/main >> /home/ubuntu/thestocklogic/reports/git_sync.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# BROKER SESSIONS — before the market opens
+# ══════════════════════════════════════════════════════════════════
+# Both tokens expire daily. Everything downstream reads them, so these run first
+# and nothing else is scheduled before 08:25 IST.
+#
+# 02:55 UTC = 08:25 IST
+55 2 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/zerodha_auto_login.py >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+# 03:00 UTC = 08:30 IST — Upstox login and the Zerodha morning check share this
+# minute deliberately: different brokers, no shared state, and both must be done
+# before the 09:00 IST range-map build.
+0 3 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/upstox_auto_login.py >> /home/ubuntu/thestocklogic/reports/login.log 2>&1
+0 3 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 atlas/execution/zerodha_morning.py >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# THE INTRADAY TICKER — independent of ATLAS and of the pause
+# ══════════════════════════════════════════════════════════════════
+# 03:30 UTC = 09:00 IST. Builds data/processed/rbe/range_map.json for ~500 stocks
+# before the open. rbe_engine refuses to start without a map stamped with today's
+# IST date, so this must succeed first and 14 minutes is the margin.
+30 3 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/rbe_startup.py >> reports/rbe.log 2>&1
+# 03:44 UTC = 09:14 IST, one minute before the open. Holds a websocket for the
+# whole session and exits 0 at close, which is why it is a daily cron start and
+# not a service. Writes live_signals with kind='detection' -- observations, never
+# calls, and never counted in the accuracy record.
+44 3 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/rbe_engine.py >> reports/rbe.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# INTRADAY REFRESHES
+# ══════════════════════════════════════════════════════════════════
+# Index quotes and the sector heatmap. 08:45 IST is pre-open on purpose: it seeds
+# the previous close so the page is never blank at the open.
+15 3 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/upstox_ws.py --update >> /home/ubuntu/thestocklogic/reports/live.log 2>&1
+# 09:45 IST — the first half hour is settled
+15 4 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/upstox_ws.py --update >> /home/ubuntu/thestocklogic/reports/live.log 2>&1
+# 11:30 IST — midday
+0 6 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/upstox_ws.py --update >> /home/ubuntu/thestocklogic/reports/live.log 2>&1
+# 15:15 IST — the close, which is the figure the EOD chain and the page both quote
+45 9 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/upstox_ws.py --update >> /home/ubuntu/thestocklogic/reports/live.log 2>&1
+
+# 14:30 IST — buy-today-sell-tomorrow. The only intraday job that publishes CALLS
+# rather than detections, which is why live_signals.kind exists.
+0 9 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/btst_engine.py >> /home/ubuntu/thestocklogic/reports/btst.log 2>&1
+
+# 15:45 IST — MERIDIAN's intraday IV snapshot. Runs at the close, deliberately
+# before the 18:35 EOD comparison snapshot, and both are kept until the better
+# time is settled by the data.
+15 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m meridian.iv_recorder --label close >> /home/ubuntu/logs/meridian_iv_close.log 2>&1
+
+# 15:35 IST — did yesterday's open ATLAS positions hit anything
+5 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 atlas/execution/trade_outcome_checker.py >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# THE EOD CHAIN — 18:35 IST, one && chain, fail-closed
+# ══════════════════════════════════════════════════════════════════
+# CHAINED WITH &&, NOT SEPARATE JOBS, and that is the right call: 02b cannot score
+# bars 01b did not download, and publishing a batch built on stale bars is worse
+# than publishing none. A failure anywhere stops everything after it.
+#
+# THE COST OF THAT, STATED PLAINLY: a transient bhavcopy 500 at 18:35 means no
+# signals that night, and the only notice is a line in reports/cron.log. The
+# staleness check on signals.html is what catches it the next morning, which is
+# twelve hours later than an alert would.
+5 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/01b_download_bhavcopy.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1 && /home/ubuntu/thestocklogic/venv/bin/python3 engine/build_market.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1 && /home/ubuntu/thestocklogic/venv/bin/python3 engine/02b_smc_signals.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1 && /home/ubuntu/thestocklogic/venv/bin/python3 engine/07_sector_momentum.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1 && /home/ubuntu/thestocklogic/venv/bin/python3 engine/03b_score.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1 && /home/ubuntu/thestocklogic/venv/bin/python3 engine/06_push_supabase.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1 && /home/ubuntu/thestocklogic/venv/bin/python3 engine/mark_signals.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1
+
+# 18:35 IST — MERIDIAN's EOD snapshot, alongside the chain. Different API, no
+# shared state, and the IV series cannot be back-filled so it does not wait.
+5 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m meridian.iv_recorder --label eod >> /home/ubuntu/logs/meridian_iv_eod.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# AFTER THE CHAIN — resolve, then measure, then report
+# ══════════════════════════════════════════════════════════════════
+# The order is a dependency chain even though the jobs are separate, so each has
+# its own slot and the gaps are the margin.
+#
+# 19:05 IST — resolve yesterday's signals against today's bars
+35 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/update_outcomes.py >> /home/ubuntu/thestocklogic/reports/cron.log 2>&1
+# 18:50 IST — the desk note, from the figures the chain just published
+20 13 * * 1-5 cd /home/ubuntu/thestocklogic && set -a && . /etc/atlas.env && set +a && /home/ubuntu/thestocklogic/venv/bin/python -m engine.market_flash >> /home/ubuntu/thestocklogic/reports/market_flash.log 2>&1
+# 19:00 IST — the negative class: 10 rejected stock-days per qualifying one, from
+# all_rows_v2.parquet which 03b writes for the latest date only
+30 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.reject_sample >> /home/ubuntu/thestocklogic/reports/reject_sample.log 2>&1
+# 19:10 IST — the 20-day forward path of every signal, detection and sampled
+# reject not already measured. AFTER reject_sample, so tonight's sample is walked
+# tonight.
+40 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.excursions >> /home/ubuntu/thestocklogic/reports/excursions.log 2>&1
+# 19:15 IST — ATLAS's own daily report. MOVED off 35 13: it reads what
+# update_outcomes writes and used to start in the same minute.
+45 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 atlas/reporting/daily_report.py >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+# 19:25 IST — the detection hypothesis, read off the paths written 15 minutes ago.
+# Report only; writes nothing and is wired to no threshold.
+55 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.score_live_outcomes >> /home/ubuntu/thestocklogic/reports/detection_hypothesis.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# FUNDAMENTALS — nightly refresh, weekly full fetch
+# ══════════════════════════════════════════════════════════════════
+# fundamentals.gate() is consulted per candidate at decision time and reads ONLY
+# the local cache, never the network: the market-hours loop cannot afford a
+# request per symbol per cycle. data/processed is gitignored, so the deploy
+# neither delivers this cache nor destroys it -- it has to be built here.
+#
+# 03:00 IST — announcements, every day
+30 21 * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.tier1_fetch --all --announcements-only >> /home/ubuntu/logs/tier1_announcements.log 2>&1
+# 04:10 IST — rebuild the gate cache from what was fetched
+40 22 * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fundamentals --refresh >> /home/ubuntu/logs/fundamentals_refresh.log 2>&1
+# Saturday 01:30 IST — annual statements, which only change quarterly
+0 20 * * 6 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fundamentals_fetch --all >> /home/ubuntu/logs/fundamentals_annual.log 2>&1
+# Saturday 02:30 IST — the full tier-1 refetch
+0 21 * * 6 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.tier1_fetch --all --refetch >> /home/ubuntu/logs/tier1_full.log 2>&1
+
+# ══════════════════════════════════════════════════════════════════
+# THE TELEGRAM LISTENER
+# ══════════════════════════════════════════════════════════════════
+# @reboot plus a 5-minute watchdog, because the listener is the only way an
+# operator can halt or resume ATLAS from a phone and a dead listener is silent.
+@reboot cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 atlas/reporting/bot_listener.py >> /home/ubuntu/thestocklogic/reports/bot.log 2>&1 &
+*/5 * * * * /home/ubuntu/thestocklogic/scripts/bot_watchdog.sh

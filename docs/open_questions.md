@@ -97,6 +97,27 @@ populations from being pooled.
 
 ---
 
+## THE SCHEDULE — deploy/crontab.box is the authority as of 2026-10-05
+
+The box's crontab was never in version control. Pasted and committed, with three
+defects it exposed:
+
+- **`atlas/signal/decay.py` ran every 10 minutes and had been deleted** on
+  2026-10-02. 48 failing invocations a weekday into `reports/atlas.log`.
+- **`daily_report` shared minute `35 13` with `update_outcomes`, which it reads.**
+  Moved to `45 13`.
+- **Four jobs were merged but never installed** — `market_flash`,
+  `reject_sample`, `excursions`, `score_live_outcomes`. `signal_excursions` and
+  `reject_sample` are empty because nothing has ever run them, not because they
+  were waiting for tonight.
+
+`tests/test_crontab.py` checks both directions: every path the schedule names must
+exist, and every job the repo ships must be scheduled. The four `deploy/*.cron`
+fragments are deleted — four places to look is how the minute collision survived.
+
+systemd still owns three things separately: `atlas-market-hours.timer` (DISABLED
+while paused), `atlas-mis-squareoff.timer`, `atlas-engine-report.timer`.
+
 ## MIGRATION STATE — verified against the live schema 2026-10-03
 
 **Applied** (renamed out of `PENDING_`): `atlas_trades_product`,

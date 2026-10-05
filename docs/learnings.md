@@ -673,3 +673,40 @@ different questions, and a page is the one place where only the second one matte
 When a user says something is not showing and the data is provably there, stop
 reading the source and go look at the rendered page — the answer was one DOM query
 away for three days.
+
+## A schedule outside version control (2026-10-05)
+
+The box's crontab had never been committed. Twenty-seven jobs — the entire EOD
+chain, both broker logins, the intraday ticker, the deploy loop itself — existed
+only as live state on one machine. Pasting it into a conversation found three
+defects in the first read:
+
+1. **`atlas/signal/decay.py` ran every ten minutes and did not exist.** Deleted on
+   2 October as dead code; the cron line outlived the file by three days, failing
+   48 times a weekday into a log nobody reads.
+2. **`daily_report` shared a minute with `update_outcomes`, which it reads.** Both
+   at `35 13`. The report was built from however much of the outcome update had
+   landed — a different number every night, never the right one, and nothing about
+   it looked wrong.
+3. **Four jobs were written, tested, merged and never installed.** I had reported
+   `signal_excursions` and `reject_sample` as "empty, cron fires tonight". They
+   were empty because nothing had ever run them.
+
+Every one of those is invisible from inside the repo, and every one is obvious the
+moment the schedule is a file you can read.
+
+**The third is the one worth dwelling on.** A job that is merged but not installed
+is indistinguishable from a job that is broken: the table is empty either way. I
+had the row counts and drew the wrong conclusion from them, twice — once calling it
+"expected tonight", once as reassurance in a report. The row count could not
+distinguish the two cases; only the schedule could, and the schedule was not
+something I could read.
+
+`tests/test_crontab.py` now checks both directions — every path named must exist,
+and every job shipped must be scheduled — and the four `deploy/*.cron` fragments
+are gone. Four files meant four places to look, which is exactly how two jobs came
+to share a minute without anyone seeing it.
+
+**The lesson.** Infrastructure that lives only on the machine cannot be reviewed,
+cannot be tested, and cannot be rebuilt. The absence of a cron line is a silent
+failure with no log line anywhere — there is no error to find, because nothing ran.
