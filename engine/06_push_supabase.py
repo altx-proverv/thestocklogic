@@ -66,6 +66,47 @@ CANDIDATES_FILE  = Path("data/processed/signals_v2/candidates_v2.parquet")
 # decided upstream by 03b's disqualifiers plus the zone-entry gate below.
 
 
+_SIGNALS_HAS = {}
+
+
+def _signals_has(col: str, headers: dict) -> bool:
+    """Does public.signals have this column? Probed once per process, cached.
+
+    WHY THIS IS NEEDED AT ALL. push_signals has sent engine_sha and engine_ran_at
+    since 2026-10-02, and the only migration that adds them to `signals` is
+    PENDING_signals_features_provenance.sql, which was deliberately deferred --
+    "nothing reads the features table for months". The columns were load-bearing in
+    a way the deferral did not account for: PostgREST rejects an insert naming an
+    unknown column by discarding the WHOLE payload, so the first chain run after
+    that commit would have failed the entire signal push, not just the provenance.
+    106 signals on the Thursday, zero on the Monday, and the only notice a 400 in
+    reports/cron.log.
+
+    So the payload adapts to the schema instead of assuming it. This works before
+    and after the migration: apply it and provenance starts being recorded with no
+    code change, which is the behaviour the deferral needed in the first place.
+
+    Same pattern as atlas_entry._trades_has_product, for the same reason.
+    """
+    if col not in _SIGNALS_HAS:
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/signals?select={col}&limit=1",
+                             headers=headers, timeout=10)
+            _SIGNALS_HAS[col] = r.status_code in (200, 206)
+            if not _SIGNALS_HAS[col]:
+                log.warning(
+                    f"signals.{col} does not exist — publishing without it. "
+                    f"Apply migrations/PENDING_signals_features_provenance.sql to "
+                    f"start recording it; the batch publishes either way.")
+        except Exception as e:
+            # A FAILED PROBE MUST NOT DROP THE BATCH. Assume absent: omitting a
+            # column publishes a row with one field missing, naming one that is not
+            # there publishes nothing at all.
+            log.warning(f"could not probe signals.{col} ({e}) — publishing without it")
+            _SIGNALS_HAS[col] = False
+    return _SIGNALS_HAS[col]
+
+
 def push_signals(target_date: str = None):
     if not SUPABASE_KEY:
         log.error("SUPABASE_SERVICE_KEY not set. Export it first:")
@@ -256,11 +297,6 @@ def push_signals(target_date: str = None):
             # force on the night it was published; the backfill marks itself
             # separately so the two can never be confused.
             "sector_as_of":     "recorded",
-            # WHICH COMMIT WROTE THIS. Every era boundary in the record had to be
-            # inferred from which columns are null, which works only while the
-            # deployments land weeks apart.
-            "engine_sha":       ENGINE_SHA,
-            "engine_ran_at":    RUN_AT,
             "market_regime":    str(row.get("market_regime", "unknown")),
             "structure_trend":  str(row.get("structure_trend", "ranging")),
             "trade_type":       str(row.get("trade_type", "")),
@@ -519,6 +555,23 @@ def push_features(day_str: str, headers: dict) -> int:
     return written
 
 
+def _candidate_grade(row) -> str:
+    """The grade computed for a watchlist row, or "C" with a warning.
+
+    Never a silent default. These rows went through score_vectorized -- the failing
+    row that surfaced this carried score 48.5 -- so the grade exists and the
+    fallback should never fire. If it does, something upstream stopped writing the
+    column and that is worth a log line rather than a plausible letter.
+    """
+    g = row.get("grade")
+    g = "" if g is None else str(g).strip()
+    if g:
+        return g
+    log.warning("candidate row has no grade — publishing as C. "
+                "03b's scoring frame should always carry one.")
+    return "C"
+
+
 def push_candidates(d, headers: dict, base_url: str) -> int:
     """
     Publish the watchlist for date `d`. -> rows published.
@@ -559,6 +612,14 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
             "symbol":           str(row.get("symbol", "")),
             "direction":        str(row.get("direction", "")).upper(),
             "publication_kind": "candidate",
+            # GRADE IS NOT NULL WITH NO DEFAULT, and omitting it is why no
+            # candidate has EVER published: every push since the feature shipped
+            # returned 23502 and the whole batch was discarded. _watchlist returns
+            # the full scored frame, so the grade was computed and simply not sent.
+            # "C" is the fallback rather than the signal path's "B" because a row
+            # that did not qualify should not be handed the better letter, and the
+            # warning fires if it is ever actually needed.
+            "grade":            _candidate_grade(row),
             "entry_ref":        entry,
             "entry_low":        float(row.get("entry_low") or 0) or None,
             "entry_high":       float(row.get("entry_high") or 0) or None,
@@ -573,6 +634,14 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
             "product":          "CNC" if str(row.get("direction", "")).upper() == "LONG" else "MIS",
             "atr_pct":          float(row.get("atr_pct") or 0) or None,
         })
+    # WHICH COMMIT WROTE THIS. Every era boundary in the record had to be inferred
+    # from which columns are null, which works only while the deployments land weeks
+    # apart. Added only when the columns exist -- see _signals_has.
+    if recs and _signals_has("engine_sha", headers):
+        for _r in recs:
+            _r["engine_sha"] = ENGINE_SHA
+            _r["engine_ran_at"] = RUN_AT
+
     if not recs:
         log.info(f"no publishable candidates for {day_str}")
         return 0
