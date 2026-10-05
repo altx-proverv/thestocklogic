@@ -64,7 +64,12 @@ SELECT
        AND column_name IN ('notional','target_notional','notional_pct','oversized',
                            'sizing_basis','risk_inr','costs_inr','pnl_net'))  AS eight_columns,
   (SELECT count(*) = 0 FROM public.atlas_trades WHERE sizing_basis IS NULL)   AS all_labelled,
-  (SELECT count(*) = 19 FROM public.atlas_trades
+  -- >= 19, not = 19. There are 19 trades as of 2026-10-06 and ATLAS goes live at
+  -- 09:20 tomorrow; a verify pinned to an exact count would fail on a correct apply
+  -- the moment a trade lands first, which invites re-running statements that already
+  -- succeeded. The relationship that is always true is that every PRE-RESTART row
+  -- carries the old label and no row carries none.
+  (SELECT count(*) >= 19 FROM public.atlas_trades
      WHERE sizing_basis = 'risk-3000-notional-100000-mult5-v1')               AS old_trades_labelled,
   (SELECT is_nullable = 'NO' FROM information_schema.columns
      WHERE table_name='atlas_trades' AND column_name='oversized')            AS oversized_not_null,
