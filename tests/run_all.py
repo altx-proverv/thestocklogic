@@ -62,6 +62,7 @@ SUITES = [
     ("page claims",     [sys.executable, "tests/test_page_claims.py"]),
     ("page styles",      [sys.executable, "tests/test_page_styles.py"]),
     ("push payloads",    [sys.executable, "tests/test_push_payloads.py"]),
+    ("learning loop",    [sys.executable, "tests/test_learning.py"]),
     ("crontab",          [sys.executable, "tests/test_crontab.py"]),
     ("market flash",    [sys.executable, "tests/test_market_flash.py"]),
     ("meridian iv",     [sys.executable, "tests/test_meridian_iv.py"]),

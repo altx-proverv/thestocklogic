@@ -113,8 +113,8 @@ print("\n── everything the repo ships is scheduled ──")
 # A job written, tested and merged but never installed is indistinguishable from a
 # job that is broken: the table stays empty either way.
 MUST_RUN = ["engine.market_flash", "engine.reject_sample", "engine.excursions",
-            "engine.score_live_outcomes", "meridian.iv_recorder",
-            "engine.tier1_fetch", "engine.fundamentals"]
+            "engine.score_live_outcomes", "engine.learning_loop",
+            "meridian.iv_recorder", "engine.tier1_fetch", "engine.fundamentals"]
 for mod in MUST_RUN:
     check(f"  {mod} is scheduled", mod in EXEC)
 for script in ["engine/rbe_startup.py", "engine/rbe_engine.py",
@@ -150,6 +150,12 @@ check("excursions runs AFTER reject_sample, so tonight's sample is walked tonigh
       after(minute_of("engine.excursions"), minute_of("reject_sample")))
 check("score_live_outcomes runs after excursions",
       after(minute_of("score_live_outcomes"), minute_of("engine.excursions")))
+# The learning loop reads what every other job wrote, so it must be last.
+check("the learning loop runs after everything it reads",
+      after(minute_of("learning_loop"), minute_of("score_live_outcomes"))
+      and after(minute_of("learning_loop"), minute_of("engine.excursions"))
+      and after(minute_of("learning_loop"), minute_of("update_outcomes")),
+      str(minute_of("learning_loop")))
 check("rbe_engine starts after rbe_startup builds the map",
       after(minute_of("rbe_engine"), minute_of("rbe_startup")))
 check("both broker logins precede the range-map build",

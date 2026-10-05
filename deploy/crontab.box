@@ -198,6 +198,18 @@ MAILTO=""
 # Report only; writes nothing and is wired to no threshold.
 55 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.score_live_outcomes >> /home/ubuntu/thestocklogic/reports/detection_hypothesis.log 2>&1
 
+# 19:35 IST — THE LEARNING LOOP. Extends every standing hypothesis by the
+# observations that arrived since the last run, writes a ledger row either way, and
+# reports ONLY when something crosses e-BH at alpha=0.05 across the whole standing
+# set. Silence otherwise, deliberately: a nightly report nobody reads trains the
+# operator to ignore the channel the real finding will arrive on.
+#
+# LAST, because it reads what everything before it wrote. Nothing reads it.
+#
+# It proposes; it never acts. The automatic gate needs a held-out period AND 200+
+# live trades earned per finding, and ATLAS has 19 trades lifetime.
+5 14 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.learning_loop >> /home/ubuntu/thestocklogic/reports/learning.log 2>&1
+
 # ══════════════════════════════════════════════════════════════════
 # FUNDAMENTALS — nightly refresh, weekly full fetch
 # ══════════════════════════════════════════════════════════════════
