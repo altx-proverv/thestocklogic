@@ -6,6 +6,23 @@ Memory efficient — processes in chunks if needed.
 
 Run: python3 engine/03b_score.py
 """
+
+# ── RUN-ANYWHERE BOOTSTRAP ──────────────────────────────────────────
+# cron invokes this script BY FILE PATH:
+#     cd /home/ubuntu/thestocklogic && venv/bin/python3 engine/03b_score.py
+# Python then puts the SCRIPT'S OWN directory (engine/) on sys.path, not the repo
+# root, so `import engine.paths` cannot resolve and the module dies before it
+# opens its log file -- which is why there was no 03b log to find. Contrast
+# `python -m engine.x`, which puts the working directory on the path.
+#
+# This happened on 2026-10-05 (6125216) and killed the nightly chain for three
+# sessions: the chain is &&-joined, so 06_push and mark_signals never ran either.
+# The repo root goes on the path FIRST, before any package import, so the script
+# works however it is invoked.
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
+# ────────────────────────────────────────────────────────────────────
+
 import os, sys, logging, warnings
 from pathlib import Path
 import numpy as np

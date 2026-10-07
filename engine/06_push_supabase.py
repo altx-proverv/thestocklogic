@@ -7,6 +7,23 @@ and upserts them into Supabase.
 Run: python3 engine/06_push_supabase.py
 """
 
+# ── RUN-ANYWHERE BOOTSTRAP ──────────────────────────────────────────
+# cron invokes this script BY FILE PATH:
+#     cd /home/ubuntu/thestocklogic && venv/bin/python3 06_push_supabase.py
+# Python then puts the SCRIPT'S OWN directory (engine/) on sys.path, not the repo
+# root, so `import engine.paths` cannot resolve and the module dies before it
+# opens its log file -- which leaves no log behind. Contrast
+# `python -m engine.x`, which puts the working directory on the path.
+#
+# This happened on 2026-10-05 (6125216) and killed the nightly chain for three
+# sessions: the chain is &&-joined, so 06_push and mark_signals never ran either.
+# The repo root goes on the path FIRST, before any package import, so the script
+# works however it is invoked.
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
+# ────────────────────────────────────────────────────────────────────
+
+
 import os, sys, json, logging, warnings
 from pathlib import Path
 from datetime import date, datetime, timezone
@@ -401,6 +418,34 @@ def push_signals(target_date: str = None):
         log.error(f"candidate publish failed ({e}) — actionable signals are "
                   f"published; the loop will watch only those")
 
+    # ── COMPLETION CHECK — the chain cannot pass silently ───────────────
+    # READ BACK, do not trust the POST. requests.post does not raise on 4xx and
+    # this file has twice shipped a payload that PostgREST discarded whole: the
+    # candidate push failed on a NOT NULL grade for the life of the feature, and
+    # engine_sha named a column that did not exist. A 200 from the insert is not
+    # evidence that rows are there, so the only acceptable proof is a SELECT.
+    day_str = d.strftime("%Y-%m-%d")
+    try:
+        chk = requests.get(
+            f"{base_url}?signal_date=eq.{day_str}&publication_kind=eq.signal"
+            f"&select=id", headers={**headers, "Prefer": "count=exact",
+                                    "Range": "0-0"}, timeout=30)
+        n_live = int((chk.headers.get("content-range") or "*/0").split("/")[-1]) \
+            if chk.status_code in (200, 206) else -1
+    except Exception as e:
+        _chain_failed(f"published, then could not verify the batch: {e}")
+        return records
+    if n_live < 0:
+        _chain_failed(f"could not read back the batch for {day_str}: "
+                      f"HTTP {chk.status_code}")
+    elif n_live == 0:
+        _chain_failed(f"zero signals are live for {day_str}. "
+                      f"The scored frame held {len(records)} record(s) to publish, "
+                      f"so either the push was rejected or the engine qualified "
+                      f"nothing.")
+    else:
+        log.info(f"✓ COMPLETION CHECK: {n_live} signal(s) live for {day_str}")
+
     return records
 
 
@@ -706,6 +751,46 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
                 f"&publication_kind=eq.candidate", headers=headers, timeout=30)
             log.info(f"  removed {len(ids)} superseded candidate row(s)")
     return len(recs)
+
+
+def _chain_failed(reason: str) -> None:
+    """The chain produced nothing. Say so loudly and exit non-zero.
+
+    SAME SHAPE AS zerodha_auto_login's failure path, and for the same reason: a
+    scheduled job that fails quietly is indistinguishable from one that succeeded
+    with nothing to do.
+
+    WHY THIS EXISTS. On 2026-10-05 an unguarded `import engine.paths` was added to
+    03b, which cron invokes by file path. The script died before opening its log,
+    the &&-chain stopped, and 06_push and mark_signals never ran. For THREE
+    SESSIONS reject_sample, update_outcomes, excursions and the daily report each
+    ran afterwards, found stale files, and reported success -- while the page said
+    only "Nothing published". Nothing in the system distinguished "the engine found
+    no setups tonight" from "the engine never ran".
+
+    EXITING NON-ZERO IS THE POINT. The chain is &&-joined, so mark_signals will not
+    run on an empty batch -- which is correct, there is nothing to mark. And an
+    empty batch alerts too: a night that genuinely produces no signals is rare
+    enough to be worth a message, and it is exactly the state that hid this bug.
+    """
+    log.error(f"CHAIN INCOMPLETE — {reason}")
+    try:
+        from atlas.reporting.telegram import send
+        sent = send(
+            "❌ <b>SIGNAL CHAIN PUBLISHED NOTHING</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"{reason}\n\n"
+            "No signals are live for this session. The page will show the last "
+            "published batch and mark it stale. Check "
+            "reports/cron.log for the stage that failed — the chain is &&-joined, "
+            "so the first failure stops everything after it."
+        )
+        if not sent:
+            log.error("Telegram notification did not send — failure is log-only")
+    except Exception as e:
+        log.error(f"could not send the chain-failure alert ({e}) — "
+                  f"failure is log-only")
+    sys.exit(1)
 
 
 def main():

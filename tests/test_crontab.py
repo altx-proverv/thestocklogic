@@ -85,6 +85,92 @@ check("it has the expected number of jobs", 20 <= len(jobs) <= 40, str(len(jobs)
 # `jobs` already excludes them.
 EXEC = "\n".join(jobs)
 
+print("\n── a script cron runs BY FILE PATH must be importable that way ──")
+# THE BUG THIS EXISTS FOR. On 2026-10-05, commit 6125216 added an unguarded
+# `from engine.paths import SIGNALS_DIR, ALL_ROWS` to engine/03b_score.py. cron
+# invokes that script by FILE PATH, which puts engine/ on sys.path and NOT the repo
+# root, so the import could not resolve. The script died before opening its log --
+# leaving no 03b log to find -- and because the chain is &&-joined, 06_push and
+# mark_signals never ran either. Three sessions lost, behind a page that said only
+# "Nothing published".
+#
+# A package import is safe under file-path invocation if EITHER the file puts the
+# repo root on sys.path first, OR the import is guarded by a try/except
+# ImportError with a bare-module fallback. Neither, and the script cannot start.
+import ast as _ast
+
+
+def _pkg_import_risk(path):
+    """[(lineno, module)] for package imports that cannot resolve by file path."""
+    src = Path(path).read_text(encoding="utf-8")
+    tree = _ast.parse(src)
+    # does the module put the REPO ROOT on sys.path, and on which line?
+    boot = None
+    for n in _ast.walk(tree):
+        if isinstance(n, _ast.Call):
+            txt = _ast.unparse(n)
+            if ("sys.path.insert" in txt or "sys.path.append" in txt) and \
+               ("parents[1]" in txt or "parent.parent" in txt):
+                boot = n.lineno if boot is None else min(boot, n.lineno)
+    # which imports sit inside a try/except ImportError with a fallback?
+    guarded = set()
+    for n in _ast.walk(tree):
+        if isinstance(n, _ast.Try) and n.handlers:
+            names = {h.type.id for h in n.handlers
+                     if isinstance(h.type, _ast.Name)}
+            names |= {e.id for h in n.handlers
+                      if isinstance(h.type, _ast.Tuple)
+                      for e in h.type.elts if isinstance(e, _ast.Name)}
+            if names & {"ImportError", "ModuleNotFoundError", "Exception"}:
+                for sub in _ast.walk(n):
+                    if isinstance(sub, (_ast.Import, _ast.ImportFrom)):
+                        guarded.add(sub.lineno)
+    risky = []
+    for n in _ast.walk(tree):
+        mods = []
+        if isinstance(n, _ast.ImportFrom) and n.module:
+            mods = [n.module]
+        elif isinstance(n, _ast.Import):
+            mods = [a.name for a in n.names]
+        for m in mods:
+            if "." not in m or m.split(".")[0] not in (
+                    "engine", "atlas", "meridian", "tools", "tests", "backtest"):
+                continue
+            if n.lineno in guarded:
+                continue
+            if boot is not None and boot < n.lineno:
+                continue
+            risky.append((n.lineno, m))
+    return risky
+
+
+_bypath = set()
+for l in jobs:
+    for m in re.finditer(r"python3?\s+((?:engine|atlas|scripts|tools)/[A-Za-z0-9_/]+\.py)", l):
+        _bypath.add(m.group(1))
+check("cron does invoke scripts by file path", len(_bypath) > 10, str(len(_bypath)))
+_allrisk = {}
+for sc in sorted(_bypath):
+    if not (ROOT / sc).exists():
+        continue
+    r = _pkg_import_risk(ROOT / sc)
+    if r:
+        _allrisk[sc] = r
+check("no file-path script has an unresolvable package import", not _allrisk,
+      "; ".join(f"{k} line {v[0][0]} imports {v[0][1]}" for k, v in _allrisk.items()))
+check("03b specifically is safe", "engine/03b_score.py" not in _allrisk)
+check("  and it does carry the bootstrap",
+      "RUN-ANYWHERE BOOTSTRAP" in (ROOT / "engine/03b_score.py").read_text(encoding="utf-8"))
+
+print("\n── the chain cannot report success having published nothing ──")
+_push = (ROOT / "engine/06_push_supabase.py").read_text(encoding="utf-8")
+check("06_push has a completion check", "COMPLETION CHECK" in _push)
+check("  it READS BACK rather than trusting the POST",
+      "could not read back the batch" in _push)
+check("  zero published exits non-zero", "_chain_failed" in _push
+      and "sys.exit(1)" in _push)
+check("  and alerts on Telegram", "SIGNAL CHAIN PUBLISHED NOTHING" in _push)
+
 print("\n── every path it runs exists ──")
 missing = []
 for m in re.finditer(r"(?:^|\s)((?:engine|atlas|scripts|tools)/[A-Za-z0-9_/]+\.(?:py|sh))", EXEC):
