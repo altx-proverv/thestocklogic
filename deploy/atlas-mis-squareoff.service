@@ -1,5 +1,6 @@
-# Closes every open MIS position at market, before Zerodha squares them off at
-# 15:20 and we lose the exit price and the audit trail.
+# Closes every open MIS position, before Zerodha's 15:12 cutoff -- past which an
+# MIS order is REJECTED, not merely late, and we lose the exit price, the audit
+# trail and the ability to exit at all.
 #
 # Started by atlas-mis-squareoff.timer. No [Install] section: a timer-activated
 # service must not be enabled on its own or it runs at boot, which here would mean
@@ -10,7 +11,7 @@
 # opened it and whatever mode it was opened in.
 
 [Unit]
-Description=ATLAS MIS square-off (15:15 IST)
+Description=ATLAS MIS square-off (15:00 IST)
 After=network-online.target
 Wants=network-online.target
 # StartLimit* belongs in [Unit], not [Service] -- systemd rejects it there and the
@@ -26,8 +27,9 @@ WorkingDirectory=/home/ubuntu/thestocklogic
 EnvironmentFile=/etc/atlas.env
 ExecStart=/home/ubuntu/thestocklogic/venv/bin/python -m atlas.execution.mis_squareoff
 # A failure here means a position may be left for the broker, so it is worth
-# retrying twice inside the five minutes available -- but never beyond 15:20,
-# which the runner itself will not act past.
+# retrying twice inside the twelve minutes of margin before 15:12. Two retries at
+# 45s plus a 120s timeout cannot reach the cutoff from 15:00, and the runner
+# itself flags any run at or past it as late.
 Restart=on-failure
 RestartSec=45s
 TimeoutStartSec=120

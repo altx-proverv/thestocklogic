@@ -417,6 +417,56 @@ ENFORCE_ENTRY_RANGE = True
 # funds. See atlas/risk/funds.can_afford().
 FUNDS_SAFETY_BUFFER_PCT = 0.02           # 2% buffer; configurable
 
+# ══════════════════════════════════════════════════════════════════
+# MIS SQUARE-OFF TIMING
+# ══════════════════════════════════════════════════════════════════
+#
+# VERIFIED AGAINST ZERODHA'S CURRENT PUBLISHED TIMINGS ON 2026-10-09, not from
+# memory. Three segment cutoffs, effective 2026-08-03:
+#
+#   Equity, stock in CAS       15:12   SEBI's Closing Auction Session: continuous
+#                                      trading for F&O-segment stocks ends 15:15,
+#                                      and Zerodha squares MIS off by 15:12
+#   Equity, stock not in CAS   15:25
+#   Equity / index derivatives 15:26
+#
+# AND THE CUTOFF IS NOT ONLY A SQUARE-OFF TIME -- IT IS ALSO AN ORDER CUTOFF.
+# Zerodha rejects MIS orders placed after the square-off time for that segment.
+# On 2026-10-07 the 15:15 timer tried to close a BHARTIARTL MIS short and got
+# "Intraday orders (MIS) are allowed only till 3:12 PM". The timer was three
+# minutes past the cutoff, so that square-off had never been able to work.
+#
+# PHASE 1 OF CAS COVERS EVERY F&O-SEGMENT STOCK, which is most of what ATLAS
+# trades, so 15:12 is the cutoff that binds. ONE TIME FOR ALL SYMBOLS, taken from
+# the EARLIEST cutoff: a per-symbol time would need a live CAS membership list,
+# and being early on a non-CAS stock costs nothing while being late on a CAS one
+# costs the position.
+MIS_BROKER_CUTOFFS = {
+    "equity_cas":           "15:12",
+    "equity_non_cas":       "15:25",
+    "equity_derivatives":   "15:26",
+    "index_derivatives":    "15:26",
+}
+MIS_BROKER_CUTOFF = min(MIS_BROKER_CUTOFFS.values())   # "15:12" -- the binding one
+
+# MARGIN, not a guess. 15:15 failed by three minutes; twelve gives the engine
+# room for a retry, a slow quote and a rejected-then-repriced limit order and
+# still be flat before the broker takes over. The broker's own square-off is a
+# BACKSTOP, not the plan: if ATLAS is working, the broker never has to act.
+MIS_EXIT_MARGIN_MIN = 12
+MIS_EXIT_HOUR, MIS_EXIT_MIN = divmod(
+    int(MIS_BROKER_CUTOFF.split(":")[0]) * 60
+    + int(MIS_BROKER_CUTOFF.split(":")[1]) - MIS_EXIT_MARGIN_MIN, 60)
+MIS_EXIT_TIME = f"{MIS_EXIT_HOUR:02d}:{MIS_EXIT_MIN:02d}"        # "15:00"
+
+if (MIS_EXIT_HOUR, MIS_EXIT_MIN) >= tuple(
+        int(x) for x in MIS_BROKER_CUTOFF.split(":")):
+    # Import-time, because the only other place this is discoverable is a
+    # rejected order on a live position.
+    raise AssertionError(
+        f"MIS_EXIT_TIME {MIS_EXIT_TIME} is not before the broker cutoff "
+        f"{MIS_BROKER_CUTOFF} -- this is the 2026-10-07 failure exactly")
+
 SESSION_PRE_MARKET  = (9,  0,  9, 15)
 SESSION_OPENING     = (9, 15,  9, 45)
 SESSION_MORNING     = (9, 45, 11, 30)

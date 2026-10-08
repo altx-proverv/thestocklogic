@@ -15,7 +15,9 @@ Live P&L is marked against live_prices. If that feed is stale the P&L is NOT
 shown -- a number computed from yesterday's closes looks exactly like a real
 one and is worse than no number.
 
-Trailing stops are RECOMMENDATIONS. ATLAS places no stop-loss orders.
+Trailing stops are RECOMMENDATIONS. Whether ATLAS places stop-loss
+orders depends on ENABLE_EXIT_MANAGEMENT -- see _footer(), which reads it
+rather than asserting an answer.
 """
 
 import sys, requests, logging
@@ -51,8 +53,39 @@ SKIP_DETAIL = 10
 # is the backstop, so a report can be degraded but never silently dropped.
 TELEGRAM_LIMIT = 4096
 
-FOOTER = ("REMINDER: ATLAS places no stop-losses. Set them manually.\n"
-          "Trailing levels above are recommendations only — nothing is placed.")
+def _footer() -> str:
+    """What the engine actually does about stops, read from config.
+
+    THIS WAS A FIXED STRING SAYING "ATLAS places no stop-losses. Set them
+    manually." -- true until 2026-09-30, false every day since, and still being
+    sent on 2026-10-07 while the engine was in the middle of trying to place
+    one and failing. A reader acting on it would have gone looking for a stop to
+    set by hand on a position that already had an order resting against it, or
+    assumed no protection existed when it did.
+
+    A FUNCTION, NOT A CONSTANT, deliberately. A module-level string is evaluated
+    at import and reads as settled fact; a call is evaluated at send time
+    against the switch that is actually in force. The trailing sentence is
+    separate from the stop sentence because they are governed by different
+    things: trailing levels are advisory in every mode, stops are not.
+    """
+    from atlas.config import (ENABLE_EXIT_MANAGEMENT, ALLOW_AUTOMATED_TARGET,
+                              MIS_EXIT_TIME)
+    if ENABLE_EXIT_MANAGEMENT:
+        tgt = (" A 2R target rests alongside it."
+               if ALLOW_AUTOMATED_TARGET else
+               " No target is placed; positions are trailed, not capped.")
+        return ("STOPS: ATLAS places its own stop on every fill — a stop-loss "
+                "LIMIT order for an MIS short, a GTT for a CNC long — and "
+                "exits immediately on a limit priced through the book if it "
+                f"cannot.{tgt} MIS positions are closed "
+                f"by the engine at {MIS_EXIT_TIME} IST.\n"
+                "Trailing levels above are recommendations only — nothing is "
+                "placed from them.")
+    return ("STOPS: exit management is OFF — ATLAS places no stop-losses. Set "
+            "them manually.\n"
+            "Trailing levels above are recommendations only — nothing is "
+            "placed from them.")
 
 
 def _dir_label(direction: str) -> str:
@@ -474,7 +507,7 @@ def _fit(body: str, footer: str, limit: int = TELEGRAM_LIMIT) -> str:
 
 
 def generate_and_send() -> bool:
-    body = _fit(build_report(), FOOTER)
+    body = _fit(build_report(), _footer())
     log.info("\n" + body)
     ok = send(_wrap(body))
     if ok:

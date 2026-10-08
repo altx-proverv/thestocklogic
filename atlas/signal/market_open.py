@@ -207,6 +207,11 @@ class Session:
         self.breaker_tripped = False
         self.breaker_reason = ""
         self.paused_cycles = 0
+        # Default False, i.e. "live", so a code path that reaches the entry call
+        # without cycle() having set this gets the guarded live path and its two
+        # independent refusals -- not a silent evaluation that places nothing
+        # and reports success.
+        self.observe_only = False
         self.last_gate_reason = ""
         self.ended_at = None
 
@@ -711,18 +716,77 @@ def paused() -> tuple:
 # ONE CYCLE
 # ══════════════════════════════════════════════════════════════════
 
+def evaluate_only(signal: dict) -> dict:
+    """Run every gate and place nothing. -> the same shape enter_trade returns.
+
+    WHY NOT JUST CALL enter_trade() AND LET THE BROKER GUARD REFUSE IT. Because
+    that would spend a funds call and an order attempt per candidate per cycle to
+    learn something already known, and a refusal at the broker layer is recorded as
+    a blocked ORDER rather than as an observed DECISION. The two mean different
+    things to anyone reading atlas_entry_log afterwards.
+
+    The gate stack is reused, not reimplemented: enter_trade is called with
+    dry_run=True, so the gates, their order and their reasons are exactly the ones
+    a live cycle would apply. A separate copy of the gate logic here would drift
+    from the real one and the log would describe a system that does not exist.
+    """
+    # THE MODULE-LEVEL enter_trade, NOT A FRESH IMPORT. One seam: the live path
+    # and the watch-only path must resolve the same callable, or a test (or a
+    # future patch) can replace one and silently leave the other pointing at the
+    # real thing -- which, on the watch-only path, means an order.
+    try:
+        out = enter_trade(signal, dry_run=True)
+    except TypeError:
+        # enter_trade has no dry_run parameter yet. Report that plainly rather
+        # than falling through to a live call.
+        return {"status": "WATCH_ONLY_UNAVAILABLE",
+                "reason": "enter_trade() does not accept dry_run; no evaluation "
+                          "was performed and no order was placed"}
+    st = str(out.get("status", "?"))
+    if st in ("WOULD_ENTER", "ENTERED", "GTT_PLACED", "ORDER_INDETERMINATE",
+              "SHADOW_INTENT"):
+        # It cleared every gate. Say so, and say that nothing was sent.
+        out["would_have_entered"] = True
+        out["status"] = "WATCH_ONLY"
+        out["reason"] = (f"all gates passed; no order placed (ATLAS is halted) "
+                         f"[{out.get('reason', '')}]".strip())
+    else:
+        out["would_have_entered"] = False
+        out["status"] = f"WATCH_ONLY_{st}"
+    return out
+
+
 def cycle(state: Session) -> dict:
     """One pass. Returns a small summary; never raises."""
     state.cycle_n += 1
     out = {"cycle": state.cycle_n, "candidates": 0, "entered": 0, "skipped": 0}
 
-    is_paused, why = paused()
-    if is_paused:
+    # ── WATCH-ONLY: A HALTED ATLAS STILL OBSERVES ───────────────────────
+    #
+    # This check used to RETURN here, and the cost of that was invisible until it
+    # mattered. On 2026-10-08 ATLAS ran 360 cycles and produced nothing: batch
+    # None, 0 zones, 0 rows in atlas_entry_log. No record of what it would have
+    # done, no gate decisions to review, and the site's live zone panel dead
+    # because this loop is what feeds it. A halt became an outage in the one
+    # system whose job is to know what the market did.
+    #
+    # So the pause no longer stops the cycle. It stops ORDER PLACEMENT. Everything
+    # above that -- the zone map, the quote fetch, the full gate stack,
+    # atlas_entry_log, atlas_live_zones -- runs exactly as it does when live, and
+    # the decisions are recorded with a status that says they were observed rather
+    # than taken.
+    #
+    # THE SECOND GUARD IS IN broker.place_order ITSELF. This flag is the one that
+    # keeps the loop honest; that one is the one that makes it impossible. Same
+    # principle as the exit fallback: two guards that fail for different reasons.
+    # If this flag were forgotten, the broker layer still refuses the order.
+    state.observe_only, watch_why = paused()
+    if state.observe_only:
         state.paused_cycles += 1
-        out["paused"] = why
-        log.info(f"cycle {state.cycle_n}: paused — {why}")
-        alert("PAUSED", why, key=why[:40])
-        return out
+        out["observe_only"] = watch_why
+        log.info(f"cycle {state.cycle_n}: WATCH-ONLY — {watch_why} "
+                 f"(observing and logging; no orders will be placed)")
+        alert("PAUSED", watch_why, key=watch_why[:40])
 
     if not load_zone_map(state):
         out["error"] = "no usable zone map"
@@ -885,7 +949,20 @@ def cycle(state: Session) -> dict:
             "ltp":        ltp,          # from Upstox; Zerodha is execution only
         }
         try:
-            result = enter_trade(signal)
+            if state.observe_only:
+                # WATCH-ONLY: the full gate stack still runs, and its verdict is
+                # still recorded -- that is the point. enter_trade() is the only
+                # step skipped, because it is the only step that can reach the
+                # broker. Everything before it has already happened: the zone was
+                # matched, the quote was read, the candidate was evaluated.
+                #
+                # A DISTINCT STATUS, not a borrowed one. "WATCH_ONLY" must never
+                # be mistaken for SHADOW_INTENT (which means LIVE_TRADING_ENABLED
+                # is false) or for a gate rejection, or the log stops answering
+                # "would it have traded".
+                result = evaluate_only(signal)
+            else:
+                result = enter_trade(signal)
         except Exception as e:
             log.exception(f"{sym}: enter_trade raised")
             alert("ENTRY ERROR", f"{sym}: {type(e).__name__}: {e}", key=sym)

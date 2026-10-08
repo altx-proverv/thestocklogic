@@ -150,9 +150,18 @@ def get_kite(force_refresh: bool = False):
     return kite
 
 
-def get_ltp(symbol: str, exchange: str = "NSE") -> float:
-    """Get live price for a symbol."""
-    kite = get_kite()
+def get_ltp(symbol: str, exchange: str = "NSE", kite=None) -> float:
+    """Get live price for a symbol.
+
+    kite IS ACCEPTED SO A CALLER THAT ALREADY HAS A SESSION CAN USE IT. The
+    emergency exit prices its limit off this: it was given a kite for placing the
+    order but this read went through get_kite() regardless, so the order and the
+    price it depends on came from two different sessions. In production both
+    resolve to the same cached client, which is why it never showed -- but it
+    means a caller cannot test or operate the exit with one session, and the
+    exit's price read could fail for a reason its order placement would not.
+    """
+    kite = kite or get_kite()
     if not kite:
         return 0.0
     try:
@@ -200,7 +209,8 @@ def place_order(
     price: float = 0,
     sl: float = 0,
     tag: str = "ATLAS",
-    product: str = "MIS"
+    product: str = "MIS",
+    intent: str = "ENTRY"
 ) -> dict:
     """
     Place an order via Zerodha.
@@ -208,9 +218,46 @@ def place_order(
     order_type: MARKET or LIMIT
     product: CNC (delivery -- longs held overnight) or MIS (intraday).
              Defaults to MIS so existing callers are unaffected.
+    intent: ENTRY (blocked while halted) or EXIT (always permitted).
     Returns order result dict.
+
+    THE HALT IS ENFORCED HERE, AT THE BOTTOM, not only by the caller.
+    -----------------------------------------------------------------
+    ATLAS ran 360 cycles on 2026-10-08 and placed nothing, which was correct --
+    but it was correct because cycle() returned early, and an early return is one
+    guard in one place. This function is the only route from ATLAS to the broker
+    for an entry, so the second guard belongs in it: a caller that forgets to
+    check cannot reach the exchange.
+
+    ENTRY IS BLOCKED, EXIT IS NOT, and the asymmetry is the whole point. A halted
+    ATLAS must still be able to protect or close a position it already holds --
+    blocking exits would turn a halt into the unprotected-position incident it
+    exists to prevent. So the default is ENTRY: an unlabelled order is treated as
+    an entry and refused while halted, which fails in the safe direction.
     """
     from atlas.risk.kill_switch import check as kill_switch_check
+
+    if str(intent).upper() != "EXIT":
+        from atlas.risk import breaker
+        _halted, _why = breaker.is_halted()
+        if _halted:
+            log.warning(f"ENTRY BLOCKED at the broker layer — ATLAS is halted "
+                        f"({_why}). {direction} {qty} {symbol} was not sent.")
+            return {"success": False, "reason": f"ATLAS halted: {_why}",
+                    "blocked_by": "halt", "error_type": "Halted",
+                    "determinate": True}
+        try:
+            from atlas.signal.market_open import paused as _paused_check
+            _p, _pw = _paused_check()
+        except Exception as e:
+            # UNREADABLE STATE IS NOT PERMISSION. Same rule as the cycle check.
+            _p, _pw = True, f"pause state unreadable ({e})"
+        if _p:
+            log.warning(f"ENTRY BLOCKED at the broker layer — {_pw}. "
+                        f"{direction} {qty} {symbol} was not sent.")
+            return {"success": False, "reason": f"ATLAS paused: {_pw}",
+                    "blocked_by": "paused", "error_type": "Paused",
+                    "determinate": True}
 
     # Kill switch check — non-bypassable
     ks = kill_switch_check()
@@ -322,7 +369,20 @@ def place_sl_order(
     sl_price: float,
     tag: str = "ATLAS_SL"
 ) -> dict:
-    """Place a stop-loss order after entry."""
+    """Place a stop-loss order after entry.
+
+    SECOND IMPLEMENTATION OF THE STOP, and it had the Task-1 defect that
+    exits.py was just rebuilt to remove: it sent price=sl_price, i.e. a limit
+    sitting AT the trigger, which can rest unfilled through the exact move it
+    exists to escape. It also rounded the trigger to one decimal rather than the
+    0.05 tick, and an off-tick price is rejected outright.
+
+    THE ARITHMETIC NOW COMES FROM exits.py so there is one definition of
+    "trigger, and a limit far enough past it to fill". Its only caller is
+    trade_management.place_mis_bracket_order, which nothing imports -- so this
+    was a landmine rather than a live bug, which is the only reason it survived
+    2026-10-07 unnoticed.
+    """
     kite = get_kite()
     if not kite:
         return {"success": False, "reason": "Kite not initialized"}
@@ -336,9 +396,9 @@ def place_sl_order(
             if direction == "LONG"
             else KiteConnect.TRANSACTION_TYPE_BUY
         )
-        # SL trigger price with small buffer
-        trigger_price = round(sl_price * 1.001 if direction == "SHORT"
-                             else sl_price * 0.999, 1)
+        from atlas.execution.exits import stop_trigger, stop_limit_price
+        trigger_price = stop_trigger(sl_price, direction)
+        limit_price = stop_limit_price(trigger_price, direction)
 
         order_id = kite.place_order(
             variety=KiteConnect.VARIETY_REGULAR,
@@ -349,13 +409,15 @@ def place_sl_order(
             order_type=KiteConnect.ORDER_TYPE_SL,
             product=KiteConnect.PRODUCT_MIS,
             validity=KiteConnect.VALIDITY_DAY,
-            price=sl_price,
+            price=limit_price,
             trigger_price=trigger_price,
             tag=tag,
         )
 
-        log.info(f"SL order placed: {symbol} SL @ ₹{sl_price} | Order ID: {order_id}")
-        return {"success": True, "order_id": order_id, "sl_price": sl_price}
+        log.info(f"SL order placed: {symbol} trigger ₹{trigger_price} "
+                 f"limit ₹{limit_price} | Order ID: {order_id}")
+        return {"success": True, "order_id": order_id, "sl_price": sl_price,
+                "trigger_price": trigger_price, "limit_price": limit_price}
 
     except Exception as e:
         log.error(f"SL order failed for {symbol}: {e}")

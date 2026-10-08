@@ -8,16 +8,25 @@ decisions that shape it, and each is asserted rather than described:
 
   1. FILL DETECTION IS BLOCKING. Detecting on the next 60s cycle would leave a
      minute of unprotected exposure on every entry in a system nobody watches.
-  2. A STOP THAT CANNOT BE PLACED MEANS EXIT AT MARKET, IMMEDIATELY. Not retry.
-     An unprotected position is an unbounded loss; a bad exit costs a known
-     amount once.
-  3. SHORTS GET AN SL-M, NOT A GTT. GTT is CNC-only and switching a short to CNC
-     to obtain one would add overnight gap risk to a trade designed to be flat
-     by 15:20.
+  2. A STOP THAT CANNOT BE PLACED MEANS EXIT IMMEDIATELY, ON A LIMIT PRICED
+     THROUGH THE BOOK. Not retry, and not at market. An unprotected position is
+     an unbounded loss; a bad exit costs a known amount once.
+  3. SHORTS GET AN SL (stop-loss LIMIT), NOT A GTT. GTT is CNC-only and
+     switching a short to CNC to obtain one would add overnight gap risk to a
+     trade designed to be flat by the MIS square-off.
 
-Offline: kiteconnect is not installed in development, so every broker call goes
-to an injected fake. That is also why exits.py uses the documented REST strings
-rather than SDK constants.
+     IT WAS SL-M UNTIL 2026-10-07, when Kite rejected one for having no market
+     protection and the market-order fallback was rejected by the same rule.
+     See tests/test_exit_path_rebuild.py, which guards the pair's independence,
+     and docs/LIVE_EXIT_TEST.md, which is the only thing that tests the real API.
+
+Offline: kiteconnect is not installed in development, so every broker call here
+goes to an injected fake. THAT IS THE LIMIT OF THIS FILE AND IT IS WHAT CAUSED
+THE 2026-10-07 INCIDENT -- the exit path "was only ever tested against an
+injected fake that accepted everything", and a fake that cannot refuse cannot
+catch a rejected order. The fake below now refuses SL-M and MARKET orders with
+no market_protection, like the real one does; tools/verify_exit_path.py carries
+the full adversarial stub. Neither is evidence about the wire.
 
     python3 tests/test_exits.py
 """
@@ -35,6 +44,12 @@ from atlas.execution import exits as X      # noqa: E402
 
 class FakeKite:
     """Records calls; fails whichever ones the test asks it to."""
+
+    # The fallback prices itself off a live quote, so the fake has to serve one
+    # -- and from the SAME session it places through, which is the point of
+    # get_ltp(kite=...). A fake with no quote endpoint made the emergency exit
+    # look broken when it was the fake that was incomplete.
+    LTP = 100.0
 
     def __init__(self, fail=(), gtt_two_leg=True):
         self.fail = set(fail)
@@ -60,6 +75,19 @@ class FakeKite:
     def place_order(self, **kw):
         self.calls.append(("place_order", kw))
         t = kw.get("order_type")
+        # THE REJECTION OF 2026-10-07, VERBATIM. Unconditional, not opt-in: a
+        # fake that accepts a market-type order without market protection is
+        # the specific blind spot that let the incident ship.
+        if t in ("MARKET", "SL-M") and kw.get("market_protection") is None:
+            raise RuntimeError("Market orders without market protection are not "
+                               "allowed via API. Please set market protection "
+                               "or use a Limit order.")
+        if t in ("SL", "SL-M") and not kw.get("trigger_price"):
+            raise RuntimeError(f"trigger_price is required for a {t} order")
+        if t in ("SL", "LIMIT") and not kw.get("price"):
+            raise RuntimeError(f"price is required for a {t} order")
+        if t == "SL" and "sl" in self.fail:
+            raise RuntimeError("SL refused")
         if t == "SL-M" and "slm" in self.fail:
             raise RuntimeError("SL-M refused")
         if t == "LIMIT" and "limit" in self.fail:
@@ -67,6 +95,15 @@ class FakeKite:
         if t == "MARKET" and "market" in self.fail:
             raise RuntimeError("MARKET refused")
         return str(self._id())
+
+    def ltp(self, instruments):                      # noqa: A003
+        if isinstance(instruments, str):
+            instruments = [instruments]
+        if "quote" in self.fail:
+            raise RuntimeError("quote endpoint down")
+        return {i: {"last_price": self.LTP} for i in instruments}
+
+    quote = ltp
 
     def cancel_order(self, **kw):
         self.calls.append(("cancel_order", kw))
@@ -178,13 +215,24 @@ def main() -> int:
     k = FakeKite()
     r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
                   place_target=True)
-    check("mechanism is SL-M, not GTT", r["mechanism"], "SLM")
+    check("mechanism is SL, not GTT", r["mechanism"], "SL")
     check("  ok", r["ok"], True)
     check("  target is 2R below the fill", r["target"], 90.0)
     orders = [c[1] for c in k.calls if c[0] == "place_order"]
-    check("  the stop is SL-M, not SL",
-          orders[0]["order_type"], "SL-M",
-          "an SL is a limit on trigger and can go unfilled in the move it escapes")
+    # WAS SL-M, WITH THE RATIONALE "an SL is a limit on trigger and can go
+    # unfilled in the move it escapes". That reasoning was sound and the order
+    # was still rejected outright on 2026-10-07 for having no market protection,
+    # so it protected nothing at all. An SL with the limit set well past the
+    # trigger carries the unfilled risk the old comment names; a rejected SL-M
+    # carries all of it.
+    check("  the stop is SL (stop-loss LIMIT), not SL-M",
+          orders[0]["order_type"], "SL",
+          "SL-M was rejected outright on 2026-10-07; an unfillable limit is a "
+          "risk, a rejected order is a certainty")
+    check("  the SL's limit is past its trigger, on the fillable side",
+          orders[0]["price"] > orders[0]["trigger_price"], True,
+          f"limit {orders[0]['price']} > trigger {orders[0]['trigger_price']} "
+          f"for a short's BUY stop")
     check("  product stays MIS (no overnight gap risk added)",
           all(o["product"] == "MIS" for o in orders), True)
     check("  legs are BUY to close a short",
@@ -195,10 +243,10 @@ def main() -> int:
     print()
     print("A STOP THAT WILL NOT PLACE MEANS THE POSITION LEAVES")
     print("-" * 78)
-    k = FakeKite(fail=("slm",))
+    k = FakeKite(fail=("sl",))
     r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
                   place_target=True)
-    check("SL-M refused -> protect() reports NOT ok", r["ok"], False)
+    check("SL refused -> protect() reports NOT ok", r["ok"], False)
     k = FakeKite(fail=("gtt",))
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
                   place_target=True)
@@ -211,14 +259,23 @@ def main() -> int:
           "downside is covered; the upside leg is a missed convenience")
     check("  and it says so", "target" in r["reason"].lower(), True)
 
+    # THE FALLBACK IS A LIMIT PRICED THROUGH THE BOOK, NOT A MARKET ORDER.
+    # On 2026-10-07 it was MARKET, and MARKET was refused by the same rule that
+    # had just refused the SL-M stop -- so the fallback shared a failure mode
+    # with the primary and there was effectively one layer, tried twice.
     k = FakeKite()
     r = X.emergency_exit("RELIANCE", "LONG", 45, "CNC", "stop failed", kite=k)
-    check("emergency exit is a MARKET order", r["ok"], True)
+    check("emergency exit places and reports ok", r["ok"], True)
     o = [c[1] for c in k.calls if c[0] == "place_order"][0]
-    check("  MARKET, SELL, right product",
+    check("  LIMIT, SELL, right product",
           (o["order_type"], o["transaction_type"], o["product"]),
-          ("MARKET", "SELL", "CNC"))
-    k = FakeKite(fail=("market",))
+          ("LIMIT", "SELL", "CNC"))
+    check("  priced BELOW the last trade so a sell is marketable",
+          o["price"] < FakeKite.LTP, True,
+          f"limit {o['price']} vs ltp {FakeKite.LTP}")
+    check("  it carries no trigger: nothing rests",
+          "trigger_price" in o, False)
+    k = FakeKite(fail=("limit",))
     r = X.emergency_exit("RELIANCE", "LONG", 45, "CNC", "stop failed", kite=k)
     check("exit itself fails -> ok False, and it does NOT loop", r["ok"], False)
     check("  and the reason names the state plainly",
@@ -278,19 +335,32 @@ def main() -> int:
              "product": "MIS"}
     long_ = {"symbol": "RELIANCE", "direction": "LONG", "qty": 45,
              "product": "CNC"}
-    out = X.squareoff_mis([short, long_], now_ist=datetime(2026, 9, 30, 14, 0, tzinfo=IST),
+    # THE TIMES COME FROM CONFIG, not from literals here. They were 15:15 and
+    # 15:20 in this file too, which is why nothing caught that 15:15 was three
+    # minutes past the real cutoff: the test asserted the same wrong number the
+    # code did. tests/test_exit_path_rebuild.py checks the config against the
+    # published cutoffs and against the systemd timer.
+    from atlas.config import (MIS_EXIT_HOUR as EH, MIS_EXIT_MIN as EM,
+                              MIS_EXIT_TIME as ET, MIS_BROKER_CUTOFF as CUT)
+    before = (EH * 60 + EM) - 60
+    out = X.squareoff_mis([short, long_],
+                          now_ist=datetime(2026, 9, 30, before // 60,
+                                           before % 60, tzinfo=IST),
                           kite=FakeKite())
-    check("not due before 15:15", out["due"], False)
+    check(f"not due an hour before {ET}", out["due"], False)
     check("  nothing exited", out["exited"], 0)
-    out = X.squareoff_mis([short, long_], now_ist=datetime(2026, 9, 30, 15, 15, tzinfo=IST),
+    out = X.squareoff_mis([short, long_],
+                          now_ist=datetime(2026, 9, 30, EH, EM, tzinfo=IST),
                           kite=FakeKite())
-    check("due at 15:15", out["due"], True)
+    check(f"due at {ET}", out["due"], True)
+    check("  and not flagged late", out["late"], False)
     check("  the MIS short is exited", out["exited"], 1)
     check("  the CNC long is left alone", out["failed"], 0,
           "CNC has no square-off; its GTT persists")
-    out = X.squareoff_mis([short], now_ist=datetime(2026, 9, 30, 15, 16, tzinfo=IST),
-                          kite=FakeKite(fail=("market",)))
-    good = out["failed"] == 1 and any("15:20" in a for a in out["alerts"])
+    out = X.squareoff_mis([short],
+                          now_ist=datetime(2026, 9, 30, EH, EM, tzinfo=IST),
+                          kite=FakeKite(fail=("limit",)))
+    good = out["failed"] == 1 and any(CUT in a for a in out["alerts"])
     ok &= good
     print(f"  {'a failed time exit names the broker deadline':<54}"
           f"{'ok' if good else '** SILENT **'}")
@@ -332,9 +402,9 @@ def main() -> int:
     k = FakeKite()
     r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
                   place_target=False)
-    check("short with target off is still SL-M protected", r["ok"], True)
+    check("short with target off is still SL protected", r["ok"], True)
     check("  and only the stop was sent",
-          [c[1]["order_type"] for c in k.calls if c[0] == "place_order"], ["SL-M"])
+          [c[1]["order_type"] for c in k.calls if c[0] == "place_order"], ["SL"])
     # and a stop failure in stop-only mode is still an escalation
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0,
                   kite=FakeKite(fail=("gtt",)), place_target=False)

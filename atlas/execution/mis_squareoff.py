@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-ATLAS — MIS square-off at 15:15 IST
-===================================
-Closes every MIS position before Zerodha does it at 15:20.
+ATLAS — MIS square-off, before the broker's cutoff
+=================================================
+Closes every MIS position before Zerodha's earliest cutoff. The time comes from
+atlas/config.py (MIS_EXIT_TIME, currently 15:00, twelve minutes before the 15:12
+CAS cutoff) -- never from a literal here or in the timer alone.
 
     python3 -m atlas.execution.mis_squareoff            # act
     python3 -m atlas.execution.mis_squareoff --dry-run  # report only
@@ -13,10 +15,14 @@ job here is the one that has to happen even when the thing that opened the
 position is dead. A timer that fires independently is the only arrangement where
 that holds.
 
-WHY 15:15 AND NOT 15:20. After 15:20 Zerodha squares off at market and we lose
-both the exit price and the audit trail: the fill appears with no order of ours
-behind it, so the trade's own record cannot say why it closed or at what. Five
-minutes early keeps the decision, and the reason for it, ours.
+WHY EARLY, AND WHY 15:15 WAS NOT EARLY ENOUGH. The cutoff is an ORDER cutoff as
+well as a liquidation time: after it, an MIS exit order is rejected. 15:15 sat
+three minutes past the 15:12 that applies to every F&O-segment (CAS) stock, so
+this job had never been able to close a position in that universe. On 2026-10-07
+it did not: "Intraday orders (MIS) are allowed only till 3:12 PM". Past the
+cutoff Zerodha squares off at market and we lose the exit price and the audit
+trail -- the fill appears with no order of ours behind it, so the trade's own
+record cannot say why it closed or at what. Margin keeps the decision ours.
 
 IT RUNS EVEN WHEN ENABLE_EXIT_MANAGEMENT IS FALSE. That switch governs whether
 ATLAS places stops; it has nothing to do with whether an intraday position must be
@@ -36,7 +42,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
 import requests                                            # noqa: E402
-from atlas.config import SUPABASE_URL, SUPABASE_KEY, OPEN_STATUSES  # noqa: E402
+from atlas.config import (SUPABASE_URL, SUPABASE_KEY, OPEN_STATUSES,     # noqa: E402
+                          MIS_EXIT_TIME, MIS_BROKER_CUTOFF)
 
 log = logging.getLogger("ATLAS-MIS-SQUAREOFF")
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -87,9 +94,9 @@ def run(dry: bool = False, now_ist: datetime = None) -> int:
     readable, rows = open_mis_positions()
     if not readable:
         _alert("MIS SQUAREOFF BLIND",
-               "Could not read open MIS positions before the 15:20 broker "
-               "square-off. If a short is open it will be liquidated at market "
-               "with no order of ours behind it.")
+               f"Could not read open MIS positions before the "
+               f"{MIS_BROKER_CUTOFF} broker cutoff. If a short is open it will "
+               f"be liquidated at market with no order of ours behind it.")
         return 1
     if not rows:
         log.info("no open MIS positions")
@@ -103,13 +110,17 @@ def run(dry: bool = False, now_ist: datetime = None) -> int:
 
     out = X.squareoff_mis(rows, now_ist=now)
     if not out["due"]:
-        log.info(f"not due yet at {now:%H:%M} IST "
-                 f"(exits at {X.MIS_EXIT_HOUR}:{X.MIS_EXIT_MIN:02d})")
+        log.info(f"not due yet at {now:%H:%M} IST (exits at {MIS_EXIT_TIME})")
         return 0
-    log.info(f"exited {out['exited']}, failed {out['failed']}")
+    log.info(f"exited {out['exited']}, failed {out['failed']}"
+             f"{' — RAN LATE' if out.get('late') else ''}")
     for a in out.get("alerts", []):
-        _alert("MIS SQUAREOFF FAILED", a)
-    return 1 if out["failed"] else 0
+        _alert("MIS SQUAREOFF LATE" if out.get("late") else
+               "MIS SQUAREOFF FAILED", a)
+    # A LATE RUN IS A FAILURE EVEN IF EVERY EXIT HAPPENED TO FILL. It means the
+    # timer no longer matches the cutoff, which is a standing defect, and a
+    # zero exit status here would retire the only signal of it.
+    return 1 if (out["failed"] or out.get("late")) else 0
 
 
 def _alert(kind: str, text: str) -> None:

@@ -44,6 +44,9 @@ SUITES = [
     ("entry ordering", [sys.executable, "tests/test_entry_ordering.py"]),
     ("reconcile",      [sys.executable, "tests/test_reconcile.py"]),
     ("exits",          [sys.executable, "tests/test_exits.py"]),
+    # The 2026-10-07 rebuild: order types, fallback independence, square-off
+    # timing, the halt guards, and the two operator-facing strings.
+    ("exit path rebuild", [sys.executable, "tests/test_exit_path_rebuild.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),

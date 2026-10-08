@@ -18,9 +18,10 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY,
     ZERODHA_API_KEY, ZERODHA_API_SECRET, ZERODHA_USER_ID,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,
+    MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE,   # noqa: F401 (see _rules_line)
 )
 from atlas.reporting.telegram import send
+from atlas.reporting.directives import _rules_line
 from atlas.execution.zerodha_login import (
     get_stored_token, verify_token, complete_login, login
 )
@@ -117,10 +118,16 @@ def run():
             f"✅ <b>ATLAS ONLINE</b>\n"
             f"Zerodha connected · Token valid\n"
             f"Time: {now}\n"
-            f"Risk/trade ₹{MAX_RISK_PER_TRADE:,.0f} · "
-            f"Max notional ₹{MAX_NOTIONAL_PER_TRADE:,.0f}\n"
-            f"Entries bounded by live broker funds · "
-            f"funds read live from the broker\n"
+            # ONE RENDERER FOR THE SIZING RULE, shared with /rules and the
+            # report. This line used to hardcode the risk-budget pair, so when
+            # sizing moved to fixed notional on 2026-10-06 the 08:30 message
+            # went on saying "Risk/trade Rs3,000 - Max notional Rs1,00,000"
+            # while the sizer used Rs10,000 notional and no risk budget at all.
+            # Both numbers were ten- and tenfold wrong in opposite directions,
+            # in the first message of the trading day. Rendering from the same
+            # function the sizer's own mode selects means a future mode change
+            # cannot leave this behind.
+            f"{_rules_line()}\n"
             f"Market opens in 45 minutes."
         )
         return True

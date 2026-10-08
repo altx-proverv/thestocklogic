@@ -6,7 +6,7 @@ Each of these is a bug this codebase has already had, asserted against the
 market-hours engine rather than trusted to review.
 
     a cycle never treats "cannot read" as "nothing there"
-    /pause stops a RUNNING loop, not just the next start
+    /pause stops ORDER PLACEMENT in a RUNNING loop -- not observation
     the window is IST on a UTC box
     shadow does not re-log the same symbol every cycle
     a failure alerts once, not 360 times
@@ -34,6 +34,17 @@ logging.basicConfig(level=logging.CRITICAL)
 
 from atlas.signal import market_open as mo      # noqa: E402
 from atlas.risk import breaker                  # noqa: E402
+
+
+class Calls(list):
+    """The calls enter_trade received, with the decision log attached.
+
+    ONE RETURN VALUE CARRYING BOTH, because "was it evaluated" and "what was
+    recorded" are the two halves of the watch-only contract and a test that can
+    only see one of them cannot tell a halted-and-observing loop from a
+    halted-and-blind one.
+    """
+    logged = ()
 
 # stub() replaces mo.paused, so hold the real one to test it directly.
 REAL_PAUSED = mo.paused
@@ -64,17 +75,30 @@ def fresh_state():
 
 def stub(paused=(False, "NORMAL"), committed=(True, set()),
          quotes=None, entered=None):
+    """-> the list of (symbol, dry_run) pairs enter_trade was called with.
+
+    dry_run IS PART OF THE RECORD. "was it evaluated" and "could it have placed
+    an order" are different questions, and before 2026-10-08 this stub could
+    only answer the first -- which is why a paused loop that evaluated nothing
+    looked correct.
+    """
     mo.paused = lambda: paused
     mo.load_zone_map = lambda state: True
     mo.committed_today = lambda: committed
     mo.fetch_quotes = lambda syms: ({"TCS": 100.0} if quotes is None else quotes)
-    mo.log_decision = lambda sig, res: None
-    calls = []
+    mo.push_live_zones = lambda st, rows, keys: {"rows": len(rows)}
+    logged = []
+    calls = Calls()
+    mo.log_decision = lambda sig, res: logged.append(
+        (sig.get("symbol"), res.get("status")))
 
-    def _enter(sig):
-        calls.append(sig["symbol"])
+    def _enter(sig, dry_run=False):
+        calls.append((sig["symbol"], dry_run))
+        if dry_run:
+            return {"status": "WOULD_ENTER", "reason": "all gates passed"}
         return entered or {"status": "SHADOW_INTENT", "reason": ""}
     mo.enter_trade = _enter
+    calls.logged = logged
     return calls
 
 
@@ -108,12 +132,45 @@ def main() -> int:
     print()
     print("/PAUSE STOPS A RUNNING LOOP")
     print("-" * 78)
+    # THIS ASSERTION IS INVERTED FROM WHAT IT WAS, deliberately. It used to read
+    # "paused mid-session -> nothing evaluated", and it passed: cycle() returned
+    # on the pause check before the zone map was built. That is exactly the
+    # 2026-10-08 failure -- ATLAS ran 360 cycles while halted and produced no
+    # batch, no zones and no entry_log rows, so the one system whose job is to
+    # know what the market did went blind for a session. A pause must stop ORDER
+    # PLACEMENT, not observation.
     s = fresh_state()
     calls = stub(paused=(True, "operator PAUSED"))
     r = mo.cycle(s)
-    good = bool(r.get("paused")) and not calls
+    evaluated = [c for c in calls]
+    good = (bool(r.get("observe_only"))
+            and len(evaluated) == 1
+            and evaluated[0][1] is True          # dry_run
+            and len(calls.logged) == 1
+            and str(calls.logged[0][1]).startswith("WATCH_ONLY"))
     ok &= good
-    print(f"  {'paused mid-session -> nothing evaluated':<46}"
+    print(f"  {'paused -> evaluated, logged, nothing placed':<46}"
+          f"{'ok' if good else '** ' + str(evaluated) + str(calls.logged) + ' **'}")
+    print(f"  {'  and the entry call was dry_run=True':<46}"
+          f"{'ok' if evaluated and evaluated[0][1] is True else '** LIVE CALL **'}")
+    print(f"  {'  and the decision says WATCH_ONLY':<46}"
+          f"{'ok' if calls.logged and str(calls.logged[0][1]).startswith('WATCH_ONLY') else '** ' + str(calls.logged) + ' **'}")
+
+    # AND THE LIVE PATH IS UNCHANGED: not paused means a real call.
+    s = fresh_state()
+    calls = stub(paused=(False, "NORMAL"))
+    r = mo.cycle(s)
+    good2 = len(calls) == 1 and calls[0][1] is False
+    ok &= good2
+    print(f"  {'not paused -> the entry call is live':<46}"
+          f"{'ok' if good2 else '** ' + str(list(calls)) + ' **'}")
+
+    s = fresh_state()
+    calls = stub(paused=(True, "operator PAUSED"))
+    r = mo.cycle(s)
+    good = bool(r.get("observe_only"))
+    ok &= good
+    print(f"  {'the cycle reports why it is observing':<46}"
           f"{'ok' if good else '** KEPT TRADING **'}")
 
     # The two below exercise the REAL paused(), which stub() replaces -- keep a
@@ -201,7 +258,7 @@ def main() -> int:
         s.zone_map = {("TCS", "LONG"): row}
         calls = stub(committed=(True, set()))
         mo.cycle(s)
-        got = calls == ["TCS"]
+        got = list(calls) == [("TCS", False)]
         good = got == want_entered
         ok &= good
         label = "absent" if kind == "__absent__" else repr(kind)
@@ -211,7 +268,7 @@ def main() -> int:
     s = fresh_state()
     calls = stub(committed=(True, set()))
     mo.cycle(s)
-    good = calls == ["TCS"]
+    good = list(calls) == [("TCS", False)]
     ok &= good
     print(f"  {'not yet shadowed -> evaluated once':<46}"
           f"{'ok' if good else '** ' + str(calls) + ' **'}")

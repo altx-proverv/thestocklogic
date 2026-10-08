@@ -482,7 +482,13 @@ def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float,
 # ENTRY
 # ─────────────────────────────────────────────────────────────────────
 
-def enter_trade(signal: dict) -> dict:
+def enter_trade(signal: dict, dry_run: bool = False) -> dict:
+    """Evaluate a candidate and, unless dry_run, enter it.
+
+    dry_run=False is the only mode that can place an order. It is the DEFAULT,
+    so a caller that forgets the argument gets the live path and the guards
+    below -- rather than silently evaluating and reporting nothing happened.
+    """
     symbol     = signal.get("symbol", "")
     direction  = signal.get("direction", "LONG").upper()
     entry_ref  = float(signal.get("entry_ref", signal.get("entry", 0)) or 0)
@@ -501,8 +507,16 @@ def enter_trade(signal: dict) -> dict:
     # already fails closed. Reading it twice would double the request count for
     # no extra safety.
     halted, why = breaker.is_halted()
-    if halted:
+    if halted and not dry_run:
         return {"status": "BLOCKED_HALTED", "reason": why}
+    if halted:
+        # dry_run DELIBERATELY CONTINUES PAST THE HALT. Being halted is the
+        # reason this evaluation is a dry run at all, so returning here would
+        # make a halted ATLAS blind in exactly the way it was blind for 360
+        # cycles on 8 Oct: it would learn nothing about what it would have done.
+        # Nothing below can place an order -- dry_run returns before the write
+        # phase, and place_order() refuses an ENTRY while halted regardless.
+        log.info(f"{symbol}: halted ({why}) — evaluating anyway, placing nothing")
 
     # GATE 0 -- structural stop mandatory
     if stop_price <= 0:
@@ -741,6 +755,15 @@ def enter_trade(signal: dict) -> dict:
 
     intent = _build_intent(signal, symbol, direction, ltp, sizing, ctx)
 
+    if dry_run:
+        # EVERY GATE HAS RUN. The intent is built, which means sizing, the
+        # quote, the margin and the kill switch all passed. We stop one step
+        # before the reservation, so nothing is written to atlas_trades and
+        # nothing reaches the broker -- the caller records the decision in
+        # atlas_entry_log, which is the record we actually want from a halted
+        # cycle.
+        return {"status": "WOULD_ENTER", **intent}
+
     if not LIVE_TRADING_ENABLED:
         log.info(f"[SHADOW] WOULD ENTER {direction} {sizing['qty']} {symbol} @ Rs{ltp:.1f} "
                  f"| stop Rs{stop_price:.1f} ({sizing['stop_pct']}%) "
@@ -858,35 +881,41 @@ def enter_trade(signal: dict) -> dict:
     intent["fill_price"] = round(avg_price, 2)
     intent["filled_qty"] = filled_qty
 
-    prot = X.protect(symbol=symbol, direction=direction, qty=filled_qty,
-                     product=sizing["product"], fill_price=avg_price,
-                     stop_price=sizing["stop_price"])
+    # THE STOP AND ITS FALLBACK AS ONE CALL. This used to be protect() here and
+    # an "if not ok: emergency_exit()" below, which made the independence of the
+    # two a convention of this call site. exits.protect_or_exit() owns the pair,
+    # asserts they share no failure mode before either order is built, and cannot
+    # be called with a primary and fallback that do.
+    pe = X.protect_or_exit(symbol=symbol, direction=direction, qty=filled_qty,
+                           product=sizing["product"], fill_price=avg_price,
+                           stop_price=sizing["stop_price"])
+    prot = pe["prot"]
     intent["exit_legs"] = prot.get("legs") or {}
     intent["exit_mechanism"] = prot.get("mechanism", "")
     intent["target_price"] = prot.get("target")
 
-    if not prot.get("ok"):
-        # THE STOP COULD NOT BE PLACED. Exit at market, now. An unprotected open
-        # position is an unbounded loss in a system nobody is watching; the bad
-        # exit costs a known amount once. Not a retry -- retrying is how a minute
-        # becomes an afternoon.
-        ex = X.emergency_exit(symbol, direction, filled_qty, sizing["product"],
-                              why=f"stop placement failed: {prot.get('reason')}")
-        if ex.get("ok"):
-            _alert("EXITED UNPROTECTED POSITION",
-                   f"{symbol} {direction} {filled_qty}: stop could not be placed "
-                   f"({prot.get('reason')}), exited at market.")
-            return {"status": "EXITED_NO_STOP", "trade_id": row_id,
-                    "reason": prot.get("reason"), **intent}
-        # The exit failed too. Open, unprotected, and the broker is refusing
-        # orders: halt so nothing else is opened into the same condition.
+    if pe["exited"]:
+        _alert("EXITED UNPROTECTED POSITION",
+               f"{symbol} {direction} {filled_qty}: stop could not be placed "
+               f"({prot.get('reason')}), closed on a limit priced through the "
+               f"book — a different order family from the stop that failed.")
+        return {"status": "EXITED_NO_STOP", "trade_id": row_id,
+                "reason": prot.get("reason"), **intent}
+
+    if pe["unprotected"]:
+        # Both failed. Open, unprotected, and the broker is refusing orders:
+        # halt so nothing else is opened into the same condition. Worth noting
+        # that these two now fail for INDEPENDENT reasons, so reaching here is
+        # evidence of a broker-wide refusal rather than one bad order type --
+        # which is the distinction 2026-10-07 could not make.
+        ex = pe["exit"] or {}
         breaker.halt("OPEN_UNPROTECTED",
                      f"{symbol}: open with no stop — placement failed "
-                     f"({prot.get('reason')}) AND the market exit failed "
-                     f"({ex.get('reason')})")
+                     f"({prot.get('reason')}) AND the fallback limit exit "
+                     f"failed ({ex.get('reason')})")
         _alert("OPEN AND UNPROTECTED",
                f"{symbol} {direction} {filled_qty} is OPEN with no stop and the "
-               f"market exit failed. {ex.get('reason')}. Entries halted.")
+               f"fallback exit failed too. {ex.get('reason')}. Entries halted.")
         return {"status": "OPEN_UNPROTECTED", "trade_id": row_id,
                 "reason": ex.get("reason"), **intent}
 
@@ -1049,9 +1078,10 @@ def _reserve_intent(intent: dict) -> tuple:
         "sector": intent.get("sector", ""),
         "zone_source": intent.get("zone_source", ""),
         # LOAD-BEARING FOR EXITS, and it was never written. exits.protect()
-        # dispatches on product -- GTT legs for a CNC long, an SL-M regular order
-        # for an MIS short -- and squareoff_mis() filters on it for the 15:15
-        # timer. A row without it is a position ATLAS cannot decide how to close.
+        # dispatches on product -- GTT legs for a CNC long, an SL (stop-loss
+        # LIMIT) regular order for an MIS short -- and squareoff_mis() filters on
+        # it for the MIS_EXIT_TIME timer. A row without it is a position ATLAS
+        # cannot decide how to close.
         #
         # Sent conditionally: the column arrives with
         # PENDING_atlas_trades_product.sql, and until that is applied PostgREST

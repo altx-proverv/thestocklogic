@@ -162,15 +162,22 @@ def main() -> int:
     sq_s = (DEPLOY / "atlas-mis-squareoff.service").read_text()
     sqt = parse(DEPLOY / "atlas-mis-squareoff.timer")
     sqs = parse(DEPLOY / "atlas-mis-squareoff.service")
+    # THE TIME IS READ FROM CONFIG, NOT WRITTEN HERE. This check used to assert
+    # the literal "15:15", and it passed every run while the timer fired three
+    # minutes AFTER the 15:12 cutoff that applies to F&O-segment stocks -- so
+    # the square-off had never been able to work and the suite agreed with it.
+    # A test that restates the code's constant cannot catch a wrong constant.
+    from atlas.config import MIS_EXIT_TIME, MIS_BROKER_CUTOFF   # noqa: E402
     sq_checks = [
-        ("timer fires at 15:15 IST",
-         any(k == "OnCalendar" and "15:15" in v and "Asia/Kolkata" in v
+        (f"timer fires at MIS_EXIT_TIME ({MIS_EXIT_TIME} IST)",
+         any(k == "OnCalendar" and MIS_EXIT_TIME in v and "Asia/Kolkata" in v
              for _, k, v, _ in sqt)),
-        ("  ahead of the broker's 15:20, and says so", "15:20" in sq_t),
-        # Persistent=false is right HERE and nowhere else. A missed 15:15 cannot be
-        # made up: by the time the box is back the exchange has already squared the
-        # position off, so running late would place a closing order for a position
-        # that no longer exists -- a new trade, not a square-off.
+        (f"  ahead of the broker's {MIS_BROKER_CUTOFF}, and says so",
+         MIS_BROKER_CUTOFF in sq_t),
+        # Persistent=false is right HERE and nowhere else. A missed square-off
+        # cannot be made up: past the cutoff an MIS order is REJECTED, so running
+        # late would place an order that cannot fill for a position the broker is
+        # already liquidating -- a new trade at best, not a square-off.
         ("Persistent is FALSE, unlike every other ATLAS timer",
          any(k == "Persistent" and v.lower() == "false" for _, k, v, _ in sqt)),
         ("  and the reason is written down, not just the value",

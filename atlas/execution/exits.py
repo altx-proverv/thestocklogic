@@ -65,8 +65,136 @@ TARGET_R_MULTIPLE = 2.0     # the 2R target
 # level is passed, rather than exactly on it.
 STOP_TRIGGER_BUFFER = 0.001
 
+# ══════════════════════════════════════════════════════════════════
+# ORDER TYPES THE BROKER ACTUALLY ACCEPTS
+# ══════════════════════════════════════════════════════════════════
+#
+# Verified against the Kite Connect v3 order documentation and Zerodha support on
+# 2026-10-09, not from memory:
+#
+#   SL-M IS BLOCKED ON BSE for equity, equity derivatives, currency and commodity
+#   -- the exchange discontinued it to stop erroneous orders filling far from the
+#   market -- and it is also blocked for index options. Zerodha's own guidance is
+#   to use a stoploss-LIMIT (SL) with the limit set significantly past the trigger,
+#   which gives market-like execution while protecting against a freak fill.
+#
+#   market_protection applies to MARKET and SL-M ONLY. It is a decimal percent,
+#   0 < p <= 100, and -1 selects the broker's own guideline. It is NOT a parameter
+#   of SL or LIMIT, so the SL stop below must not send it.
+#
+# WHAT WENT WRONG ON 2026-10-07. BHARTIARTL SHORT 5 @ 1833 MIS at 14:12:09. The
+# SL-M stop was rejected -- "Market orders without market protection are not
+# allowed via API" -- and the emergency exit was rejected for the SAME reason,
+# because it was a MARKET order and MARKET is the same family SL-M belongs to for
+# this check. Two layers of protection were one layer twice. The position sat
+# unprotected for 68 minutes until the broker's own cutoff closed it.
+
+# How far past the trigger the stop's limit price sits. The limit must be far
+# enough through the book to fill in the move the stop exists to escape, and close
+# enough not to be rejected by the exchange's Limit Price Protection band. 0.5%
+# past a trigger that is itself 0.1% inside the stop.
+STOP_LIMIT_SLIP_PCT = 0.005
+
+# How far through the book an emergency exit prices itself. Wider than the stop's,
+# because this runs when the position is ALREADY unprotected and a missed fill is
+# the failure being escaped.
+EXIT_LIMIT_SLIP_PCT = 0.010
+
 TERMINAL_OK = ("COMPLETE",)
 TERMINAL_BAD = ("REJECTED", "CANCELLED")
+
+
+# ══════════════════════════════════════════════════════════════════
+# THE FALLBACK MUST NOT SHARE A FAILURE MODE
+# ══════════════════════════════════════════════════════════════════
+#
+# This is the lesson from 2026-10-07, and it is not about order types. The stop
+# failed, the fallback was asked to save the position, and the fallback failed for
+# THE SAME REASON -- so there was never a second layer. Two mechanisms are only
+# two if they can fail independently.
+#
+# Each mechanism declares what it sends. assert_independent() refuses a
+# primary/fallback pair that shares an order_type or a trigger dependency, and it
+# is called at module import, so a future change that quietly makes the fallback
+# the same shape as the primary breaks the import rather than the position.
+ORDER_SPECS = {
+    # resting at the exchange, fires on a trigger, limit-priced
+    "SL":           {"order_type": "SL",     "needs_trigger": True,
+                     "market_protection": False, "immediate": False},
+    # immediate, priced through the book, no trigger and no market protection
+    "LIMIT_THROUGH": {"order_type": "LIMIT", "needs_trigger": False,
+                      "market_protection": False, "immediate": True},
+    # kept only so the independence check can name it as the thing NOT to pair
+    "SLM":          {"order_type": "SL-M",   "needs_trigger": True,
+                     "market_protection": True, "immediate": False},
+    "MARKET":       {"order_type": "MARKET", "needs_trigger": False,
+                     "market_protection": True, "immediate": True},
+}
+
+# What protects a position, and what is used when that fails.
+PRIMARY_STOP = "SL"
+FALLBACK_EXIT = "LIMIT_THROUGH"
+
+
+def assert_independent(primary: str = PRIMARY_STOP,
+                       fallback: str = FALLBACK_EXIT) -> None:
+    """Raise unless the two can fail for different reasons.
+
+    THREE WAYS THEY MUST DIFFER, each of which was collapsed on 2026-10-07:
+
+      order_type          SL-M and MARKET are both market-type orders and the
+                          market-protection rule rejected both. Sharing the type
+                          is sharing the rejection.
+      trigger dependency  a resting trigger can be rejected, unaccepted or simply
+                          not fire. A fallback that also needs one inherits that.
+      immediacy           a fallback that rests is not a fallback: the position is
+                          already unprotected when it is called.
+    """
+    a, b = ORDER_SPECS[primary], ORDER_SPECS[fallback]
+    if a["order_type"] == b["order_type"]:
+        raise AssertionError(
+            f"exit fallback shares an order_type with the primary "
+            f"({a['order_type']}). On 2026-10-07 SL-M and MARKET both failed the "
+            f"market-protection rule and the position sat unprotected for 68 "
+            f"minutes. The fallback must fail for a different reason.")
+    if a["needs_trigger"] and b["needs_trigger"]:
+        raise AssertionError(
+            f"both {primary} and {fallback} depend on a trigger price; a "
+            f"fallback must not inherit the primary's trigger failure mode")
+    if a["market_protection"] and b["market_protection"]:
+        raise AssertionError(
+            f"both {primary} and {fallback} are market-protection orders — "
+            f"exactly the shared rejection of 2026-10-07")
+    if not b["immediate"]:
+        raise AssertionError(
+            f"{fallback} rests rather than executing; a fallback is called when "
+            f"the position is ALREADY unprotected and must not wait")
+
+
+assert_independent()      # at import: a bad pair breaks the module, not a trade
+
+
+def stop_limit_price(trigger: float, direction: str) -> float:
+    """The SL's limit price, set through the trigger so it fills like a market order.
+
+    DIRECTION IS THE SIDE THAT CLOSES, not the side that opened. A long is closed
+    by a SELL, so its limit sits BELOW the trigger -- selling lower guarantees the
+    fill. A short is closed by a BUY, so its limit sits ABOVE. Getting this
+    backwards produces an order that rests behind the market and never fills,
+    which is the unprotected position again wearing a limit price.
+    """
+    t = float(trigger)
+    if str(direction).upper() == "LONG":
+        return round_tick(t * (1.0 - STOP_LIMIT_SLIP_PCT))
+    return round_tick(t * (1.0 + STOP_LIMIT_SLIP_PCT))
+
+
+def exit_limit_price(ltp: float, direction: str) -> float:
+    """An emergency exit's limit, priced through the book from the last trade."""
+    p = float(ltp)
+    if str(direction).upper() == "LONG":
+        return round_tick(p * (1.0 - EXIT_LIMIT_SLIP_PCT))
+    return round_tick(p * (1.0 + EXIT_LIMIT_SLIP_PCT))
 
 
 def round_tick(p: float) -> float:
@@ -169,7 +297,7 @@ def protect(symbol: str, direction: str, qty: int, product: str,
     """
     Place the stop and the 2R target for a filled position.
 
-    -> {"ok": bool, "legs": {...}, "mechanism": "GTT_OCO"|"SLM", "reason": str}
+    -> {"ok": bool, "legs": {...}, "mechanism": "GTT_OCO"|"SL", "reason": str}
 
     ok is False if the STOP could not be placed, whatever happened to the target:
     a position with a target and no stop has unbounded downside, which is the
@@ -186,7 +314,7 @@ def protect(symbol: str, direction: str, qty: int, product: str,
     tgt = target_price(fill_price, stop_price, d) if place_target else None
     if str(product).upper() == "CNC":
         return _protect_cnc_gtt(symbol, d, qty, fill_price, stop_price, tgt, kite)
-    return _protect_mis_slm(symbol, d, qty, fill_price, stop_price, tgt, kite)
+    return _protect_mis_sl(symbol, d, qty, fill_price, stop_price, tgt, kite)
 
 
 def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
@@ -273,17 +401,29 @@ def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
     return out
 
 
-def _protect_mis_slm(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
+def _protect_mis_sl(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
     """
-    A MIS short: SL-M stop plus a LIMIT target, both DAY validity.
+    A MIS short: SL stop (limit on trigger) plus a LIMIT target, both DAY validity.
 
-    SL-M, not SL. An SL is a limit order on trigger and can go unfilled in exactly
-    the fast move it exists to escape; SL-M becomes a market order and gets out.
-    Slippage on a stop is a cost, an unfilled stop is an open-ended loss.
+    WAS SL-M, AND THE OLD REASONING IS KEPT HERE BECAUSE IT WAS NOT WRONG, ONLY
+    UNAVAILABLE. The argument for SL-M was that an SL is a limit order on trigger
+    and can go unfilled in exactly the fast move it exists to escape. That is true.
+    But BSE has discontinued SL-M across equity, equity derivatives, currency and
+    commodity, Zerodha blocks it for index options, and on 2026-10-07 this exact
+    call was rejected -- so the choice was never between SL-M and SL, it was
+    between SL and nothing.
+
+    THE UNFILLED-LIMIT RISK IS ANSWERED BY THE LIMIT PRICE, not by the order type.
+    stop_limit_price() sets the limit 0.5% THROUGH the trigger on the closing side,
+    which is Zerodha's own published guidance for making an SL behave like an
+    SL-M. A fill 0.5% worse than the trigger is a cost; the band is there so the
+    order is not rejected by Limit Price Protection.
+
+    NO market_protection HERE. It is a parameter of MARKET and SL-M only. Sending
+    it on an SL is sending a field the order type does not take.
 
     DAY validity is sufficient here and only here: the position cannot outlive the
-    session, because squareoff_mis() closes it at 15:15 and the exchange would do
-    it at 15:20 regardless.
+    session, because squareoff_mis() closes it before the broker's cutoff.
     """
     if kite is None:
         from atlas.execution.broker import get_kite
@@ -293,22 +433,25 @@ def _protect_mis_slm(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
 
     side = exit_side(direction)
     trig = stop_trigger(stop, direction)
-    out = {"mechanism": "SLM", "legs": {}, "stop": round_tick(stop),
+    lim = stop_limit_price(trig, direction)
+    out = {"mechanism": "SL", "legs": {}, "stop": round_tick(stop),
+           "trigger": trig, "stop_limit": lim,
            "target": round_tick(tgt) if tgt is not None else None}
     try:
         sid = kite.place_order(variety="regular", exchange="NSE",
                                tradingsymbol=symbol, transaction_type=side,
                                quantity=int(qty), product="MIS",
-                               order_type="SL-M", trigger_price=trig,
+                               order_type=ORDER_SPECS[PRIMARY_STOP]["order_type"],
+                               trigger_price=trig, price=lim,
                                validity="DAY", tag="ATLAS_SL")
         out["legs"]["stop_order_id"] = sid
     except Exception as e:
         out["ok"] = False
-        out["reason"] = f"SL-M failed: {e}"
+        out["reason"] = f"SL stop failed: {e}"
         return out
     if tgt is None:
         out["ok"] = True
-        out["reason"] = "SL-M stop placed; no target (held and trailed)"
+        out["reason"] = "SL stop placed; no target (held and trailed)"
         return out
     try:
         tid = kite.place_order(variety="regular", exchange="NSE",
@@ -318,11 +461,11 @@ def _protect_mis_slm(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
                                validity="DAY", tag="ATLAS_TGT")
         out["legs"]["target_order_id"] = tid
     except Exception as e:
-        out["reason"] = f"SL-M placed, target LIMIT failed: {e}"
+        out["reason"] = f"SL stop placed, target LIMIT failed: {e}"
         out["ok"] = True
         return out
     out["ok"] = True
-    out["reason"] = "SL-M stop and LIMIT target placed"
+    out["reason"] = "SL stop and LIMIT target placed"
     return out
 
 
@@ -330,10 +473,82 @@ def _protect_mis_slm(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
 # THE FAILURE PATH
 # ══════════════════════════════════════════════════════════════════
 
+def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
+                    fill_price: float, stop_price: float, kite=None) -> dict:
+    """The primary and its fallback, as ONE call. -> see keys below.
+
+    WHY THIS EXISTS AS A FUNCTION. The relationship between the stop and the
+    emergency exit IS the lesson of 2026-10-07: the fallback has to fail for
+    reasons the primary cannot. When that relationship is spelled out at the call
+    site -- "if not prot.ok: emergency_exit(...)" in atlas_entry -- it is a
+    convention, and a convention is exactly what a future edit breaks silently.
+    Here it is a unit: one place that chooses the primary, one place that chooses
+    the fallback, one assert_independent() standing between them, and one thing
+    to point a test at.
+
+    THE ORDER OF THESE THREE LINES IS THE WHOLE DESIGN:
+      1. assert the two mechanisms are independent     -- before anything is sent
+      2. try the primary (a resting, triggered SL)
+      3. on failure, try the fallback (an immediate, untriggered LIMIT)
+    Step 1 cannot be skipped by a caller, because the caller no longer chooses the
+    pair.
+
+    -> {"protected": bool,   the stop is resting -- nothing further is needed
+        "exited":    bool,   no stop, but the position is closed
+        "unprotected": bool, open with no stop AND no exit -- operator incident
+        "prot": {...},       what protect() returned
+        "exit": {...}|None,  what emergency_exit() returned, if it was reached
+        "mechanism": str, "reason": str}
+
+    It does not alert and does not halt. Those are the caller's, because only the
+    caller knows the trade id and what to write to the ledger.
+    """
+    # BEFORE EITHER ORDER IS BUILT. A pair that shares a failure mode must break
+    # here, where no position exists yet, rather than at the moment the fallback
+    # is needed -- which is the one moment there is no time to notice.
+    assert_independent()
+
+    prot = protect(symbol=symbol, direction=direction, qty=qty, product=product,
+                   fill_price=fill_price, stop_price=stop_price, kite=kite)
+    if prot.get("ok"):
+        return {"protected": True, "exited": False, "unprotected": False,
+                "prot": prot, "exit": None,
+                "mechanism": prot.get("mechanism", ""),
+                "reason": ""}
+
+    # THE STOP COULD NOT BE PLACED. The fallback runs now, not after a retry: an
+    # unprotected open position is an unbounded loss in a system nobody is
+    # watching, and the bad exit costs a known amount once.
+    #
+    # IT IS A DIFFERENT KIND OF ORDER, NOT THE SAME ORDER AGAIN. On 2026-10-07
+    # the stop was SL-M and the fallback was MARKET: both market-type, both
+    # refused by the same rule, for the same reason, seconds apart -- two layers
+    # of protection that were one layer twice. What follows shares none of the
+    # primary's three dependencies: no trigger price, no resting order, and no
+    # market-protection requirement.
+    log.error(f"{symbol}: stop placement FAILED ({prot.get('reason')}) — "
+              f"falling back to an immediate "
+              f"{ORDER_SPECS[FALLBACK_EXIT]['order_type']} exit, which shares "
+              f"no failure mode with the "
+              f"{ORDER_SPECS[PRIMARY_STOP]['order_type']} that just failed")
+    ex = emergency_exit(symbol, direction, qty, product,
+                        why=f"stop placement failed: {prot.get('reason')}",
+                        kite=kite)
+    if ex.get("ok"):
+        return {"protected": False, "exited": True, "unprotected": False,
+                "prot": prot, "exit": ex,
+                "mechanism": f"{prot.get('mechanism', '?')}->FALLBACK_EXIT",
+                "reason": prot.get("reason", "")}
+    return {"protected": False, "exited": False, "unprotected": True,
+            "prot": prot, "exit": ex, "mechanism": "NONE",
+            "reason": (f"stop failed ({prot.get('reason')}) AND the fallback "
+                       f"exit failed ({ex.get('reason')})")}
+
+
 def emergency_exit(symbol: str, direction: str, qty: int, product: str,
                    why: str, kite=None) -> dict:
     """
-    Close at MARKET because the position could not be protected.
+    Close with a marketable LIMIT because the position could not be protected.
 
     DELIBERATELY NOT A RETRY. An unprotected open position is worse than a bad
     exit: the exit costs a known amount once, the unprotected position is an
@@ -351,17 +566,51 @@ def emergency_exit(symbol: str, direction: str, qty: int, product: str,
     if kite is None:
         return {"ok": False, "reason": "kite unavailable — POSITION IS OPEN "
                                        "AND UNPROTECTED"}
+    # ── WHAT THIS DOES NOT SHARE WITH THE PRIMARY ───────────────────────
+    # The stop is an SL: a RESTING order, with a TRIGGER price, limit-priced.
+    # This is an immediate LIMIT: no trigger, nothing resting, and not a
+    # market-type order, so the market-protection rule that rejected both legs on
+    # 2026-10-07 cannot apply to it. assert_independent() enforces all three
+    # differences at import, so a future edit that turns this back into a MARKET
+    # order -- or gives it a trigger -- breaks the module instead of the position.
+    #
+    # It is PRICED THROUGH THE BOOK rather than at the last trade: a limit AT the
+    # LTP is a resting order in disguise. 1% through, wider than the stop's 0.5%,
+    # because this runs when the position is already unprotected and a missed fill
+    # is the thing being escaped.
+    assert_independent()
     side = exit_side(direction)
-    log.error(f"{symbol}: EMERGENCY EXIT at market ({why})")
+    try:
+        from atlas.execution.broker import get_ltp
+        # THE SAME SESSION THAT WILL PLACE THE ORDER. The limit price and the
+        # order must come from one broker session or the exit can be priced by a
+        # session that is not the one placing it.
+        ltp = float(get_ltp(symbol, kite=kite) or 0)
+    except Exception as e:
+        ltp = 0.0
+        log.error(f"{symbol}: LTP unreadable for the emergency exit ({e})")
+    if ltp <= 0:
+        # NO PRICE, NO LIMIT ORDER. Falling back to MARKET here would reinstate
+        # the shared failure mode this function exists to remove, so it reports
+        # the position as unprotected and lets the caller alert a human.
+        log.critical(f"{symbol}: EMERGENCY EXIT CANNOT PRICE ITSELF — no LTP. "
+                     f"POSITION IS OPEN AND UNPROTECTED")
+        return {"ok": False, "order_id": None,
+                "reason": "emergency exit could not read an LTP to price a limit "
+                          "order — POSITION IS OPEN AND UNPROTECTED"}
+    lim = exit_limit_price(ltp, direction)
+    log.error(f"{symbol}: EMERGENCY EXIT — {side} {qty} LIMIT {lim} "
+              f"(ltp {ltp}, {EXIT_LIMIT_SLIP_PCT*100:.1f}% through) ({why})")
     try:
         oid = kite.place_order(variety="regular", exchange="NSE",
                                tradingsymbol=symbol, transaction_type=side,
                                quantity=int(qty),
                                product=str(product).upper(),
-                               order_type="MARKET", validity="DAY",
+                               order_type=ORDER_SPECS[FALLBACK_EXIT]["order_type"],
+                               price=lim, validity="DAY",
                                tag="ATLAS_EMERGENCY")
-        return {"ok": True, "order_id": oid,
-                "reason": f"exited at market: {why}"}
+        return {"ok": True, "order_id": oid, "limit_price": lim, "ltp": ltp,
+                "reason": f"exited at LIMIT {lim} through the book: {why}"}
     except Exception as e:
         log.critical(f"{symbol}: EMERGENCY EXIT FAILED ({e}) — POSITION IS OPEN "
                      f"AND UNPROTECTED")
@@ -511,30 +760,56 @@ def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
 # MIS TIME EXIT
 # ══════════════════════════════════════════════════════════════════
 
-MIS_EXIT_HOUR, MIS_EXIT_MIN = 15, 15     # ours
-MIS_BROKER_SQUAREOFF = "15:20"           # Zerodha's, at market
+# FROM CONFIG, NOT FROM HERE. These were 15, 15 and "15:20" -- a time three
+# minutes PAST the broker's real 15:12 cutoff, and a backstop time that had moved
+# twice without this line hearing about it. The segment cutoffs, the margin and
+# the resulting exit time now live in atlas/config.py with the date they were
+# verified, so there is one place to change and one place to read.
+from atlas.config import (MIS_EXIT_HOUR, MIS_EXIT_MIN, MIS_EXIT_TIME,
+                          MIS_BROKER_CUTOFF, MIS_EXIT_MARGIN_MIN)
+
+MIS_BROKER_SQUAREOFF = MIS_BROKER_CUTOFF   # Zerodha's, at market
 
 
 def squareoff_mis(trades: list, now_ist=None, kite=None) -> dict:
     """
-    Close every MIS position at 15:15, before the broker does it at 15:20.
+    Close every MIS position at MIS_EXIT_TIME, before the broker's cutoff.
 
-    NOT COSMETIC. After 15:20 Zerodha squares off at market and we lose both the
-    exit price and the audit trail -- the fill appears with no order of ours behind
-    it, so the trade's own record cannot say why it closed. Exiting five minutes
-    early keeps the decision, and the reason for it, ours.
+    NOT COSMETIC. Past the cutoff Zerodha squares off at market and we lose both
+    the exit price and the audit trail -- the fill appears with no order of ours
+    behind it, so the trade's own record cannot say why it closed or at what.
+    Exiting with margin keeps the decision, and the reason for it, ours.
+
+    THE CUTOFF IS ALSO AN ORDER CUTOFF, which is what the old 15:15 missed: after
+    it, an MIS exit order is REJECTED, so arriving late is not "a few minutes of
+    extra risk", it is no exit at all. out["late"] says the window was missed
+    whatever the attempts then return.
 
     Intended to run from its own timer, NOT from inside the market-hours loop: a
-    crashed loop must not be able to strand a short into broker liquidation, and
-    the loop currently stops at 15:20 anyway.
+    crashed loop must not be able to strand a short into broker liquidation.
     """
     from datetime import datetime, timezone, timedelta
     IST = timezone(timedelta(hours=5, minutes=30))
     now = now_ist or datetime.now(IST)
-    out = {"due": False, "exited": 0, "failed": 0, "alerts": []}
+    out = {"due": False, "late": False, "exited": 0, "failed": 0, "alerts": []}
     if (now.hour, now.minute) < (MIS_EXIT_HOUR, MIS_EXIT_MIN):
         return out
     out["due"] = True
+
+    # PAST THE CUTOFF. Still attempt -- a non-CAS equity has until 15:25 and the
+    # attempt costs nothing -- but say so first and unconditionally, because a
+    # rejected exit here looks identical to a rejected exit for any other reason
+    # and the distinction is the whole lesson of 2026-10-07.
+    cutoff = tuple(int(x) for x in MIS_BROKER_CUTOFF.split(":"))
+    if (now.hour, now.minute) >= cutoff:
+        out["late"] = True
+        out["alerts"].append(
+            f"MIS square-off ran at {now:%H:%M} IST, AT OR PAST the "
+            f"{MIS_BROKER_CUTOFF} broker cutoff (it should run at "
+            f"{MIS_EXIT_TIME}, {MIS_EXIT_MARGIN_MIN}min early). Exit orders may "
+            f"be rejected outright with \"Intraday orders (MIS) are allowed only "
+            f"till {MIS_BROKER_CUTOFF}\" -- attempting anyway; any open position "
+            f"is now the broker's to liquidate.")
     for t in trades or []:
         if str(t.get("product", "")).upper() != "MIS":
             continue
