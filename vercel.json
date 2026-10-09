@@ -5,6 +5,10 @@
       "destination": "/signals.html"
     },
     {
+      "source": "/flash",
+      "destination": "/flash.html"
+    },
+    {
       "source": "/waitlist",
       "destination": "/waitlist.html"
     },

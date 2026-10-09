@@ -69,6 +69,9 @@ SUITES = [
     ("learning loop",    [sys.executable, "tests/test_learning.py"]),
     ("migrations",       [sys.executable, "tests/test_migrations.py"]),
     ("crontab",          [sys.executable, "tests/test_crontab.py"]),
+    # TSL Flash Radar R1: the Hot 10, displacement, and the hard rules on
+    # cause attribution and action language.
+    ("radar",            [sys.executable, "tests/test_radar.py"]),
     ("market flash",    [sys.executable, "tests/test_market_flash.py"]),
     ("meridian iv",     [sys.executable, "tests/test_meridian_iv.py"]),
     ("signal schema",   [sys.executable, "tests/test_signal_schema.py"]),

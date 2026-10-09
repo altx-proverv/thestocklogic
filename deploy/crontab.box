@@ -234,3 +234,27 @@ MAILTO=""
 # operator can halt or resume ATLAS from a phone and a dead listener is silent.
 @reboot cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 atlas/reporting/bot_listener.py >> /home/ubuntu/thestocklogic/reports/bot.log 2>&1 &
 */5 * * * * /home/ubuntu/thestocklogic/scripts/bot_watchdog.sh
+
+# ── TSL FLASH — RADAR ──────────────────────────────────────────────────────────
+#
+# 19:20 IST — event detection, the extremes scanner, heat and the Hot 10.
+# See docs/TSL_FLASH.md §13.
+#
+# ITS OWN ENTRY, NOT JOINED TO THE EOD CHAIN WITH &&, and that is the whole
+# point of the placement. Radar CONSUMES the chain's bhavcopy and publishes
+# nothing the screener depends on, so a crash here must cost Radar's night and
+# nothing else. Joined with &&, a failure in this module -- the newest and least
+# proven thing in the repo -- would take out signals publishing for the session.
+# That failure has happened twice already (6125216, three sessions dark) from
+# modules far better tested than this one.
+#
+# 15 MINUTES AFTER excursions (40 13) and 75 after the chain starts (05 13), so
+# 01b_download_bhavcopy has long since written the parquets Radar reads. Radar
+# does NOT download anything itself: if the session's bhavcopy is absent it
+# refuses to score and exits non-zero rather than reporting a day of zeros.
+#
+# It carries the same completion check the chain has: it reads back what it
+# wrote and exits non-zero plus Telegram when both the event and scanner counts
+# come back zero. Either alone can legitimately be zero on a quiet session;
+# both, across 706 symbols, means the write was rejected.
+50 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m radar.run_detection >> /home/ubuntu/thestocklogic/reports/radar.log 2>&1
