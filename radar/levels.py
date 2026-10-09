@@ -7,6 +7,16 @@ missing or too short, and the caller DROPS that line: a level computed from 40
 sessions and labelled `dma_200` would be a fabricated number with a plausible
 shape, which is the exact failure mode the hard rules exist to prevent.
 
+CORPORATE ACTIONS DROP A LEVEL, THEY DO NOT SCALE IT. The parquets are not
+split-adjusted, so any window spanning a split or bonus is comparing two
+different price scales. INDIAGLYCO split on 2026-09-17 and this module would
+have reported "52-week high, +218.53% from here" off a pre-split 1219.00
+against a post-split close of 382.70. Each multi-session level is now gated on
+bars.action_in_last() for its OWN lookback, so a stock can lose its 200-DMA and
+keep its 50-DMA -- which is the honest answer when only the longer window
+straddles the action. Adjusting the series here would mean inferring a ratio
+from a price gap, which is a guess with a number's face on it.
+
 NO "ENTRY" OR "EXIT" IN ANY NAME OR LABEL HERE. The level types are
 descriptive -- where price has been, not what to do about it -- and
 tests/test_radar.py asserts that no banned word appears in this module or in
@@ -35,6 +45,11 @@ def _f(v) -> float | None:
     return None if pd.isna(x) else x
 
 
+def _spans_action(df: pd.DataFrame, sessions: int) -> bool:
+    from radar.bars import action_in_last
+    return action_in_last(df, sessions)
+
+
 def w52_high(df: pd.DataFrame) -> float | None:
     """Highest HIGH in 252 sessions. Intraday high, not close.
 
@@ -44,12 +59,16 @@ def w52_high(df: pd.DataFrame) -> float | None:
     """
     if df is None or len(df) < 2:
         return None
+    if _spans_action(df, SESSIONS_52W):
+        return None
     w = df["high"].astype(float).iloc[-SESSIONS_52W:]
     return round(float(w.max()), 2) if len(w) else None
 
 
 def w52_low(df: pd.DataFrame) -> float | None:
     if df is None or len(df) < 2:
+        return None
+    if _spans_action(df, SESSIONS_52W):
         return None
     w = df["low"].astype(float).iloc[-SESSIONS_52W:]
     return round(float(w.min()), 2) if len(w) else None
@@ -64,6 +83,11 @@ def is_new_52w_extreme(df: pd.DataFrame, side: str) -> bool:
     sessions BEFORE this one.
     """
     if df is None or len(df) < 21:
+        return False
+    # A "new 52-week low" measured across a split is just the split. The
+    # scanner must not list it, and dropping it here keeps that out of both the
+    # scanner and the card.
+    if _spans_action(df, SESSIONS_52W):
         return False
     cur = df.iloc[-1]
     prior = df.iloc[:-1]
@@ -101,6 +125,11 @@ def ipo_price(df: pd.DataFrame, max_age_years: int, download_floor,
         return None                      # the floor, not a listing
     if (last - first).days > max_age_years * 365:
         return None                      # listed, but too long ago to be useful
+    from radar.bars import corporate_actions
+    if corporate_actions(df):
+        # The listing price is on a pre-action scale. There is no honest way to
+        # show it next to today's price.
+        return None
     return round(_f(df["close"].iloc[0]) or 0, 2) or None
 
 
@@ -141,6 +170,9 @@ def dma(df: pd.DataFrame, period: int) -> float | None:
     """
     if df is None or len(df) < period:
         return None
+    # PER-PERIOD, so a 50-DMA can survive an action that kills the 200.
+    if _spans_action(df, period):
+        return None
     return round(float(df["close"].astype(float).iloc[-period:].mean()), 2)
 
 
@@ -153,6 +185,8 @@ def rsi(df: pd.DataFrame, period: int = 14) -> float | None:
     would check it.
     """
     if df is None or len(df) < period + 1:
+        return None
+    if _spans_action(df, period + 1):
         return None
     close = df["close"].astype(float)
     delta = close.diff().dropna()
@@ -189,12 +223,21 @@ def swing_pivots(df: pd.DataFrame, bars: int = 5, want: int = 3) -> dict:
     half = bars // 2
     if half < 1:
         return out
+    # PIVOTS BEFORE THE MOST RECENT ACTION ARE ON THE OLD PRICE SCALE. Dropped
+    # individually rather than dropping the whole set: a stock that split three
+    # months ago still has real swing pivots since, and they are the ones a
+    # reader cares about.
+    from radar.bars import corporate_actions
+    acts = corporate_actions(df)
+    floor_date = max(acts) if acts else None
     highs = df["high"].astype(float).to_numpy()
     lows = df["low"].astype(float).to_numpy()
     dates = list(df["date"])
 
     hi_piv, lo_piv = [], []
     for i in range(half, len(df) - half):
+        if floor_date is not None and dates[i] < floor_date:
+            continue
         window_h = highs[i - half:i + half + 1]
         window_l = lows[i - half:i + half + 1]
         # STRICTLY the max of its window, with ties resolved to the EARLIER bar

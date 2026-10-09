@@ -192,7 +192,16 @@ def fetch_filings(symbol: str, on: date, lookback_sessions: int = 1,
         subject = (row.get("desc") or row.get("subject")
                    or row.get("sm_name") or "").strip()
         body = (row.get("attchmntText") or row.get("smIndustry") or "").strip()
-        url_a = (row.get("attchmntFile") or row.get("seqId") or "").strip()
+        # ONLY A REAL URL COUNTS AS A CITATION. NSE returns an empty
+        # attchmntFile for an announcement with no PDF yet -- a volume-spurt
+        # query whose reply is still awaited, for instance -- and the old
+        # fallback to seqId put "-" in this field. "-" is truthy, so
+        # cards.validate() would have passed a card as SOURCED with a dead
+        # link in it, which is the citation rule failing quietly rather than
+        # loudly. A filing with no document is still STORED; it just cannot be
+        # the thing a card cites.
+        raw_url = (row.get("attchmntFile") or "").strip()
+        url_a = raw_url if raw_url.lower().startswith("http") else ""
         when = _parse_dt(row.get("an_dt") or row.get("sort_date")
                          or row.get("exchdisstime"))
         if not subject and not body:
@@ -221,7 +230,10 @@ def select_primary(docs: list, on: date) -> dict | None:
     """
     if not docs:
         return None
-    usable = [d for d in docs if (d.get("title") or d.get("body"))]
+    # A CITABLE document needs text AND a resolvable URL. Without the second,
+    # "sourced" would be a claim the reader cannot check.
+    usable = [d for d in docs
+              if (d.get("title") or d.get("body")) and d.get("url")]
     if not usable:
         return None
     usable.sort(key=lambda d: (

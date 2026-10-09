@@ -14,6 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="TSL Flash">
 <link rel="manifest" href="/manifest.json">
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
 <style>
@@ -196,6 +197,9 @@ body.card-view .card-wrap{display:block}
     What happened, why, and where price has been &mdash; from NSE bhavcopy and
     exchange filings only. Ten cards, ranked by heat, not by age. No cause is
     shown without a filing behind it.
+    <div style="margin-top:10px;font-size:10px;letter-spacing:1.5px;color:var(--amber)">
+      INTERNAL &middot; OPERATOR ACCESS ONLY &middot; PRE-REGISTRATION
+    </div>
   </div>
 </div>
 
@@ -267,7 +271,72 @@ body.card-view .card-wrap{display:block}
  */
 var SB='https://eibdlcanpudjgmkjxrga.supabase.co';
 var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
-var HDR={apikey:AK,Authorization:'Bearer '+AK};
+/* FULLY PRIVATE, AND THE PAGE HAS NO ANON PATH.
+ *
+ * Operator decision, 2026-10-10: TSL Flash is internal until SEBI RA
+ * registration. Every radar_ table and all three views are REVOKEd from anon
+ * and every policy is gated on public.is_admin(), so the anon key gets
+ * "401 permission denied" -- not an empty 200. That is deliberate: the usual
+ * RLS failure here is a table that answers 200 with [] and looks like a quiet
+ * day, and this one cannot.
+ *
+ * So the page sends the operator's SESSION token and has no anon fallback.
+ * atlas.html drops to the anon key when a session is rejected because every
+ * table it reads is anon-readable; doing that here would just produce a 401
+ * with extra steps, and a "could not load" message where the real answer is
+ * "you are not signed in".
+ */
+var _session=null, _supa=null, _sessionStale=false;
+
+function HDRS(){
+  if(_session && _session.access_token){
+    return {apikey:AK, Authorization:'Bearer '+_session.access_token};
+  }
+  /* No session: send the anon key so the 401 comes back from PostgREST with a
+     reason, rather than sending nothing and getting a different error. */
+  return {apikey:AK, Authorization:'Bearer '+AK};
+}
+
+/* A token expiring inside the minute is treated as already dead: it may not
+   survive the round trip, and sending a dead one produces a 401 that reads as
+   "not permitted" rather than "expired". */
+function isFresh(x){
+  if(!x || !x.access_token) return false;
+  if(!x.expires_at) return true;
+  return (x.expires_at*1000) - Date.now() > 60000;
+}
+
+/* Mirrors atlas.html's loadSession(). getSession() renews from the refresh
+   token; the localStorage scan is the fallback for when the CDN script does
+   not load at all. The stored session is snapshotted BEFORE touching
+   supabase-js, because getSession() deletes an entry it cannot renew -- after
+   which "did the operator have a session" always answers no. */
+async function loadSession(){
+  var stored=null;
+  try{
+    for(var i=0;i<localStorage.length;i++){
+      var k=localStorage.key(i);
+      if(k && k.indexOf('sb-')===0 && k.indexOf('-auth-token')>-1){
+        stored=JSON.parse(localStorage.getItem(k));
+        break;
+      }
+    }
+  }catch(e){}
+  try{
+    if(window.supabase && window.supabase.createClient){
+      if(!_supa) _supa=window.supabase.createClient(SB,AK);
+      var res=await _supa.auth.getSession();
+      var sx=(res && res.data) ? res.data.session : null;
+      if(isFresh(sx)) return sx;
+    }
+  }catch(e){ console.error('flash: session refresh failed: '+e.message); }
+  if(isFresh(stored)) return stored;
+  if(stored && stored.access_token){
+    _sessionStale=true;
+    console.error('flash: stored session is expired and could not be refreshed');
+  }
+  return null;
+}
 
 var STATE={hot:[],scan:[],cards:{}};
 
@@ -280,7 +349,7 @@ var DELIVERY_NOTE='Delivery % is settlement, not identity. It does not show who 
    two down with it: signals.html learned that the hard way when a rejected
    Promise.all left an empty page and a console error. */
 function sbGet(path){
-  return fetch(SB+path,{headers:HDR}).then(function(r){
+  return fetch(SB+path,{headers:HDRS()}).then(function(r){
     if(!r.ok){
       return r.text().then(function(b){
         console.error('flash: '+path+' -> HTTP '+r.status+' '+b.slice(0,200));
@@ -562,30 +631,67 @@ function closeCard(){
 }
 
 /* ── BOOT ───────────────────────────────────────────────────── */
-function boot(){
+/* A 401/403 HERE MEANS "NOT SIGNED IN AS AN OPERATOR", NOT "BROKEN".
+   Saying "could not load" would send the reader looking for an outage. */
+function renderLocked(status){
+  document.body.classList.remove('card-view');
+  document.getElementById('err').innerHTML='';
+  document.getElementById('hotRows').innerHTML=
+    '<div class="empty" style="padding:34px 20px">'
+    +'<div style="font-family:var(--display);font-size:22px;letter-spacing:2px;'
+    +'color:var(--amber);margin-bottom:12px">INTERNAL — NOT YET PUBLISHED</div>'
+    +'TSL Flash is operator-only until SEBI research-analyst registration '
+    +'is in place.<br>Every Radar table is closed to anonymous reads; nothing '
+    +'here reaches users.<br><br>'
+    +(_sessionStale
+       ? 'Your session expired. '
+       : 'No operator session was found. ')
+    +'Sign in on <a href="/dashboard" style="color:var(--sky)">the dashboard</a>'
+    +' and return here.'
+    +'<div class="sess" style="margin-top:14px">PostgREST said HTTP '
+    +status+' — permission denied, which is the intended answer for anon.</div>'
+    +'</div>';
+  document.getElementById('hotNote').innerHTML='&mdash;';
+  document.getElementById('tblHigh').innerHTML='';
+  document.getElementById('tblLow').innerHTML='';
+  document.getElementById('hiCount').textContent='';
+  document.getElementById('loCount').textContent='';
+  document.getElementById('scanNote').innerHTML='operator access required';
+  document.getElementById('liveLabel').textContent='LOCKED';
+}
+
+async function boot(){
   var qs=new URLSearchParams(window.location.search);
   var ev=qs.get('event');
 
-  Promise.all([
+  _session=await loadSession();
+
+  var r=await Promise.all([
     sbGet('/rest/v1/v_radar_hot10?select=*'),
     sbGet('/rest/v1/v_radar_scanner_today?select=*')
-  ]).then(function(r){
-    var hot=r[0], scan=r[1];
-    STATE.hot=hot.rows; STATE.scan=scan.rows;
-    if(!hot.ok||!scan.ok){
-      document.getElementById('err').innerHTML='<div class="err">'
-        +'Part of this page could not load'
-        +(hot.ok?'':' (Hot 10: HTTP '+hot.status+')')
-        +(scan.ok?'':' (scanner: HTTP '+scan.status+')')
-        +'. What is shown below is what came back.</div>';
-    }
-    renderHot();
-    renderScan();
-    var d=STATE.scan.length?STATE.scan[0].trade_date
-      :(STATE.hot.length?STATE.hot[0].card_trade_date:null);
-    document.getElementById('liveLabel').textContent=d?('SESSION '+d):'NO DATA';
-    if(ev) openCard(ev,qs.get('sym')==='1');
-  });
+  ]);
+  var hot=r[0], scan=r[1];
+
+  /* BOTH REFUSED ON PERMISSIONS -> the private state, not an error banner. */
+  if((hot.status===401||hot.status===403) && (scan.status===401||scan.status===403)){
+    renderLocked(hot.status);
+    return;
+  }
+
+  STATE.hot=hot.rows; STATE.scan=scan.rows;
+  if(!hot.ok||!scan.ok){
+    document.getElementById('err').innerHTML='<div class="err">'
+      +'Part of this page could not load'
+      +(hot.ok?'':' (Hot 10: HTTP '+hot.status+')')
+      +(scan.ok?'':' (scanner: HTTP '+scan.status+')')
+      +'. What is shown below is what came back.</div>';
+  }
+  renderHot();
+  renderScan();
+  var d=STATE.scan.length?STATE.scan[0].trade_date
+    :(STATE.hot.length?STATE.hot[0].card_trade_date:null);
+  document.getElementById('liveLabel').textContent=d?('SESSION '+d):'NO DATA';
+  if(ev) openCard(ev,qs.get('sym')==='1');
 }
 
 window.addEventListener('popstate',function(){

@@ -309,6 +309,39 @@ def main() -> int:
     check("  and no level carries a None price",
           any(r["price"] is None for r in lv_short), False)
 
+    # CORPORATE ACTIONS DROP A LEVEL RATHER THAN SCALING IT. INDIAGLYCO split
+    # on 2026-09-17 and the first generated card said "52-week high, +218.53%
+    # from here" -- a pre-split 1219.00 against a post-split close of 382.70.
+    # Found while populating the page for real, which is the only reason it was
+    # found: no synthetic fixture had a split in it.
+    ig = bars.frame_through("INDIAGLYCO", date(2026, 10, 7))
+    acts = bars.corporate_actions(ig)
+    check("INDIAGLYCO's 2026-09-17 action is detected",
+          date(2026, 9, 17) in acts, True,
+          "bhavcopy's PREV_CLOSE was adjusted to 266.20 against a prior close "
+          "of 1111.70 -- a -76% adjustment the parquet prices do not carry")
+    ig_types = {r["level_type"] for r in levels.compute_all(ig, CFG, None)}
+    for dropped in ("w52_high", "w52_low", "dma_50", "dma_200", "rsi_14"):
+        check(f"  {dropped} is dropped across the split",
+              dropped in ig_types, False)
+    for kept in ("event_high", "event_low", "pre_event_close"):
+        check(f"  {kept} survives (single-session, unaffected)",
+              kept in ig_types, True)
+    # PER-LOOKBACK, not all-or-nothing: V2RETAIL's action is 2026-03-26, inside
+    # 252 and 200 sessions but outside 50.
+    v2 = bars.frame_through("V2RETAIL", date(2026, 10, 7))
+    v2_types = {r["level_type"] for r in levels.compute_all(v2, CFG, None)}
+    check("a stock can lose its 200-DMA and keep its 50",
+          ("dma_200" in v2_types, "dma_50" in v2_types), (False, True),
+          "V2RETAIL, action 2026-03-26")
+    check("  and the scanner will not call a split a new 52-week low",
+          levels.is_new_52w_extreme(ig, "low"), False)
+    # POLICYBZR has no action, so nothing above weakened its levels.
+    check("a clean series keeps every level",
+          len([r for r in lv if r["level_type"] in
+               ("w52_high", "w52_low", "dma_50", "dma_200")]), 4,
+          "POLICYBZR: no corporate action in the window")
+
     # NO ACTION-SHAPED LEVEL NAMES, now or later.
     all_types = {r["level_type"] for r in lv}
     check("no level type implies an action",

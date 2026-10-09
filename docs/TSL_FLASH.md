@@ -183,6 +183,27 @@ what keeps them that way.
 | `swing_high_1..3`, `swing_low_1..3` | most recent three 5-bar fractal pivots each side, daily |
 | `rsi_14` | 14-day Wilder RSI (stored as a level row; it is a reading, not a price) |
 
+### Corporate actions drop a level, they do not scale it
+
+The parquets are **not split-adjusted**, so any window spanning a split or
+bonus compares two different price scales. INDIAGLYCO split on 2026-09-17, and
+the first card generated for the live page said *"52-week high, +218.53% from
+here"* — a pre-split 1219.00 against a post-split close of 382.70. Found only
+by populating the page with real data; no synthetic fixture had a split in it.
+
+Bhavcopy detects this itself, so no second source is needed: NSE **adjusts
+`PREV_CLOSE` on the ex-date** while the previous row's `CLOSE` stays
+unadjusted. A disagreement over 15% between the two is an action, whatever kind
+it was — and the ratio is never needed, only the fact that the series is not
+comparable across that date.
+
+Each multi-session level is gated on its **own** lookback, so the granularity is
+honest: V2RETAIL's action was 2026-03-26, inside 252 and 200 sessions but
+outside 50, so it loses `w52_high`, `w52_low` and `dma_200` and keeps `dma_50`
+and `rsi_14`. INDIAGLYCO, three weeks past its split, keeps only the
+single-session facts and its post-split swing pivots. `is_new_52w_extreme()` is
+gated too, so the scanner cannot report a split as a new 52-week low.
+
 ### IPO price is usually absent, and that is correct
 
 The per-stock parquets begin at `START_DATE = 2023-01-01`, so the first row of
@@ -348,17 +369,42 @@ a given day is the only way to audit a claim after the fact.
 
 ### RLS
 
-Base tables: **anon has no access and there is no anon policy**; writes are
-service-role only. The page reads three **narrow views** —
-`v_radar_hot10`, `v_radar_card_latest`, `v_radar_scanner_today` — which expose
-display columns only and are granted to `anon`.
+**FULLY PRIVATE. Decided and applied 2026-10-10, before first apply.**
 
-This is the one place R1 interpreted the brief rather than following it
-literally. "Anon no access" is applied to the tables, and public read is
-confined to views carrying nothing but what the page already renders, because
-TSL Flash is a public page like the screener. To make Flash fully private
-instead, revoke `anon` on those three views and switch the page's fetch to a
-session token; nothing else changes.
+| Role | Reads |
+| --- | --- |
+| `anon` | **nothing.** REVOKEd on all six tables and all three views, no policy. Gets `401 permission denied`. |
+| `authenticated` | table SELECT on the three tables the views read, but every policy is gated on `public.is_admin()` — a signed-in account that is not an admin subscriber reads nothing. |
+| `service_role` | full read/write. This is what `radar/store.py` uses. |
+
+All three views are `security_invoker = true`, so a view is evaluated as the
+calling role and cannot be used to read past the base-table policies it exists
+to narrow.
+
+**An earlier draft granted the views to `anon`**, reasoning that Flash is a
+public page like the screener. That was overruled, and the reasoning was wrong.
+The spec's §3 says *"Pre-registration (now): internal use only. Nothing reaches
+users."* The screener being effectively public is a logged, accepted exposure —
+not a precedent to extend to new surface, least of all surface whose pitch is
+sourced research, which is what SEBI RA registration governs.
+
+`is_admin()` rather than plain `authenticated` because *"nothing reaches users"*
+and *"nothing reaches anonymous visitors"* are different claims, and only the
+first is the spec's. A policy scoped to `authenticated` alone would open Radar
+to every registered account on the site.
+
+**`radar_documents`, `radar_levels` and `radar_config` have no policy at all** —
+service role only. No view reads them; the cause text and URL a card cites
+travel inside the card payload, so the filing corpus is never read through the
+page.
+
+`flash.html` sends the operator's session token and has **no anon fallback**. A
+401 renders a stated *internal, not yet published* panel rather than a
+"could not load" error, because the reader's problem is that they are not
+signed in, not that something is broken.
+
+To publish Flash later: grant `SELECT` on the three views to `anon`, and swap
+each policy's `public.is_admin()` for the view's own filter.
 
 ---
 

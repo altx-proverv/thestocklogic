@@ -21,12 +21,36 @@
 -- §13 at the end is a catalogue query that proves each object exists. "No
 -- error" is not evidence; that query is.
 --
--- ══ RLS ════════════════════════════════════════════════════════════════════
+-- ══ RLS — FULLY PRIVATE ════════════════════════════════════════════════════
 --
--- Base tables: anon has NO access and NO policy. Writes are service-role only.
--- The page reads three narrow views granted to anon, carrying display columns
--- only. docs/TSL_FLASH.md §11 records why, and the one-line change to make
--- Flash fully private instead.
+-- OPERATOR DECISION, 2026-10-10, BEFORE FIRST APPLY. An earlier draft of this
+-- file granted the three read views to anon on the reasoning that TSL Flash is
+-- a public page like the screener. That was overruled and the reasoning was
+-- wrong: the spec's §3 says "Pre-registration (now): internal use only.
+-- Nothing reaches users." The screener being effectively public is a logged,
+-- accepted exposure -- not a precedent to extend to new surface, least of all
+-- surface whose pitch is sourced research, which is what SEBI RA registration
+-- governs.
+--
+-- So, three layers and anon appears in none of them:
+--
+--   anon            REVOKEd on every table, no policy, no grant on any view.
+--                   Reads return 200 with an empty array, which here is the
+--                   intended behaviour and not the silent-failure trap.
+--   authenticated   table SELECT granted, but every policy is gated on
+--                   public.is_admin() -- a signed-in account that is not an
+--                   admin subscriber reads nothing. Signed in is not
+--                   sufficient; internal is required.
+--   service_role    full read/write. This is what radar/store.py uses.
+--
+-- WHY is_admin() AND NOT JUST "authenticated". "Nothing reaches users" and
+-- "nothing reaches anonymous visitors" are different claims, and only the
+-- first one is the spec's. A policy scoped to authenticated alone would open
+-- Radar to every registered account on the site.
+--
+-- security_invoker = true on all three views is what makes this hold: the view
+-- is evaluated as the CALLING role, so a view cannot be used to read past the
+-- base-table policies it exists to narrow.
 --
 -- Note the database has an event trigger (ensure_rls -> rls_auto_enable) that
 -- enables RLS on every new public table and creates no policy. The ENABLE
@@ -448,8 +472,8 @@ SELECT s.trade_date, s.symbol, s.side, s.sector, s.close,
 
 
 -- ─────────────────────────────────────────────────────────────────────
--- 11. GRANTS. Base tables stay closed to anon with no policy; the three
---     views above are the only public surface.
+-- 11. GRANTS. anon is closed out of everything. The three views are the
+--     only read surface and they are admin-only.
 -- ─────────────────────────────────────────────────────────────────────
 
 REVOKE ALL ON public.radar_events        FROM anon;
@@ -472,43 +496,62 @@ GRANT USAGE, SELECT ON SEQUENCE public.radar_card_versions_id_seq     TO service
 GRANT USAGE, SELECT ON SEQUENCE public.radar_levels_id_seq            TO service_role;
 GRANT USAGE, SELECT ON SEQUENCE public.radar_scanner_daily_id_seq     TO service_role;
 
--- THE PUBLIC SURFACE. security_invoker is set on all three, so a view read as
--- anon still meets the base-table policies -- and there are none for anon.
--- These policies are what makes the views readable, scoped to exactly the rows
--- the views already filter to.
+-- TABLE-LEVEL SELECT FOR authenticated, ON THE THREE TABLES THE VIEWS READ.
+-- Required because security_invoker evaluates the view as the caller: without
+-- the grant the view fails on privileges before RLS is ever consulted, and the
+-- page would see a 403 rather than an empty list. The POLICIES below are what
+-- actually decide who sees rows.
+--
+-- radar_levels IS NOT GRANTED and has no policy. No view reads it -- the card
+-- payload carries its levels inline -- so granting it would be read surface
+-- with no consumer, which is how a table ends up exposed for a reason nobody
+-- remembers.
+GRANT SELECT ON public.radar_events        TO authenticated;
+GRANT SELECT ON public.radar_card_versions TO authenticated;
+GRANT SELECT ON public.radar_scanner_daily TO authenticated;
+
+-- ADMIN ONLY. Each policy carries the view's own filter as well as the admin
+-- gate, so the narrowing survives someone querying the base table directly
+-- with an admin token.
 DROP POLICY IF EXISTS "anon read live radar events" ON public.radar_events;
-CREATE POLICY "anon read live radar events"
+DROP POLICY IF EXISTS "admin read live radar events" ON public.radar_events;
+CREATE POLICY "admin read live radar events"
   ON public.radar_events FOR SELECT
-  TO anon, authenticated
-  USING (status = 'live');
+  TO authenticated
+  USING (public.is_admin() AND status = 'live');
 
 DROP POLICY IF EXISTS "anon read passed radar cards" ON public.radar_card_versions;
-CREATE POLICY "anon read passed radar cards"
+DROP POLICY IF EXISTS "admin read passed radar cards" ON public.radar_card_versions;
+CREATE POLICY "admin read passed radar cards"
   ON public.radar_card_versions FOR SELECT
-  TO anon, authenticated
-  USING (validation_status = 'passed');
+  TO authenticated
+  USING (public.is_admin() AND validation_status = 'passed');
 
 DROP POLICY IF EXISTS "anon read radar levels" ON public.radar_levels;
-CREATE POLICY "anon read radar levels"
-  ON public.radar_levels FOR SELECT
-  TO anon, authenticated
-  USING (true);
 
 DROP POLICY IF EXISTS "anon read radar scanner" ON public.radar_scanner_daily;
-CREATE POLICY "anon read radar scanner"
+DROP POLICY IF EXISTS "admin read radar scanner" ON public.radar_scanner_daily;
+CREATE POLICY "admin read radar scanner"
   ON public.radar_scanner_daily FOR SELECT
-  TO anon, authenticated
-  USING (true);
+  TO authenticated
+  USING (public.is_admin());
 
--- NO ANON POLICY ON radar_documents OR radar_config, deliberately. The cause
--- TEXT and URL a card cites travel inside the card payload, which is already
--- public; the full filing corpus and the operator's knobs are not a public
--- surface. RLS with no policy answers anon with 200 and an empty array, so
--- this is also the one place where that silence is the intended behaviour.
+-- NO POLICY AT ALL ON radar_documents, radar_levels OR radar_config. Service
+-- role reaches them because RLS does not apply to it; nothing else does. The
+-- cause text and URL a card cites travel inside the card payload, so the
+-- filing corpus itself is never read through the page.
 
-GRANT SELECT ON public.v_radar_hot10          TO anon, authenticated, service_role;
-GRANT SELECT ON public.v_radar_card_latest    TO anon, authenticated, service_role;
-GRANT SELECT ON public.v_radar_scanner_today  TO anon, authenticated, service_role;
+-- THE VIEWS: authenticated and service_role only. The REVOKEs are explicit
+-- rather than relying on the default, because a view created by a role with
+-- broad grants can inherit more than intended and the cost of being wrong
+-- here is the thing this whole block exists to prevent.
+REVOKE ALL ON public.v_radar_hot10         FROM anon;
+REVOKE ALL ON public.v_radar_card_latest   FROM anon;
+REVOKE ALL ON public.v_radar_scanner_today FROM anon;
+
+GRANT SELECT ON public.v_radar_hot10          TO authenticated, service_role;
+GRANT SELECT ON public.v_radar_card_latest    TO authenticated, service_role;
+GRANT SELECT ON public.v_radar_scanner_today  TO authenticated, service_role;
 
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -538,8 +581,9 @@ CREATE TRIGGER radar_events_touch
 -- 13. VERIFY. Run this LAST and read it. "Success" from the editor
 --     describes the last statement it chose to run, not the file.
 --
---     Expect: 6 tables, 3 views, 19 config rows, 4 anon policies,
---     5 unique constraints, 1 trigger,
+--     Expect: 6 tables, 3 views, 19 config rows, ZERO anon policies,
+--     3 admin-gated policies, zero anon grants, 3 security_invoker
+--     views, 5 unique constraints, 1 trigger,
 --     and every `ok` column true.
 -- ─────────────────────────────────────────────────────────────────────
 
@@ -564,20 +608,35 @@ SELECT 'rls enabled', count(*), 6, count(*) = 6, NULL
  WHERE n.nspname = 'public' AND c.relname LIKE 'radar_%'
    AND c.relkind = 'r' AND c.relrowsecurity
 UNION ALL
-SELECT 'anon select policies', count(*), 4, count(*) = 4,
+-- ZERO. Fully private: anon has no policy on any radar_ table.
+SELECT 'anon policies (must be 0)', count(*), 0, count(*) = 0,
        string_agg(tablename || ':' || policyname, ', ' ORDER BY tablename)
   FROM pg_policies
  WHERE schemaname = 'public' AND tablename LIKE 'radar_%'
    AND 'anon' = ANY(roles)
 UNION ALL
--- DOCUMENTS AND CONFIG MUST HAVE NO ANON POLICY. This row is the one that
--- proves the private half stayed private; a passing count above says nothing
--- about it.
-SELECT 'radar_documents+config anon policies', count(*), 0, count(*) = 0, NULL
+SELECT 'admin-gated policies', count(*), 3, count(*) = 3,
+       string_agg(tablename || ':' || policyname, ', ' ORDER BY tablename)
   FROM pg_policies
- WHERE schemaname = 'public'
-   AND tablename IN ('radar_documents', 'radar_config')
-   AND 'anon' = ANY(roles)
+ WHERE schemaname = 'public' AND tablename LIKE 'radar_%'
+   AND qual LIKE '%is_admin%'
+UNION ALL
+-- AND NO ANON GRANT ANYWHERE, tables or views. A policy count of zero proves
+-- nothing on its own: a table with a grant and no policy is closed, but a VIEW
+-- with a grant is readable regardless of policies when it is not
+-- security_invoker. Both halves are checked.
+SELECT 'anon grants on radar_ tables+views (must be 0)', count(*), 0,
+       count(*) = 0,
+       string_agg(table_name || ':' || privilege_type, ', ' ORDER BY table_name)
+  FROM information_schema.role_table_grants
+ WHERE table_schema = 'public' AND grantee = 'anon'
+   AND (table_name LIKE 'radar_%' OR table_name LIKE 'v_radar_%')
+UNION ALL
+SELECT 'views are security_invoker', count(*), 3, count(*) = 3, NULL
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public' AND c.relname LIKE 'v_radar_%'
+   AND c.relkind = 'v'
+   AND c.reloptions::text LIKE '%security_invoker=true%'
 UNION ALL
 -- FIVE, not six: radar_config is keyed by a PRIMARY KEY, which is contype 'p'
 -- and deliberately not counted here.
