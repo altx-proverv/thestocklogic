@@ -35,7 +35,8 @@ everything", so a permissive fake is itself the defect being guarded against.
 tools/verify_exit_path.py carries the full adversarial stub; this file asserts
 the invariants that must never regress.
 
-NONE OF THIS IS EVIDENCE ABOUT THE LIVE API. See docs/LIVE_EXIT_TEST.md.
+NONE OF THIS IS EVIDENCE ABOUT THE LIVE API. There is no verification trade --
+the first real trades are the verification. See docs/ATLAS_LONG_ONLY.md s08.
 
     python3 tests/test_exit_path_rebuild.py
 """

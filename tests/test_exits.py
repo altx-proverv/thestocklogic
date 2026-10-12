@@ -18,7 +18,8 @@ decisions that shape it, and each is asserted rather than described:
      IT WAS SL-M UNTIL 2026-10-07, when Kite rejected one for having no market
      protection and the market-order fallback was rejected by the same rule.
      See tests/test_exit_path_rebuild.py, which guards the pair's independence,
-     and docs/LIVE_EXIT_TEST.md, which is the only thing that tests the real API.
+     and docs/ATLAS_LONG_ONLY.md section 08, which records what is verified
+     against the broker's documentation and what is not verified at all.
 
 Offline: kiteconnect is not installed in development, so every broker call here
 goes to an injected fake. THAT IS THE LIMIT OF THIS FILE AND IT IS WHAT CAUSED

@@ -26,9 +26,9 @@ published square-off timings on 2026-10-09, not from memory.
 
 THIS STILL PROVES NOTHING ABOUT THE WIRE. It proves the code builds orders that
 satisfy the documented contract and that the fallback survives a failure of the
-primary. Whether Zerodha accepts them is answered only by the one-share live
-test, which is a separate step, run by a human, with the market open. See
-docs/LIVE_EXIT_TEST.md.
+primary. Whether Zerodha accepts them is settled only by a real fill -- and
+there is no verification trade: the first real trades are the verification. See
+docs/ATLAS_LONG_ONLY.md section 08.
 """
 
 import os
@@ -764,7 +764,7 @@ def main():
         print(f"    FAILED: {f}")
     print("\n  This is the documented contract and the independence of the "
           "fallback.\n  It is NOT evidence about the live API. Run "
-          "docs/LIVE_EXIT_TEST.md for that.")
+          "the first real trades for that — see docs/ATLAS_LONG_ONLY.md §08.")
     return 1 if FAIL else 0
 
 

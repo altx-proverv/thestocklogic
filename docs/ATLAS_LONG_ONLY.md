@@ -388,7 +388,7 @@ only remaining job.
 | `tools/live_exit_test.py` | **DELETED 2026-10-13** |
 | `tools/live_gtt_check.py` | **DELETED 2026-10-13** |
 | `tools/live_day0_check.py` | **DELETED 2026-10-13** |
-| `docs/LIVE_EXIT_TEST.md` | §08 — kept as a record, marked deprecated at the top |
+| `docs/LIVE_EXIT_TEST.md` | **DELETED 2026-10-13** — a runbook for a deleted tool is the accident this policy prevents, and a DEPRECATED header is a half-measure |
 
 All three live drivers are gone. **ATLAS does not run 1-share verifications
 anywhere** — standing policy from 2026-10-13. The exit-path logic they drove
