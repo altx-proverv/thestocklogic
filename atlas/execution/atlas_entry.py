@@ -636,6 +636,41 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         # phase, and place_order() refuses an ENTRY while halted regardless.
         log.info(f"{symbol}: halted ({why}) — evaluating anyway, placing nothing")
 
+    # GATE -1b -- EXIT MANAGEMENT MUST BE ON TO TAKE AN ENTRY AT ALL.
+    #
+    # MOVED HERE FROM AFTER THE FILL, 2026-10-13. The check used to sit between
+    # await_fill and protect_or_exit: with the flag False, ATLAS placed the
+    # order, let it fill, logged a warning, and returned ENTERED with
+    # exit_managed=False. A live position, no stop, no halt, and a status
+    # indistinguishable from a protected entry to anything reading
+    # atlas_entry_log.
+    #
+    # A FLAG THAT REMOVES ALL PROTECTION MUST NOT BE AN ENTRY PATH. The old
+    # shape treated "leave it to a human" as a mode; it is not a mode the
+    # engine can be in, because the engine does not know whether a human is
+    # there. If exit management is off, the correct number of positions for
+    # ATLAS to open is zero.
+    #
+    # BEFORE THE RESERVATION AND BEFORE THE ORDER. This is the cheapest check
+    # in the function and it is a config read, so it costs nothing to put it
+    # first -- and being first is the point: nothing downstream can have
+    # happened by the time it refuses.
+    #
+    # ITS OWN REASON CODE. SKIPPED_NO_EXIT_MANAGEMENT, not folded into CONFIG,
+    # so a session spent sitting out for this reason is countable in
+    # atlas_entry_log rather than being guessed at from prose.
+    from atlas.config import ENABLE_EXIT_MANAGEMENT
+    if not ENABLE_EXIT_MANAGEMENT:
+        log.warning(
+            f"{symbol}: ENTRY REFUSED — entries are disabled because exit "
+            f"management is off (ENABLE_EXIT_MANAGEMENT is False). ATLAS "
+            f"would have no stop on this position, so it does not open one.")
+        return {"status": "SKIPPED_NO_EXIT_MANAGEMENT",
+                "reason": ("entries are disabled because exit management is "
+                           "off (ENABLE_EXIT_MANAGEMENT is False) — ATLAS "
+                           "will not open a position it cannot protect"),
+                "blocked_by": "NO_EXIT_MANAGEMENT"}
+
     # GATE 0 -- structural stop mandatory
     if stop_price <= 0:
         return {"status": "REJECTED_NO_STOP",
@@ -983,20 +1018,9 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # resting away from the book, which is an ordinary outcome and not an
     # incident. _settle_unfilled_limit below cancels it and finds out which of
     # the two it was, so the common case stops being reported as INDETERMINATE.
-    # ENABLE_EXIT_MANAGEMENT IS THE SWITCH THAT MAKES ATLAS AUTONOMOUS.
-    #
-    # False is the behaviour ATLAS has always had: it opens a position and leaves
-    # it to a human. That is not a degraded mode, it is the status quo, and it is
-    # the default so that deploying this code does not silently start managing
-    # money. True is the deliberate act.
-    from atlas.config import ENABLE_EXIT_MANAGEMENT
-    if not ENABLE_EXIT_MANAGEMENT:
-        log.warning(f"{symbol}: ENTERED with NO automatic stop — "
-                    f"ENABLE_EXIT_MANAGEMENT is False, so this position is "
-                    f"managed by hand")
-        return {"status": "ENTERED", "recorded": recorded,
-                "exit_managed": False, **intent}
-
+    # ENABLE_EXIT_MANAGEMENT IS CHECKED AT GATE -1b, BEFORE ANY ORDER EXISTS.
+    # It used to be checked HERE, after the fill, and returned ENTERED with no
+    # stop attempted and a log warning. See the gate for why that is gone.
     from atlas.execution import exits as X
 
     fill = X.await_fill(intent["order_id"])
@@ -1079,19 +1103,33 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # branches halt.
     if pe["exited"]:
         ex = pe["exit"] or {}
+        # NAME THE MECHANISM THAT ACTUALLY FAILED. This said "the OCO GTT would
+        # not place" whichever mechanism had been tried -- true when there was
+        # one, wrong since the day-0/day-1 split. At fill time the primary is
+        # the DAY-0 SL, on the orders API, failing for order-level reasons; the
+        # GTT is placed later by preclose_gtt and fails for GTT reasons. An
+        # alert that names the wrong system costs the time it takes to rule
+        # that system out, and that time is spent unprotected.
+        mech_name, mech_api, halt_kind = X.mechanism_label(prot.get("mechanism"))
         if pe.get("must_halt"):
-            breaker.halt("GTT_FAILED",
-                         f"{symbol}: the OCO GTT would not place "
+            breaker.halt(halt_kind,
+                         f"{symbol}: the {mech_name} would not place "
                          f"({prot.get('reason')}). The position was closed on "
                          f"a marketable LIMIT, but the protection mechanism is "
                          f"not working -- no further entries.")
-        _alert("EXITED — GTT WOULD NOT PLACE",
-               f"{symbol} {direction} {filled_qty}: the OCO GTT was refused "
-               f"({prot.get('reason')}), so the position was closed at once on "
-               f"a marketable LIMIT — a different API from the GTT that "
-               f"failed. Position is FLAT. Entries are halted because the "
-               f"stop mechanism is broken, not because this trade went wrong.")
+        _alert(f"EXITED — {mech_name.upper()} WOULD NOT PLACE",
+               f"{symbol} {direction} {filled_qty}: the {mech_name} was "
+               f"refused ({prot.get('reason')}), so the position was closed at "
+               f"once on a marketable LIMIT — a different mechanism from the "
+               f"{mech_name} that failed"
+               + (f", and a different API ({X.ORDER_SPECS[X.FALLBACK_EXIT]['api']} "
+                  f"rather than {mech_api})"
+                  if mech_api != X.ORDER_SPECS[X.FALLBACK_EXIT]["api"]
+                  else f" (both on the {mech_api} API)")
+               + f". Position is FLAT. Entries are halted because the stop "
+                 f"mechanism is broken, not because this trade went wrong.")
         return {"status": "EXITED_NO_STOP", "trade_id": row_id,
+                "mechanism_failed": prot.get("mechanism"),
                 "reason": prot.get("reason"), "halted": bool(pe.get("must_halt")),
                 **intent}
 
@@ -1101,8 +1139,9 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         # is evidence of a broker-wide problem rather than one bad order type.
         # That distinction is what 2026-10-07 could not make.
         ex = pe["exit"] or {}
+        mech_name, mech_api, _ = X.mechanism_label(prot.get("mechanism"))
         breaker.halt("OPEN_UNPROTECTED",
-                     f"{symbol}: OPEN with no stop — the OCO GTT failed "
+                     f"{symbol}: OPEN with no stop — the {mech_name} failed "
                      f"({prot.get('reason')}) AND the fallback limit exit "
                      f"failed ({ex.get('reason')})")
         _alert("OPEN AND UNPROTECTED",

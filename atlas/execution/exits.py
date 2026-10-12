@@ -173,6 +173,49 @@ FALLBACK_EXIT = "LIMIT_THROUGH"
 PRIMARY_STOP = PRIMARY_STOP_OVERNIGHT
 
 
+# ── NAMING THE MECHANISM THAT FAILED ─────────────────────────────
+#
+# WHY THIS EXISTS. The halt reason and the operator alert on a failed stop both
+# said "the OCO GTT would not place" regardless of which mechanism had actually
+# been tried. That was true when there was one; since the day-0/day-1 split
+# there are two, with different causes, and the first real failure would have
+# sent the operator to the wrong system:
+#
+#   SL_DAY0   a regular order on POST /orders. Fails on order-level rules --
+#             price bands, trigger range, series restrictions, margin.
+#   GTT_OCO   a resting instruction on POST /gtt/triggers. Fails on GTT rules
+#             -- the 500-pending cap, DDPI/TPIN authorisation, demat holdings.
+#
+# A diagnosis that names the wrong one costs the time it takes to rule it out,
+# and that time is spent while a position is unprotected.
+MECHANISM_LABELS = {
+    "SL_DAY0":       ("day-0 stop-loss order", "orders", "DAY0_SL_FAILED"),
+    "GTT_OCO":       ("overnight OCO GTT", "gtt", "GTT_FAILED"),
+    "GTT_STOP_ONLY": ("overnight stop-only GTT", "gtt", "GTT_FAILED"),
+    "GTT_SPLIT":     ("overnight GTT pair", "gtt", "GTT_FAILED"),
+    "SL_RETIRED":    ("retired SL path (should be unreachable)", "orders",
+                      "RETIRED_PATH_CALLED"),
+    "NONE":          ("no mechanism (refused before any order)", "none",
+                      "NO_MECHANISM"),
+}
+
+
+def mechanism_label(mechanism: str) -> tuple:
+    """(human name, api, halt kind) for whatever protect() reported.
+
+    UNKNOWN IS NAMED, NOT GUESSED. A mechanism string this does not recognise
+    returns the string itself rather than being mapped onto the nearest known
+    one -- an alert saying "GTT" about something that was not a GTT is the
+    defect being fixed, and silently defaulting would reintroduce it the next
+    time a mechanism is added.
+    """
+    m = str(mechanism or "").upper()
+    if m in MECHANISM_LABELS:
+        return MECHANISM_LABELS[m]
+    return (f"unrecognised mechanism {mechanism!r}", "unknown",
+            "STOP_FAILED_UNKNOWN_MECHANISM")
+
+
 def assert_independent(primary: str = None,
                        fallback: str = FALLBACK_EXIT) -> None:
     """Raise unless the two can fail for different reasons.

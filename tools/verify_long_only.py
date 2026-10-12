@@ -255,9 +255,18 @@ def section_gtt_failure_halts():
 
     # ── AND THE CALLER ACTUALLY HALTS ────────────────────────────
     print("\n  the caller acting on must_halt:")
-    breaker.halt("GTT_FAILED",
-                 "RELIANCE: the day-0 SL would not place (INJECTED). Position "
-                 "closed on a marketable LIMIT, mechanism is broken.")
+    # THE HALT KIND COMES FROM THE MECHANISM THAT FAILED, as the call site now
+    # derives it. The injected failure above is the DAY-0 SL, so this must halt
+    # under DAY0_SL_FAILED -- halting it as GTT_FAILED is what the alert used to
+    # do and is the thing being verified against.
+    _name, _api, _kind = X.mechanism_label(out["prot"].get("mechanism"))
+    print(f"  mechanism that failed: {out['prot'].get('mechanism')} "
+          f"-> \"{_name}\" on the {_api} api, halt kind {_kind}")
+    check("the halt kind names the day-0 SL, not a GTT",
+          _kind, "DAY0_SL_FAILED")
+    breaker.halt(_kind,
+                 f"RELIANCE: the {_name} would not place (INJECTED). Position "
+                 f"closed on a marketable LIMIT, mechanism is broken.")
     exists = tmp.exists()
     check("the halt file was written", exists, str(tmp))
     if exists:
@@ -278,8 +287,12 @@ def section_gtt_failure_halts():
     # would look identical from inside exits.py.
     ae = (ROOT / "atlas" / "execution" / "atlas_entry.py").read_text()
     check("atlas_entry halts on must_halt in the exited branch",
-          'if pe.get("must_halt"):' in ae and 'breaker.halt("GTT_FAILED"' in ae,
+          'if pe.get("must_halt"):' in ae and "breaker.halt(halt_kind," in ae,
           "the exited-but-unprotected-mechanism branch")
+    # A day-0 SL failure halting as GTT_FAILED sent the operator to the wrong
+    # system; the kind is derived now, so no fixed one may remain.
+    check("  under the kind of the mechanism that failed, not a fixed one",
+          'breaker.halt("GTT_FAILED"' not in ae)
     check("atlas_entry halts in the both-failed branch too",
           'breaker.halt("OPEN_UNPROTECTED"' in ae)
 

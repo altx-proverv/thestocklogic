@@ -418,8 +418,12 @@ def main() -> int:
     # break the suite on every deliberate flip, which trains whoever flips it to
     # edit the test -- and a test that gets edited to pass is not a test. The
     # value is printed so a run says plainly which mode is deployed.
-    check("  the early return exists when it is off",
-          "if not ENABLE_EXIT_MANAGEMENT:" in entry_src, True)
+    # The GATE, not an early return after the fill: with the flag off ATLAS used
+    # to enter and report ENTERED with no stop attempted. See
+    # test_exit_path_rebuild.py section 9 for the ordering and behaviour.
+    check("  it is a gate that refuses the entry when off",
+          "if not ENABLE_EXIT_MANAGEMENT:" in entry_src
+          and "SKIPPED_NO_EXIT_MANAGEMENT" in entry_src, True)
     print(f"  {'DEPLOYED: exit management is ' + ('ON' if ENABLE_EXIT_MANAGEMENT else 'OFF'):<54}"
           f"{'ATLAS places its own stops' if ENABLE_EXIT_MANAGEMENT else 'exits are manual'}")
     check("a stop is not optional when management is on",

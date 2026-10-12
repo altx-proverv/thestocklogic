@@ -566,6 +566,125 @@ def main() -> int:
 
     print()
     print("=" * 78)
+    print("8 — THE ALERT NAMES THE MECHANISM THAT FAILED")
+    print("-" * 78)
+    # protect_or_exit's branch 2 said "the OCO GTT would not place" and halted
+    # with kind GTT_FAILED, whatever had actually been tried. Since the day-0 /
+    # day-1 split the thing that fails AT FILL TIME is the day-0 SL on the
+    # ORDERS api; the GTT is placed hours later by preclose_gtt and fails for
+    # unrelated reasons (demat holdings, DDPI, the 500-GTT cap). An alert that
+    # names the wrong system costs the minutes it takes to rule that system
+    # out, and those minutes are spent holding an unprotected position.
+    check("the day-0 SL is named as itself",
+          X.mechanism_label("SL_DAY0")[0], "day-0 stop-loss order")
+    check("  and halts under its own kind",
+          X.mechanism_label("SL_DAY0")[2], "DAY0_SL_FAILED")
+    check("  on the orders api", X.mechanism_label("SL_DAY0")[1], "orders")
+    check("a GTT failure stays distinguishable",
+          X.mechanism_label("GTT_OCO")[2], "GTT_FAILED")
+    check("  which is NOT the day-0 kind",
+          X.mechanism_label("GTT_OCO")[2] != X.mechanism_label("SL_DAY0")[2],
+          True, "one halt kind for two causes is the defect being fixed")
+    # UNKNOWN IS NAMED, NOT GUESSED. Defaulting an unrecognised mechanism to
+    # the nearest known one is how the wrong name got into the alert in the
+    # first place, so a new mechanism added without a label must say so loudly
+    # rather than inherit "GTT".
+    unk = X.mechanism_label("MECHANISM_ADDED_LATER")
+    check("an unlabelled mechanism is not called a GTT",
+          "GTT" in unk[0] or unk[2] == "GTT_FAILED", False)
+    check("  it reports itself as unrecognised",
+          unk[2], "STOP_FAILED_UNKNOWN_MECHANISM")
+    check("  and quotes the string it was given",
+          "MECHANISM_ADDED_LATER" in unk[0], True)
+    check("every mechanism protect() can return has a label",
+          sorted(set(["SL_DAY0", "GTT_OCO", "GTT_SPLIT", "GTT_STOP_ONLY",
+                      "NONE"]) - set(X.MECHANISM_LABELS)), [])
+
+    entry_src_8 = (ROOT / "atlas/execution/atlas_entry.py").read_text(
+        encoding="utf-8")
+    check("the entry path no longer hardcodes a GTT halt kind",
+          'breaker.halt("GTT_FAILED"' in entry_src_8, False)
+    check("  nor the words 'the OCO GTT was refused'",
+          "the OCO GTT was refused" in entry_src_8, False)
+    check("  it asks exits which mechanism failed",
+          "X.mechanism_label(prot.get(\"mechanism\"))" in entry_src_8, True)
+    check("the refusal reports which mechanism it was",
+          '"mechanism_failed": prot.get("mechanism")' in entry_src_8, True)
+
+    print()
+    print("=" * 78)
+    print("9 — EXIT MANAGEMENT OFF REFUSES THE ENTRY; IT IS NOT AN ENTRY PATH")
+    print("-" * 78)
+    # ENABLE_EXIT_MANAGEMENT=False used to be checked BETWEEN await_fill and
+    # protect_or_exit: ATLAS placed the order, let it fill, logged a warning and
+    # returned status ENTERED with exit_managed=False. A live position, no stop,
+    # no halt, and a status that read the same as a protected entry to anything
+    # querying atlas_entry_log. The flag that removes all protection was an
+    # entry path. It is now a gate, ahead of the reservation.
+    from _srcutil import executable_source as _exsrc
+    entry_exec = _exsrc(ROOT / "atlas" / "execution" / "atlas_entry.py")
+    gate_at  = entry_exec.find("if not ENABLE_EXIT_MANAGEMENT:")
+    resv_at  = entry_exec.find("_reserve_intent(intent)")
+    place_at = entry_exec.find("order = place_order(")
+    fill_at  = entry_exec.find("await_fill(")
+    check("the flag is still read in the entry path", gate_at >= 0, True)
+    check("  it is checked BEFORE the intent is reserved",
+          0 <= gate_at < resv_at, True, f"gate {gate_at} < reserve {resv_at}")
+    check("  before any order is placed",
+          0 <= gate_at < place_at, True)
+    check("  and before the fill is awaited",
+          0 <= gate_at < fill_at, True, "it used to be checked after it")
+    # executable_source unparses the AST, so quotes come back normalised --
+    # match the unparsed form, not the form as typed in the file.
+    check("it has its own reason code",
+          "'status': 'SKIPPED_NO_EXIT_MANAGEMENT'" in entry_exec, True)
+    check("  and its own blocked_by bucket",
+          "'blocked_by': 'NO_EXIT_MANAGEMENT'" in entry_exec, True)
+    check("the log says entries are disabled, not that one entered",
+          "entries are disabled because exit" in entry_exec, True)
+    check("  and names the flag responsible",
+          "ENABLE_EXIT_MANAGEMENT is False" in entry_exec, True)
+    check("no path returns ENTERED with exit management off",
+          "'exit_managed': False" in entry_exec, False)
+
+    # BEHAVIOUR, NOT JUST SHAPE. The source checks above would pass a gate that
+    # sat in the right place and did nothing, so call it: flag off, unhalted,
+    # and every writing primitive replaced with something that raises. A refusal
+    # that reaches _reserve_intent or place_order fails here rather than in
+    # production.
+    import atlas.config as _cfg
+    from atlas.execution import atlas_entry as AE
+    from atlas.risk import breaker as _br
+
+    def _must_not_run(*a, **k):
+        raise AssertionError("the gate let execution through")
+
+    saved = (_cfg.ENABLE_EXIT_MANAGEMENT, AE.ENABLE_EXIT_MANAGEMENT
+             if hasattr(AE, "ENABLE_EXIT_MANAGEMENT") else None,
+             _br.is_halted, AE._reserve_intent, AE.place_order)
+    try:
+        _cfg.ENABLE_EXIT_MANAGEMENT = False
+        _br.is_halted = lambda *a, **k: (False, "")
+        AE._reserve_intent = _must_not_run
+        AE.place_order = _must_not_run
+        sig = {"symbol": "TESTSYM", "direction": "LONG", "entry_ref": 100.0,
+               "entry_low": 99.0, "entry_high": 101.0, "sl": 95.0}
+        got = AE.enter_trade(sig)
+    finally:
+        _cfg.ENABLE_EXIT_MANAGEMENT = saved[0]
+        _br.is_halted = saved[2]
+        AE._reserve_intent = saved[3]
+        AE.place_order = saved[4]
+
+    check("calling it with the flag off refuses",
+          got.get("status"), "SKIPPED_NO_EXIT_MANAGEMENT")
+    check("  no trade id was reserved", "trade_id" in got, False)
+    check("  it does not report a fill", got.get("filled_qty"), None)
+    check("  and the reason says why entries are off",
+          "exit management is off" in str(got.get("reason", "")), True)
+
+    print()
+    print("=" * 78)
     print("PASS" if OK else "FAIL")
     print("=" * 78)
     return 0 if OK else 1
