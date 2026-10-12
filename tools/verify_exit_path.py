@@ -236,13 +236,22 @@ def section_order_types():
         check("leg 0 is the stop, leg 1 the target",
               legs[0]["price"] < legs[1]["price"],
               f"stop {legs[0]['price']} / target {legs[1]['price']}")
-        check("the stop leg is priced AT the stop, not at the trigger",
-              legs[0]["price"] == 95.0,
-              f"{legs[0]['price']} — a gap through the trigger still works the "
-              f"order at the level structure defined")
-        check("the target is 2R from the actual fill",
-              legs[1]["price"] == 110.0,
-              f"{legs[1]['price']} — fill 100, stop 95, risk 5, 2R = 110")
+        # BOTH LEG LIMITS SIT BELOW THEIR OWN TRIGGER, because both legs are
+        # SELLs. This asserted the stop leg was priced AT the stop (95.0) with
+        # the trigger at 94.90 -- the limit ABOVE the trigger, which fires and
+        # then rests above the market unfilled. Zerodha: "Your order's LTP did
+        # not match the limit price you set... position your limit price more
+        # favorably (below trigger for sells)."
+        check("the stop leg's limit is BELOW its trigger",
+              legs[0]["price"] < tv[0],
+              f"limit {legs[0]['price']} < trigger {tv[0]} — a stop that "
+              f"triggers and does not fill is worse than no stop")
+        check("the target leg's limit is BELOW its trigger too",
+              legs[1]["price"] < tv[1],
+              f"limit {legs[1]['price']} < trigger {tv[1]}")
+        check("the target TRIGGER is 2R from the actual fill",
+              tv[1] == 110.0,
+              f"{tv[1]} — fill 100, stop 95, risk 5, 2R = 110")
         check("last_price is sent", bool(g.get("last_price")),
               str(g.get("last_price")))
 
@@ -369,14 +378,15 @@ def section_independence():
 
     # THREE DIFFERENT INJECTED FAILURES, because a fallback that only survives
     # one of them is not independent, it is lucky.
+    # ON FILL THE PRIMARY IS THE DAY-0 SL, so the injection goes on the SL
+    # order. The GTT path belongs to the pre-close job and is exercised in
+    # tools/verify_day0_and_trail.py against place_overnight_gtts.
     for label, kw in (
-        ("the broker refuses GTT placement outright",
-         dict(reject_gtt=True)),
-        ("the GTT is refused for a stated reason",
-         dict(reject_gtt=True,
+        ("the broker refuses the day-0 SL outright",
+         dict(reject_order_types=("SL",))),
+        ("the day-0 SL is refused for a stated reason",
+         dict(reject_order_types=("SL",),
               reject_reason="Trigger price is out of the permitted range")),
-        ("the account is at its 500-pending-GTT cap",
-         dict(gtt_pending=500)),
     ):
         k = RecordingKite(ltp=100.0, **kw)
         out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
@@ -394,9 +404,9 @@ def section_independence():
               f"exit: {(out['exit'] or {}).get('reason', 'placed')}")
         check(f"must_halt is set [{label}]", bool(out.get("must_halt")),
               "the protection mechanism is broken, so no further entries")
-        check(f"NO second GTT was attempted [{label}]", len(k.gtts) == 1,
-              f"{len(k.gtts)} attempt(s) — a retry on the refusing endpoint "
-              f"is not a fallback")
+        check(f"NO GTT was touched on the fill path [{label}]",
+              len(k.gtts) == 0,
+              f"{len(k.gtts)} — the GTT belongs to the pre-close job")
         if out["exited"]:
             fb = of(k, X.ORDER_SPECS[X.FALLBACK_EXIT]["order_type"])
             check(f"the completing order is a LIMIT on the orders API [{label}]",
@@ -405,8 +415,15 @@ def section_independence():
 
     # And the converse: the pair that failed on 7 Oct must not be constructible.
     print("\n  The 2026-10-07 pairs, offered to the independence contract:")
+    # SL + LIMIT_THROUGH IS NOW THE SHIPPING DAY-0 PAIR and is deliberately
+    # NOT in this list. The two share the orders endpoint, which was why the
+    # api axis refused them -- but they differ on order_type, trigger
+    # dependency, immediacy and market protection, so no RULE can reject both.
+    # What could take out both is the endpoint being down entirely, and that
+    # is reported as genuinely unprotected rather than engineered away. See
+    # assert_independent's docstring.
     for a, b in (("SLM", "SLM"), ("SLM", "MARKET"), ("MARKET", "MARKET"),
-                 ("SL", "SL"), ("SL", "LIMIT_THROUGH"),
+                 ("SL", "SL"), ("SL", "SLM"), ("MARKET", "LIMIT_THROUGH"),
                  ("GTT_OCO", "GTT_OCO")):
         try:
             X.assert_independent(a, b)
@@ -415,12 +432,19 @@ def section_independence():
         except AssertionError as e:
             print(f"    {a:7} + {b:7} refused — {e}")
             check(f"{a}+{b} is refused by assert_independent", True)
-    try:
-        X.assert_independent()
-        check("the SHIPPING pair passes assert_independent", True,
-              f"{X.PRIMARY_STOP} + {X.FALLBACK_EXIT}")
-    except AssertionError as e:
-        check("the SHIPPING pair passes assert_independent", False, str(e))
+    for prim in (X.PRIMARY_STOP_DAY0, X.PRIMARY_STOP_OVERNIGHT):
+        try:
+            X.assert_independent(prim)
+            sa = (X.ORDER_SPECS[prim]["api"]
+                  == X.ORDER_SPECS[X.FALLBACK_EXIT]["api"])
+            check(f"the SHIPPING pair {prim} + {X.FALLBACK_EXIT} passes", True,
+                  f"{X.ORDER_SPECS[prim]['api']} vs "
+                  f"{X.ORDER_SPECS[X.FALLBACK_EXIT]['api']} API"
+                  + ("  (SAME endpoint — differs on the other four axes; "
+                     "see the docstring)" if sa else ""))
+        except AssertionError as e:
+            check(f"the SHIPPING pair {prim} + {X.FALLBACK_EXIT} passes",
+                  False, str(e))
 
 
 # ══════════════════════════════════════════════════════════════════

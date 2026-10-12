@@ -151,46 +151,77 @@ ORDER_SPECS = {
                      "api": "orders", "product": "any"},
 }
 
-# What protects a position, and what is used when that fails.
+# WHAT PROTECTS A POSITION, IN TWO PHASES.
 #
-# THE OCO GTT IS THE MECHANISM THE OPERATOR ALREADY USES BY HAND AND TRUSTS.
-# That is the reason it is the primary, and it is a better reason than any
-# property of the API: it is the thing whose behaviour is actually known.
-PRIMARY_STOP = "GTT_OCO"
+# A GTT checks the DEMAT account and shares bought today reach demat at T+1, so
+# a GTT stop triggering on the purchase day can be rejected for want of
+# holdings even though the GTT was accepted. A regular SL order checks the
+# ORDER BOOK, which knows about today's buy. Different systems, different
+# requirements -- and that difference is the seam:
+#
+#   DAY 0            SL order, DAY validity, dies at the 16:00 flush
+#   PRE-CLOSE 15:20  the two GTTs are placed, and cannot fire today
+#   DAY 1 ONWARDS    the GTTs carry the position
+#
+# No window between them: the GTT is resting before the SL order expires.
+PRIMARY_STOP_DAY0 = "SL"
+PRIMARY_STOP_OVERNIGHT = "GTT_OCO"
 FALLBACK_EXIT = "LIMIT_THROUGH"
 
+# Kept as the name the rest of the codebase and the harnesses already use. It
+# means "the mechanism that carries the position", which is the GTT.
+PRIMARY_STOP = PRIMARY_STOP_OVERNIGHT
 
-def assert_independent(primary: str = PRIMARY_STOP,
+
+def assert_independent(primary: str = None,
                        fallback: str = FALLBACK_EXIT) -> None:
     """Raise unless the two can fail for different reasons.
 
-    THREE WAYS THEY MUST DIFFER, each of which was collapsed on 2026-10-07:
+    FOUR AXES ARE REQUIRED OF EVERY PAIR, each of which was collapsed on
+    2026-10-07:
 
       order_type          SL-M and MARKET are both market-type orders and the
-                          market-protection rule rejected both. Sharing the type
-                          is sharing the rejection.
-      trigger dependency  a resting trigger can be rejected, unaccepted or simply
-                          not fire. A fallback that also needs one inherits that.
-      immediacy           a fallback that rests is not a fallback: the position is
-                          already unprotected when it is called.
-      api endpoint        /gtt/triggers and /orders have separate rule sets,
-                          separate rejection reasons and separate failure modes.
-                          Two mechanisms on the SAME endpoint share whatever
-                          that endpoint refuses -- which is precisely how SL-M
-                          and MARKET turned two layers into one.
+                          market-protection rule rejected both. Sharing the
+                          type is sharing the rejection.
+      trigger dependency  a resting trigger can be rejected, unaccepted or
+                          simply not fire. A fallback that also needs one
+                          inherits that.
+      immediacy           a fallback that rests is not a fallback: the position
+                          is already unprotected when it is called.
+      market protection   the actual rule that did the damage. If both legs are
+                          subject to it, one rule takes out both.
+
+    AND A FIFTH, REQUIRED ONLY OF A GTT PRIMARY: a GTT fallback. Whatever makes
+    /gtt/triggers refuse a two-leg instruction will almost certainly refuse
+    another one a moment later, so a GTT may never be backed by a GTT.
+
+    THE DAY-0 PAIR SHARES AN ENDPOINT, AND THAT IS STATED RATHER THAN HIDDEN.
+    SL and LIMIT_THROUGH both go through POST /orders. They differ on the four
+    required axes -- resting vs immediate, trigger vs none, SL vs LIMIT,
+    neither subject to market protection -- so no RULE can reject both. What
+    could take out both is the orders endpoint being down entirely, and in that
+    case the position is genuinely unprotected and protect_or_exit reports
+    exactly that and halts. A broker-wide outage is not a failure this pair can
+    engineer away; pretending otherwise would be the real defect.
     """
+    primary = primary or PRIMARY_STOP
     a, b = ORDER_SPECS[primary], ORDER_SPECS[fallback]
-    if a.get("api") and a.get("api") == b.get("api"):
+    # A PRIMARY MUST REST. A stop waits for a price it hopes never comes; a
+    # mechanism that executes on placement is an EXIT, not protection. Without
+    # this, MARKET + LIMIT_THROUGH passes every other axis -- different type,
+    # no shared trigger, immediate fallback, only one market-protection order
+    # -- while being two ways of saying "sell it now" and no stop at all.
+    if a["immediate"]:
         raise AssertionError(
-            f"{primary} and {fallback} both go through the {a['api']} API; a "
-            f"fallback on the same endpoint inherits every rule that endpoint "
-            f"enforces, which is how SL-M and MARKET collapsed into one layer")
+            f"{primary} executes on placement, so it cannot be a stop. A "
+            f"primary must REST and wait for its trigger; something immediate "
+            f"is an exit.")
     if a["order_type"] == b["order_type"]:
         raise AssertionError(
             f"exit fallback shares an order_type with the primary "
-            f"({a['order_type']}). On 2026-10-07 SL-M and MARKET both failed the "
-            f"market-protection rule and the position sat unprotected for 68 "
-            f"minutes. The fallback must fail for a different reason.")
+            f"({a['order_type']}). On 2026-10-07 SL-M and MARKET both failed "
+            f"the market-protection rule and the position sat unprotected for "
+            f"68 minutes. The fallback must fail for a different reason.")
     if a["needs_trigger"] and b["needs_trigger"]:
         raise AssertionError(
             f"both {primary} and {fallback} depend on a trigger price; a "
@@ -201,11 +232,20 @@ def assert_independent(primary: str = PRIMARY_STOP,
             f"exactly the shared rejection of 2026-10-07")
     if not b["immediate"]:
         raise AssertionError(
-            f"{fallback} rests rather than executing; a fallback is called when "
-            f"the position is ALREADY unprotected and must not wait")
+            f"{fallback} rests rather than executing; a fallback is called "
+            f"when the position is ALREADY unprotected and must not wait")
+    if a.get("api") == "gtt" and b.get("api") == "gtt":
+        raise AssertionError(
+            f"{primary} and {fallback} both go through the GTT API; whatever "
+            f"makes /gtt/triggers refuse one instruction will refuse the next, "
+            f"which is how SL-M and MARKET collapsed into one layer")
 
 
-assert_independent()      # at import: a bad pair breaks the module, not a trade
+# BOTH PAIRS, AT IMPORT. A bad pair breaks the module, not a position -- and
+# both phases are checked, because day 0 and day 1 use different primaries and
+# only checking one would leave the other unverified.
+assert_independent(PRIMARY_STOP_DAY0)
+assert_independent(PRIMARY_STOP_OVERNIGHT)
 
 
 def stop_limit_price(trigger: float, direction: str) -> float:
@@ -234,6 +274,54 @@ def exit_limit_price(ltp: float, direction: str) -> float:
 def round_tick(p: float) -> float:
     """Round to the exchange tick. A price off-tick is rejected outright."""
     return round(round(float(p) / TICK) * TICK, 2)
+
+
+class StopWouldLoosen(ValueError):
+    """A stop update that widens the stop. Refused, always, everywhere."""
+
+
+def tighten_only(current: float, proposed: float, direction: str,
+                 label: str = "stop") -> float:
+    """The ONLY way a stop is allowed to change. -> the new stop, or raises.
+
+    STOPS MOVE UP ONLY (for a long). This is absolute: a stop must never be
+    moved down or widened, for any reason, under any condition.
+
+    A STRUCTURAL GUARD, NOT A CONVENTION, and the difference is the whole
+    point. "No code moves the stop down" is a property of today's code that the
+    next edit can remove without anyone noticing -- which is exactly the shape
+    of the 7 October failure, where the guarantee lived in another module's
+    behaviour rather than in a local check. This REFUSES. Every stop update in
+    the codebase goes through here, so loosening is not something a caller can
+    choose to do wrong; it is something they cannot express.
+
+    IT RAISES RATHER THAN RETURNING THE OLD VALUE. Silently keeping the old
+    stop would make a loosening attempt invisible -- the caller would believe
+    it had moved the stop and the log would show a successful trail. A raise
+    stops the operation and names it.
+
+    EQUAL IS ALLOWED and returns the current value: a trail that recomputes the
+    same level is a no-op, not an error, and raising on it would make the
+    nightly trail fail every time price did nothing.
+    """
+    d = str(direction).upper()
+    cur, new = float(current), float(proposed)
+    if d == "LONG":
+        if new < cur:
+            raise StopWouldLoosen(
+                f"refusing to move a LONG {label} DOWN: {cur} -> {new}. "
+                f"Stops move up only. A widened stop is a bigger loss "
+                f"accepted after the fact, which is the one thing this engine "
+                f"must never do.")
+        return round_tick(new) if new > cur else round_tick(cur)
+    # SHORT kept for symmetry. Shorts are disabled, not deleted, and a stop
+    # guard that only understood longs would be the wrong thing to find here
+    # if they are ever re-enabled.
+    if new > cur:
+        raise StopWouldLoosen(
+            f"refusing to move a SHORT {label} UP: {cur} -> {new}. "
+            f"Stops move toward the position only.")
+    return round_tick(new) if new < cur else round_tick(cur)
 
 
 def target_price(fill: float, stop: float, direction: str,
@@ -381,6 +469,36 @@ def protect(symbol: str, direction: str, qty: int, product: str,
     return _protect_cnc_gtt(symbol, d, qty, fill_price, stop_price, tgt, kite)
 
 
+def gtt_leg_limit(trigger: float, direction: str) -> float:
+    """The limit price for a GTT leg, placed BELOW its trigger for a sell.
+
+    THIS FIXES A STOP THAT WOULD TRIGGER AND NOT FILL. The first version of
+    the OCO priced the stop leg AT the stop while the trigger sat 0.1% inside
+    it -- trigger 94.90, limit 95.00. Both legs are SELLs, so that put the
+    limit ABOVE the trigger: price falls through 94.90, the GTT fires, and a
+    SELL LIMIT at 95.00 rests above the market until price comes back up.
+
+    Zerodha names this exact failure: "Your order's Last Traded Price (LTP)
+    did not match the limit price you set... position your limit price more
+    favorably (above trigger for buys, below trigger for sells)."
+    Confirmed 2026-10-13 against the GTT support documentation.
+
+    A STOP THAT TRIGGERS AND DOES NOT FILL IS WORSE THAN NO STOP, because the
+    position looks protected. The GTT shows as triggered, the order sits
+    unfilled, and nothing says the difference.
+
+    APPLIED TO BOTH LEGS. For the target leg this means selling a little below
+    the target trigger rather than exactly at it -- which fills at or above the
+    limit in practice, so the realised price is around the target. An
+    unfillable target is a missed exit; a marketable one is a slightly worse
+    price. The second is strictly better.
+    """
+    t = float(trigger)
+    if str(direction).upper() == "LONG":
+        return round_tick(t * (1 - STOP_LIMIT_SLIP_PCT))     # SELL, below
+    return round_tick(t * (1 + STOP_LIMIT_SLIP_PCT))         # BUY, above
+
+
 def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
     """ONE two-leg OCO GTT. Stop leg and target leg, either cancelling the other.
 
@@ -439,11 +557,11 @@ def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
     common = {"exchange": "NSE", "tradingsymbol": symbol,
               "transaction_type": side, "quantity": int(qty),
               "order_type": "LIMIT", "product": "CNC"}
-    # Each leg is a LIMIT placed when its trigger fires. The stop leg is priced
-    # AT the stop rather than at the trigger, so a gap through the trigger still
-    # works the order at the level structure defined.
-    orders = [{**common, "price": stop_px},          # pairs with trig
-              {**common, "price": tgt_px}]           # pairs with tgt_px
+    # EACH LEG'S LIMIT SITS BELOW ITS OWN TRIGGER, because both legs are SELLs.
+    # See gtt_leg_limit: pricing the stop leg AT the stop put the limit above
+    # the trigger and produced a stop that fires and never fills.
+    orders = [{**common, "price": gtt_leg_limit(trig, direction)},
+              {**common, "price": gtt_leg_limit(tgt_px, direction)}]
 
     try:
         gid = kite.place_gtt(trigger_type="two-leg", tradingsymbol=symbol,
@@ -501,6 +619,313 @@ def _protect_mis_sl(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
                       "only, and protected by a two-leg OCO GTT"}
 
 
+def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
+                 stop_price: float, kite=None) -> dict:
+    """DAY 0: a regular SL (stop-loss LIMIT) order. Not a GTT.
+
+    WHY NOT A GTT TODAY. A GTT checks the DEMAT account, and shares bought
+    today reach demat at T+1. A GTT stop triggering on the purchase day can be
+    rejected for want of holdings even though the GTT itself was accepted --
+    Zerodha: "If you do not have enough holdings of the specific stock in your
+    demat account, the exchange will reject your GTT order." That is a stop
+    that looks placed and is not.
+
+    A REGULAR SL ORDER CHECKS THE ORDER BOOK, which knows about today's buy.
+    Verified against the live broker rules 2026-10-13 before this was written:
+    delivery shares appear under Positions on the purchase day explicitly so
+    they can be traded before settlement, and "if your SL is triggered the same
+    day, your trade will be considered intraday" -- i.e. it works, and the
+    position simply becomes an intraday trade.
+
+    IT DIES AT THE CLOSE, BY DESIGN. "All pending orders are cancelled at the
+    end of the day" (equity: 16:00). The pre-close job places the GTTs at 15:20
+    while this order is still live, so the GTT is resting before this expires
+    and there is no window between them.
+
+    THE LIMIT SITS BELOW THE TRIGGER. Same reason as the GTT legs: a SELL limit
+    above its trigger rests above the market and does not fill.
+    """
+    if str(direction).upper() != "LONG":
+        return {"ok": False, "mechanism": "NONE", "legs": {},
+                "reason": f"ATLAS is long-only; refusing to protect a "
+                          f"{direction} position"}
+    if kite is None:
+        from atlas.execution.broker import get_kite
+        kite = get_kite()
+    if kite is None:
+        return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
+                "reason": "kite unavailable — cannot place the day-0 SL"}
+
+    trig = stop_trigger(stop_price, direction)
+    lim = gtt_leg_limit(trig, direction)
+    side = exit_side(direction)                      # SELL
+    try:
+        oid = kite.place_order(
+            variety="regular", exchange="NSE", tradingsymbol=symbol,
+            transaction_type=side, quantity=int(qty), product="CNC",
+            order_type=DAY0_STOP_ORDER_TYPE, trigger_price=trig, price=lim,
+            validity="DAY", tag="ATLAS_SL0")
+    except Exception as e:
+        log.error(f"{symbol}: day-0 SL REFUSED ({type(e).__name__}: {e})")
+        return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
+                "stop": round_tick(stop_price), "stop_trigger": trig,
+                "reason": f"day-0 SL failed: {type(e).__name__}: {e}"}
+    if not oid:
+        return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
+                "reason": "place_order returned no order_id"}
+
+    log.info(f"{symbol}: day-0 SL {oid} — trigger {trig} limit {lim}, "
+             f"{qty} {side} CNC, DAY validity")
+    return {"ok": True, "mechanism": "SL_DAY0",
+            "legs": {"day0_sl_order_id": oid},
+            "stop": round_tick(stop_price), "stop_trigger": trig,
+            "limit": lim, "target": None,
+            "reason": f"day-0 SL {oid} (trigger {trig} / limit {lim})"}
+
+
+def split_quantity(qty: int, oco_fraction: float = None,
+                   odd_to: str = None) -> tuple:
+    """(oco_qty, trailed_qty). The 50/50 split, with the odd share named.
+
+    THE ODD SHARE GOES TO THE TRAILED HALF, because that is the half whose
+    purpose is to run -- and because at qty=1 the alternative is a position
+    with a target and no trailing leg, which is the opposite of the intent.
+
+    AT qty=1 THERE IS NO OCO LEG AT ALL and the stop-only GTT carries the whole
+    position. That is a stated outcome, not an edge case: the caller must not
+    place a zero-quantity GTT, and place_overnight_gtts skips it.
+    """
+    from atlas.config import GTT_SPLIT_OCO_FRACTION, GTT_SPLIT_ODD_SHARE_TO
+    frac = GTT_SPLIT_OCO_FRACTION if oco_fraction is None else oco_fraction
+    odd = (GTT_SPLIT_ODD_SHARE_TO if odd_to is None else odd_to).lower()
+    q = int(qty)
+    if q <= 0:
+        return 0, 0
+    oco = int(q * frac)
+    trailed = q - oco
+    if odd != "trailed" and trailed > oco:
+        # The other convention, kept reachable so the choice is config and not
+        # a rewrite.
+        oco, trailed = trailed, oco
+    return oco, trailed
+
+
+def place_overnight_gtts(symbol: str, direction: str, qty: int,
+                         fill_price: float, stop_price: float,
+                         kite=None) -> dict:
+    """TWO GTTs for one position: an OCO on half, a stop-only GTT on half.
+
+    -> {"ok", "legs", "oco_qty", "trailed_qty", "stop", "target", "reason"}
+
+    WHY TWO AND NOT ONE OCO. An OCO forces a target to be named, which fights
+    "winners are held and trailed" (engine/zone_entry.py). The operator's rule
+    resolves it by doing both on the same position: half is booked at 2R, half
+    runs behind a trailing stop. Zerodha's cap is 500 pending GTTs per client,
+    so two per position is irrelevant -- it binds at 250 concurrent positions.
+
+    ok IS TRUE ONLY IF EVERY LEG THAT SHOULD EXIST DOES. A position half
+    protected is not protected: the caller treats a partial result as a failure
+    and exits, because deciding which half to leave naked is not a decision
+    this function is allowed to make.
+
+    THE STOP IS THE SAME PRICE ON BOTH. They diverge later -- the trailed half
+    moves up and the OCO half does not -- but they start together, so a
+    stop-out before the first trail exits the whole position at one level.
+    """
+    if str(direction).upper() != "LONG":
+        return {"ok": False, "legs": {},
+                "reason": f"ATLAS is long-only; refusing {direction}"}
+    if kite is None:
+        from atlas.execution.broker import get_kite
+        kite = get_kite()
+    if kite is None:
+        return {"ok": False, "legs": {}, "reason": "kite unavailable"}
+
+    oco_qty, trailed_qty = split_quantity(qty)
+    if oco_qty + trailed_qty != int(qty):
+        return {"ok": False, "legs": {},
+                "reason": f"split {oco_qty}+{trailed_qty} does not sum to "
+                          f"{qty}"}
+
+    legs, failures = {}, []
+    tgt = target_price(fill_price, stop_price, direction)
+
+    # ── the OCO half: stop + target ───────────────────────────────
+    if oco_qty > 0:
+        r = _protect_cnc_gtt(symbol, direction, oco_qty, fill_price,
+                             stop_price, tgt, kite)
+        if r.get("ok"):
+            legs["oco_trigger_id"] = (r.get("legs") or {}).get("oco_trigger_id")
+            legs["oco_qty"] = oco_qty
+        else:
+            failures.append(f"OCO half ({oco_qty}): {r.get('reason')}")
+    else:
+        log.info(f"{symbol}: qty {qty} leaves no OCO half; the stop-only GTT "
+                 f"carries the whole position")
+
+    # ── the trailed half: stop only, single-leg ───────────────────
+    if trailed_qty > 0:
+        r2 = _gtt_stop_only(symbol, direction, trailed_qty, fill_price,
+                            stop_price, kite)
+        if r2.get("ok"):
+            legs["trail_trigger_id"] = (r2.get("legs") or {}).get("stop_trigger_id")
+            legs["trail_qty"] = trailed_qty
+        else:
+            failures.append(f"trailed half ({trailed_qty}): {r2.get('reason')}")
+
+    ok = not failures
+    if not ok:
+        log.error(f"{symbol}: overnight GTTs INCOMPLETE — " + "; ".join(failures))
+    return {"ok": ok, "mechanism": "GTT_SPLIT", "legs": legs,
+            "oco_qty": oco_qty, "trailed_qty": trailed_qty,
+            "stop": round_tick(stop_price), "target": round_tick(tgt),
+            "reason": ("; ".join(failures) if failures else
+                       f"OCO {oco_qty} (stop {round_tick(stop_price)} / target "
+                       f"{round_tick(tgt)}) + trailed {trailed_qty} (stop "
+                       f"{round_tick(stop_price)})")}
+
+
+def _gtt_stop_only(symbol, direction, qty, fill, stop, kite=None) -> dict:
+    """A single-leg GTT: stop only, nothing to orphan, free to be trailed.
+
+    THIS IS THE HALF THAT RUNS. No target, so a winner is not capped -- the
+    stop follows it up instead, which is what "winners are held and trailed"
+    means in practice.
+    """
+    if kite is None:
+        from atlas.execution.broker import get_kite
+        kite = get_kite()
+    if kite is None:
+        return {"ok": False, "mechanism": "GTT_STOP_ONLY", "legs": {},
+                "reason": "kite unavailable"}
+    trig = round_tick(stop_trigger(stop, direction))
+    lim = gtt_leg_limit(trig, direction)
+    order = {"exchange": "NSE", "tradingsymbol": symbol,
+             "transaction_type": exit_side(direction), "quantity": int(qty),
+             "order_type": "LIMIT", "product": "CNC", "price": lim}
+    try:
+        sid = kite.place_gtt(trigger_type="single", tradingsymbol=symbol,
+                             exchange="NSE", trigger_values=[trig],
+                             last_price=round_tick(fill), orders=[order])
+        sid = sid.get("trigger_id") if isinstance(sid, dict) else sid
+    except Exception as e:
+        log.error(f"{symbol}: stop-only GTT REFUSED ({type(e).__name__}: {e})")
+        return {"ok": False, "mechanism": "GTT_STOP_ONLY", "legs": {},
+                "reason": f"stop-only GTT failed: {type(e).__name__}: {e}"}
+    if not sid:
+        return {"ok": False, "mechanism": "GTT_STOP_ONLY", "legs": {},
+                "reason": "place_gtt returned no trigger_id"}
+    log.info(f"{symbol}: stop-only GTT {sid} — trigger {trig} limit {lim}, "
+             f"{qty} CNC, trailed")
+    return {"ok": True, "mechanism": "GTT_STOP_ONLY",
+            "legs": {"stop_trigger_id": sid},
+            "stop": round_tick(stop), "stop_trigger": trig, "target": None,
+            "reason": f"stop-only GTT {sid} (trigger {trig})"}
+
+
+def next_stop(entry: float, current_stop: float, high_since_entry: float,
+              last_close: float, swing_low: float | None,
+              direction: str = "LONG") -> dict:
+    """Where the stop should be after today's close. -> {"stop", "why", "moved"}
+
+    THE RULE, and it is the operator's, verbatim:
+        price up 3% from entry  ->  move the stop to the entry price (breakeven)
+        thereafter              ->  trail to the most recent swing low as it forms
+        price falls through the stop -> the stop fires. The trade was wrong.
+
+    PURE. Takes numbers, returns a number. No broker, no clock, no database --
+    so the rule can be tested exhaustively and the nightly job is only
+    responsible for fetching the inputs and sending the modification.
+
+    EVERY RESULT GOES THROUGH tighten_only(), so this function CANNOT return a
+    looser stop even if the arithmetic above produced one. A swing low can form
+    BELOW the current stop in a pullback, and the honest answer is "keep the
+    stop where it is", not "follow the swing down".
+
+    MEASURED FROM THE HIGH SINCE ENTRY, not from the last close. A position
+    that ran 8% and came back to +1% has earned its breakeven stop; resetting
+    on the pullback would hand the gain back.
+    """
+    d = str(direction).upper()
+    from atlas.config import TRAIL_BREAKEVEN_AT_PCT
+    e, cur = float(entry), float(current_stop)
+    hi = float(high_since_entry)
+
+    # The default message is set per-case below rather than once here: a
+    # position already trailed to 103 is not "nothing has earned a move", and
+    # a log line that says so misleads the person reading it at 16:00.
+    proposed, why = cur, f"stop held at {cur}"
+
+    if d == "LONG":
+        gain = (hi / e - 1.0) if e else 0.0
+        if gain >= TRAIL_BREAKEVEN_AT_PCT:
+            # STAGE 1 -- breakeven. Earned once and never given back.
+            if e > proposed:
+                proposed, why = e, (f"high {hi} is +{gain*100:.1f}% from entry "
+                                    f"{e} (>= {TRAIL_BREAKEVEN_AT_PCT*100:.0f}%) "
+                                    f"-> stop to breakeven")
+            # STAGE 2 -- the swing low, but only ABOVE breakeven. A swing low
+            # below the entry is not a trail, it is a wider stop wearing a
+            # structural name.
+            if swing_low is not None and float(swing_low) > proposed:
+                proposed, why = (float(swing_low),
+                                 f"swing low {swing_low} is above the current "
+                                 f"stop -> trail up")
+            elif swing_low is not None and float(swing_low) <= cur:
+                why = (f"stop held at {cur}: swing low {swing_low} is at or "
+                       f"below it and is IGNORED — stops move up only")
+        elif swing_low is not None and float(swing_low) > cur:
+            why = (f"high {hi} is only +{gain*100:.1f}% from entry; breakeven "
+                   f"needs +{TRAIL_BREAKEVEN_AT_PCT*100:.0f}% — stop held at "
+                   f"{cur}")
+    else:
+        # Shorts are disabled, not deleted. Mirror the rule so the function is
+        # not silently long-only if they return.
+        gain = (1.0 - hi / e) if e else 0.0
+        if gain >= TRAIL_BREAKEVEN_AT_PCT and e < proposed:
+            proposed, why = e, "breakeven (short)"
+        if swing_low is not None and float(swing_low) < proposed:
+            proposed, why = float(swing_low), "trail down (short)"
+
+    # THE GUARD IS THE LAST THING THAT TOUCHES THE NUMBER. Anything above that
+    # produced a looser stop raises here rather than being sent to the broker.
+    final = tighten_only(cur, proposed, d, label="trailing stop")
+    return {"stop": final, "why": why, "moved": final != round_tick(cur)}
+
+
+def swing_low_since(bars, bars_width: int = None) -> float | None:
+    """The most recent CONFIRMED fractal swing low in `bars`. None if none.
+
+    bars: a sequence of dicts or objects with .low / ["low"], oldest first.
+
+    A 5-BAR FRACTAL CONFIRMS TWO SESSIONS AFTER IT FORMS, and that lag is real
+    rather than a defect -- a "swing low" declared on the day it printed is
+    just today's low, and it would be relabelled tomorrow. Same convention as
+    radar/levels.swing_pivots.
+    """
+    from atlas.config import TRAIL_SWING_FRACTAL_BARS
+    w = int(bars_width or TRAIL_SWING_FRACTAL_BARS)
+    half = w // 2
+    if half < 1 or bars is None or len(bars) < w:
+        return None
+
+    def low_of(b):
+        try:
+            return float(b["low"] if isinstance(b, dict) else b.low)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
+
+    lows = [low_of(b) for b in bars]
+    if any(v is None for v in lows):
+        return None
+    found = None
+    for i in range(half, len(lows) - half):
+        window = lows[i - half:i + half + 1]
+        if min(window) == lows[i] and window.index(min(window)) == half:
+            found = lows[i]          # keep walking; the LAST one wins
+    return round_tick(found) if found is not None else None
+
+
 def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
                     fill_price: float, stop_price: float, kite=None) -> dict:
     """The primary and its fallback, as ONE call. -> see keys below.
@@ -545,10 +970,17 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
     # BEFORE EITHER ORDER IS BUILT. A pair that shares a failure mode must break
     # here, where no position exists yet, rather than at the moment the fallback
     # is needed -- which is the one moment there is no time to notice.
-    assert_independent()
+    # BOTH PHASES CHECKED. This runs on fill, so the primary here is the DAY-0
+    # mechanism -- but the overnight pair is asserted too, because a GTT that
+    # cannot be paired safely must break the entry rather than be discovered at
+    # 15:20 with a position already open.
+    assert_independent(PRIMARY_STOP_DAY0)
+    assert_independent(PRIMARY_STOP_OVERNIGHT)
 
-    prot = protect(symbol=symbol, direction=direction, qty=qty, product=product,
-                   fill_price=fill_price, stop_price=stop_price, kite=kite)
+    # DAY 0 IS AN ORDER, NOT A GTT. The GTT is placed before the close by
+    # atlas/execution/preclose_gtt.py, while this order is still live.
+    prot = protect_day0(symbol=symbol, direction=direction, qty=qty,
+                        fill_price=fill_price, stop_price=stop_price, kite=kite)
     if prot.get("ok"):
         return {"protected": True, "exited": False, "unprotected": False,
                 "must_halt": False, "prot": prot, "exit": None,
@@ -565,12 +997,23 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
     # of protection that were one layer twice. What follows shares none of the
     # primary's three dependencies: no trigger price, no resting order, and no
     # market-protection requirement.
-    log.error(f"{symbol}: OCO GTT FAILED ({prot.get('reason')}) — exiting NOW "
-              f"with an immediate {ORDER_SPECS[FALLBACK_EXIT]['order_type']} "
-              f"through the book, on the "
-              f"{ORDER_SPECS[FALLBACK_EXIT]['api']} API rather than the "
-              f"{ORDER_SPECS[PRIMARY_STOP]['api']} API that just refused us. "
-              f"ATLAS will self-halt: the protection mechanism is not working.")
+    # NAMES THE ACTUAL PRIMARY. This said "rather than the gtt API that just
+    # refused us" regardless of which mechanism had failed -- wrong on day 0,
+    # where the primary is an SL on the orders API. A log line that misnames
+    # the thing that broke sends the next reader to the wrong place.
+    _p = ORDER_SPECS[PRIMARY_STOP_DAY0]
+    _f = ORDER_SPECS[FALLBACK_EXIT]
+    _same_api = _p["api"] == _f["api"]
+    log.error(
+        f"{symbol}: DAY-0 STOP FAILED ({prot.get('reason')}) — exiting NOW "
+        f"with an immediate {_f['order_type']} through the book. The "
+        f"{_p['order_type']} that refused us needed a trigger and rested; this "
+        f"needs neither"
+        + (f", though both go through the {_f['api']} API — see "
+           f"assert_independent" if _same_api else
+           f", and goes through the {_f['api']} API rather than "
+           f"{_p['api']}")
+        + ". ATLAS will self-halt: the protection mechanism is not working.")
     ex = emergency_exit(symbol, direction, qty, product,
                         why=f"stop placement failed: {prot.get('reason')}",
                         kite=kite)
@@ -805,6 +1248,7 @@ def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
 # twice without this line hearing about it. The segment cutoffs, the margin and
 # the resulting exit time now live in atlas/config.py with the date they were
 # verified, so there is one place to change and one place to read.
+from atlas.config import DAY0_STOP_ORDER_TYPE  # noqa: E402
 from atlas.config import (MIS_EXIT_HOUR, MIS_EXIT_MIN, MIS_EXIT_TIME,
                           MIS_BROKER_CUTOFF, MIS_EXIT_MARGIN_MIN)
 

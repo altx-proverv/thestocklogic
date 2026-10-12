@@ -279,114 +279,75 @@ def sentiment_state(ctx: dict) -> tuple:
 
 def allowed_side(ctx: dict) -> tuple:
     """
-    (side, reason, blocked_by) -- the ONE direction ATLAS may open right now, or
-    None for cash. side is "LONG", "SHORT" or None.
+    (side, reason, blocked_by) -- the ONE direction ATLAS may open now, or None.
 
-    THE MATRIX, and it is a matrix rather than a pair of independent tests
-    because regime and sentiment can disagree and the disagreement is itself an
-    answer:
+    LONGS ARE PERMITTED BY SENTIMENT ALONE. 2026-10-13, operator decision.
 
-        regime    sentiment   ->  side
-        bull      bullish         LONG     the ONLY tradeable state
-        everything else            cash
+        sentiment   ->  side
+        bullish         LONG
+        bearish         cash
+        mixed           cash
+        unknown         cash
 
-    STRICT_BULL_AND_BULLISH collapses the matrix to that one row. The previous
-    shape took bear+bearish as a SHORT and followed sentiment in a sideways
-    regime; both are gone -- shorts because they are off, sideways because the
-    rule says both conditions must hold and a sideways regime is not bullish.
+    REGIME IS NOT CONSULTED FOR A LONG, and that is the change. It was, and it
+    was DOUBLE-COUNTING: the nightly scoring stage already applies a regime
+    filter -- bear_regime_no_reversal disqualified 42,187 longs on 7 October --
+    so a signal reaching this function has already passed a regime test on the
+    full universe with the pipeline's own data.
 
-    ONE SIDE AT A TIME, never both. The matrix returns a single direction, so a
-    long and a short can never be opened on the same evaluation cycle. Positions
-    already held are NOT affected by a change here -- see the note in
-    enter_trade. This function only decides what may be OPENED.
+    AND THE COPY APPLIED HERE WAS THE BROKEN ONE. The entry-side regime gate
+    reads 361 symbols of 746, with breadth that has been inverted. A gate on
+    worse data, applied a second time to a population already filtered by the
+    better one, cannot add safety -- it can only subtract trades, which is what
+    it did: one tradeable state out of twenty.
 
-    Replaces the previous shape, where LONG required bull-and-bullish and SHORT
-    was unreachable by construction. Shorts are now reachable, which is why
-    ALLOW_SHORT_ENTRIES and the extreme-bearish requirement had to be revisited
-    rather than left as flags that happened to block.
+    NOT THE SAME AS REMOVING THE REGIME TEST. The nightly filter is untouched
+    and is still the regime authority. What is removed is the second, weaker
+    application of it at entry time. The regime gate's data source is a
+    separate job and is deliberately not touched here either.
+
+    SHORTS ARE STILL DISABLED AND THE PATH IS STILL PRESENT. A bearish reading
+    returns cash rather than naming a SHORT, because ALLOW_SHORT_ENTRIES is
+    False -- but the short branch below is kept, not deleted, so re-enabling
+    is a config change and not a rewrite.
+
+    ONE SIDE AT A TIME, never both. This function returns a single direction,
+    so a long and a short cannot be opened on the same evaluation cycle.
+    Positions already held are NOT affected by a change here -- see the note in
+    enter_trade. This decides only what may be OPENED.
     """
-    regime = str(ctx.get("regime", "unknown")).lower()
-    if regime not in ("bull", "bear", "sideways"):
-        return (None, f"regime {regime}/stale ({ctx.get('source','?')}) "
-                      f"-> {DEFAULT_ON_UNKNOWN_REGIME}", "REGIME")
-
     sent, sreason = sentiment_state(ctx)
+
     if sent == "unknown":
+        # AN UNREADABLE INPUT IS NEVER A SIDE. Unchanged, and the one place
+        # this function still fails closed on data quality.
         return None, sreason, "SENTIMENT"
     if sent == "mixed":
         return None, f"sentiment mixed: {sreason}", "SENTIMENT"
 
-    if regime == "bull" and sent == "bullish":
-        return "LONG", f"bull regime; {sreason}", None
+    if sent == "bullish":
+        if not ALLOW_LONG_ENTRIES:
+            return (None, "long entries are disabled (ALLOW_LONG_ENTRIES)",
+                    "CONFIG")
+        # REGIME IS REPORTED, NOT APPLIED. Worth carrying in the reason so
+        # atlas_entry_log records what the market looked like when the trade
+        # was taken -- a later question about whether regime should come back
+        # needs that history, and it cannot be reconstructed afterwards.
+        reg = str(ctx.get("regime", "unknown")).lower()
+        return ("LONG",
+                f"bullish sentiment; {sreason} [regime {reg}, reported not "
+                f"applied -- the nightly filter owns regime]", None)
 
-    # ── EVERYTHING BELOW HERE IS CASH UNDER THE STRICT RULE ───────
+    # ── BEARISH ───────────────────────────────────────────────────
     #
-    # "Trade only when regime AND sentiment are both bullish. Otherwise stay in
-    # cash. Strict, both must hold." Operator's rule, 2026-10-12.
-    #
-    # THE TWO BRANCHES THIS REPLACES, and why neither survives:
-    #
-    #   bear + bearish    -> SHORT. Shorts are off. The whole 7 October failure
-    #                        chain started here: short forced MIS, MIS forced
-    #                        SL-M, and Kite refuses SL-M via API.
-    #   sideways + either -> follow sentiment. This is the branch the rule
-    #                        names as missing, and the config comment above
-    #                        ALLOW_SHORT_IN_SIDEWAYS already DESCRIBED it as
-    #                        absent: "the entry gate now requires a bull regime
-    #                        ... AND positive sentiment ..., so sideways does
-    #                        not qualify". The comment was right; the code
-    #                        followed sentiment anyway. They agree now.
-    #
-    # WHAT THIS COSTS, stated rather than discovered later: the regime has been
-    # sideways throughout the live history, and sideways+bullish was the only
-    # branch that produced a long in that state. On this rule ATLAS takes zero
-    # trades over that period. That is the rule working, not a regression --
-    # and it is the same thing the config has claimed since the AND-gate note
-    # was written.
-    # blocked_by IS ATTRIBUTED PRECISELY, not collapsed to one label. It exists
-    # so "why did ATLAS sit out" can be COUNTED from atlas_entry_log without
-    # parsing prose, and three different states reach this line for three
-    # genuinely different reasons. Flattening them would make a long flat
-    # stretch unreadable -- "the trend is there and nobody is buying it" is not
-    # the same market as "there is no trend", and the split between them is the
-    # interesting number.
-    if STRICT_BULL_AND_BULLISH:
-        if (regime, sent) in (("bull", "bearish"), ("bear", "bullish")):
-            # Structure and participation point opposite ways. This was already
-            # cash before the strict rule and still is, for the same reason --
-            # so it keeps its own label rather than being absorbed.
-            return (None, f"{regime} regime against {sent} sentiment -- no "
-                          f"side ({sreason})", "CONFLICT")
-        if sent == "bearish":
-            # The side this state would have named is a SHORT, and shorts are
-            # off. Labelled for what actually excludes it.
-            return (None, f"{regime} regime with bearish sentiment would be a "
-                          f"SHORT; ATLAS is long-only ({sreason})",
-                    "LONG_ONLY")
-        # Bullish sentiment but the regime is not bull -- sideways, in practice.
-        # This is the branch the strict rule removes, and the only one whose
-        # exclusion is the strict rule itself.
-        return (None, f"{regime} regime with {sent} sentiment -- the rule is "
-                      f"bull AND bullish, strictly; cash otherwise ({sreason})",
-                "STRICT_RULE")
-
-    if regime == "bear" and sent == "bearish":
-        return "SHORT", f"bear regime; {sreason}", None
-    if regime == "sideways":
-        side = "LONG" if sent == "bullish" else "SHORT"
-        return side, f"sideways regime following {sent} sentiment; {sreason}", None
-
-    # bull+bearish or bear+bullish: structure and participation point opposite
-    # ways. Neither side is taken -- this is the case the AND-gate existed for.
-    #
-    # blocked_by is CONFLICT, not REGIME or SENTIMENT. Attributing a disagreement
-    # to either half would be arbitrary and would destroy the thing blocked_by
-    # exists for: counting WHY ATLAS sat out, from atlas_entry_log, without
-    # parsing prose. "The trend is there and nobody is buying it" is a distinct
-    # market state from "there is no trend", and over a long flat stretch the
-    # split between them is the interesting number.
-    return (None, f"{regime} regime against {sent} sentiment -- no side "
-                  f"({sreason})", "CONFLICT")
+    # The side this would name is a SHORT, and shorts are disabled. Kept as a
+    # branch rather than collapsed into the cash return above, so the reason
+    # the engine sat out is the real one and re-enabling shorts is a config
+    # change.
+    if not ALLOW_SHORT_ENTRIES:
+        return (None, f"bearish sentiment would be a SHORT; ATLAS is "
+                      f"long-only ({sreason})", "LONG_ONLY")
+    return "SHORT", f"bearish sentiment; {sreason}", None
 
 
 def regime_allows_side(ctx: dict, direction: str) -> tuple:

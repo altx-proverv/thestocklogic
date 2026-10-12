@@ -258,3 +258,24 @@ MAILTO=""
 # come back zero. Either alone can legitimately be zero on a quiet session;
 # both, across 706 symbols, means the write was rejected.
 50 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m radar.run_detection >> /home/ubuntu/thestocklogic/reports/radar.log 2>&1
+
+# ── ATLAS — THE PRE-CLOSE HANDOVER ─────────────────────────────────────────────
+#
+# 15:20 IST (09:50 UTC). Day-0 SL orders become resting GTTs, and the trail runs.
+# See docs/ATLAS_LONG_ONLY.md and atlas/execution/preclose_gtt.py.
+#
+# WHY THIS TIME AND NOT NEXT MORNING. A GTT checks the DEMAT account and shares
+# bought today reach demat at T+1, so day 0 is protected by a regular SL order,
+# which checks the ORDER BOOK. That SL has DAY validity and is flushed at 16:00
+# ("all pending orders are cancelled at the end of the day"). If the GTT went in
+# next morning the position would be naked overnight -- which is exactly when
+# gaps happen. At 15:20 the SL is still live and a GTT cannot fire today, so the
+# two overlap instead of leaving a window.
+#
+# ITS OWN ENTRY, NOT JOINED TO ANYTHING. A failure here means a position loses
+# its stop at 16:00, so the job halts ATLAS and alerts rather than failing
+# quietly -- and nothing else must be able to short-circuit it.
+#
+# THE TRAIL RUNS HERE TOO, once, after the close. No intraday churn: a stop that
+# moves on every tick is a stop that gets hit by noise.
+50 9 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.execution.preclose_gtt >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1

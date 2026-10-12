@@ -294,16 +294,38 @@ def main() -> int:
     print(f"  {'the by-direction composition is still logged':<52}"
           f"{'ok' if kept else '** LOST **'}")
 
-    # And the gate that DOES decide is unchanged and still refuses both sides
-    # outside a bull regime. This is the reason removing the filter is safe.
+    # WHERE THE REGIME BACKSTOP LIVES, AS OF 2026-10-13. This asserted that the
+    # ENTRY gate refuses a long in a bear regime, as the reason the publisher's
+    # direction filter could safely go. The entry gate no longer applies regime
+    # at all -- it was double-counting a test the NIGHTLY SCORING stage already
+    # does on the full universe with better data, and the entry-side copy was
+    # the broken one (361 symbols of 746, inverted breadth).
+    #
+    # So the backstop moved, and this now asserts the thing that actually holds
+    # it: engine/03b_score.py's bear_regime_no_reversal, which disqualified
+    # 42,187 longs on 7 October. Asserting a claim against the module that no
+    # longer makes it would be worse than not asserting it.
+    score_src = (ROOT / "engine" / "03b_score.py").read_text()
+    has_filter = ('g["bear_regime_no_reversal"]' in score_src
+                  and 'is_long' in score_src and 'regime == "bear"' in score_src)
+    ok &= has_filter
+    print(f"  {'the NIGHTLY regime filter disqualifies bear-regime longs':<52}"
+          f"{'ok' if has_filter else '** MISSING **'}")
+    listed = '"bear_regime_no_reversal"' in score_src
+    ok &= listed
+    print(f"  {'  and it is in the disqualifier list':<52}"
+          f"{'ok' if listed else '** NOT LISTED **'}")
+
+    # The ENTRY gate still refuses a SHORT, from any state. That is the half
+    # that did not move.
     from atlas.execution.atlas_entry import regime_allows_side
     bear = {"regime": "bear", "extreme_bearish": False, "source": "market.parquet",
             "advance_count": 1500, "decline_count": 500,
             "nifty_close": 21000, "nifty_20dma": 20500}
-    for side in ("LONG", "SHORT"):
+    for side in ("SHORT",):
         allowed, why, _ = regime_allows_side(bear, side)
         ok &= not allowed
-        print(f"  {'entry gate still refuses a ' + side + ' in a bear regime':<52}"
+        print(f"  {'entry gate still refuses a ' + side + ', from any state':<52}"
               f"{'ok' if not allowed else '** ALLOWED **'}")
 
     print("-" * 78)

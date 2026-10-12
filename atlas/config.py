@@ -327,6 +327,89 @@ ENTRY_ORDER_TYPE = "LIMIT"
 ENTRY_LIMIT_FILL_SECONDS = 20
 
 # ══════════════════════════════════════════════════════════════════
+# PROTECTION: DAY 0 IS AN ORDER, DAY 1 ONWARDS IS A GTT
+# ══════════════════════════════════════════════════════════════════
+#
+# THE SEAM THIS DESIGN USES. A GTT checks the DEMAT account; shares bought
+# today reach demat at T+1. A regular SL order checks the ORDER BOOK, which
+# knows about today's buy -- Zerodha shows delivery shares under Positions on
+# the purchase day precisely so they can be traded before settlement.
+#
+# VERIFIED AGAINST THE LIVE BROKER RULES, 2026-10-13, before any of this was
+# written:
+#
+#   "Shares you purchase for delivery using the CNC product type appear under
+#    positions on the same day... Showing delivery shares in positions on the
+#    purchase day allows you to participate in intraday trading."
+#
+#   "If your SL is triggered the same day, your trade will be considered
+#    intraday... however, you'll have to place a fresh SL order every day
+#    since all pending orders are cancelled at the end of the day."
+#
+#   End-of-session cancel, equity: 4:00 PM. "You can use AMO to place orders
+#    beyond market hours or GTT if you want the order to stay active for 365
+#    days."
+#
+# So: a day-0 SL order is accepted and works, and it dies at the close. The GTT
+# is placed BEFORE that close and takes over from the next open, with no window
+# between them.
+#
+# WHY NOT PLACE THE GTT NEXT MORNING. The position would be naked overnight,
+# which is exactly when gaps happen. A GTT placed near the close cannot fire
+# until the next session anyway, by which time the shares are credited -- so
+# placing it on day 0 costs nothing and closes the gap.
+DAY0_STOP_ORDER_TYPE = "SL"          # regular stop-loss LIMIT, not a GTT
+
+# When the pre-close job runs and converts day-0 SL orders into resting GTTs.
+# 15:20 IST: after the 15:12 CAS cutoff and the 15:15 close of continuous
+# trading for F&O-segment stocks, before the 15:30 close and well before the
+# 16:00 order-book flush. Late enough that a GTT placed now cannot fire today.
+PRECLOSE_GTT_TIME = "15:20"
+
+# ── THE 50/50 SPLIT ───────────────────────────────────────────────
+#
+# An OCO forces a target to be named, which fights "winners are held and
+# trailed" (engine/zone_entry.py). The operator's rule resolves it by doing
+# both on the same position:
+#
+#   half the quantity   OCO GTT, stop + target     booked at 2R
+#   half the quantity   single-leg GTT, stop only  trailed, runs
+#
+# Zerodha's cap is 500 pending GTTs per client, so two per position is
+# irrelevant -- 250 concurrent positions before it binds.
+GTT_SPLIT_OCO_FRACTION = 0.5
+
+# WHICH HALF GETS THE ODD SHARE. The trailed half, because that is the half
+# whose whole purpose is to run -- and because at qty=1 the alternative is a
+# position with a target and no trailing leg, which is the opposite of the
+# intent. At qty=1 there is no OCO leg at all and the single stop-only GTT
+# carries the position; that is a stated outcome, not an edge case.
+GTT_SPLIT_ODD_SHARE_TO = "trailed"
+
+# ── TRAILING: STOPS MOVE UP ONLY ──────────────────────────────────
+#
+# ABSOLUTE. A stop must never be moved down or widened, for any reason, under
+# any condition. exits.tighten_only() enforces it by REFUSING a loosening
+# update rather than by nobody writing one -- see the comment there for why a
+# structural guard and not a convention.
+#
+#   price up 3% from entry  ->  stop to the entry price (breakeven)
+#   thereafter              ->  trail to the most recent swing low as it forms
+#   price through the stop  ->  the stop fires. The trade was wrong.
+TRAIL_BREAKEVEN_AT_PCT = 0.03
+
+# Run ONCE after the close, updating the resting GTTs for the next session. No
+# intraday churn: a stop that moves on every tick is a stop that gets hit by
+# noise, and every modification is an API call that can fail halfway.
+TRAIL_RUN_ONCE_AFTER_CLOSE = True
+
+# Fractal width for the swing low the trail follows. Same convention as
+# radar/levels.py: a 5-bar fractal confirms two sessions after it forms, and
+# that lag is real rather than a defect -- a swing low declared on the day it
+# printed is just today's low.
+TRAIL_SWING_FRACTAL_BARS = 5
+
+# ══════════════════════════════════════════════════════════════════
 # THE HALT FILE — ONE CONSTANT, AND IT DEFAULTS TO THE REAL LOCATION
 # ══════════════════════════════════════════════════════════════════
 #

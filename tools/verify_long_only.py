@@ -100,8 +100,21 @@ def section_no_short():
         print(f"    {reg:<10}{sent:<11}{str(side):<7}{blk}")
     check(f"no state out of {len(states)} returns SHORT", not shorts,
           str(shorts) if shorts else "exhaustive over regime x sentiment")
-    check("exactly one state returns LONG", len(longs) == 1,
-          f"{longs} — bull AND bullish, strictly")
+    # FOUR, NOT ONE. Regime is no longer applied at entry -- the nightly
+    # scoring stage owns it, on the full universe with the pipeline's own data.
+    # Every bullish-sentiment state is a long whatever the regime says.
+    check("every LONG state has bullish sentiment, and only those",
+          longs and all(l[1] == "bullish" for l in longs), f"{longs}")
+    # THE REGIME COLUMN IS IRRELEVANT, and that IS the change. Every regime
+    # value tested -- including "garbage" -- permits a long when sentiment is
+    # bullish, because regime is not read here at all. The nightly scoring
+    # stage owns it.
+    regimes = {l[0] for l in longs}
+    check("EVERY regime value permits a long on bullish sentiment",
+          regimes == {"bull", "bear", "sideways", "unknown", "garbage"},
+          f"{sorted(regimes)} — regime is reported, not applied")
+    check("  and nothing but bullish sentiment produces one",
+          {l[1] for l in longs} == {"bullish"}, f"{sorted({l[1] for l in longs})}")
 
     # ── LAYER 2: the per-direction wrapper ──────────────────────
     print("\n  LAYER 2 — regime_allows_side(ctx, 'SHORT') for every state.")
@@ -185,8 +198,14 @@ def section_gtt_failure_halts():
           str(tmp) != C.HALT_FILE_CANONICAL, str(tmp))
     check("the scratch halt file starts absent", not tmp.exists())
 
-    class GTTRefusingKite:
-        """Accepts regular orders, refuses every GTT. The injected failure."""
+    class StopRefusingKite:
+        """Refuses the day-0 SL and every GTT; accepts a plain LIMIT.
+
+        BOTH PRIMARIES ARE REFUSED, because there are two phases now and the
+        halt must follow from either failing. The fallback -- a marketable
+        LIMIT -- is accepted, so what is being demonstrated is "the primary
+        broke, the position still left, and ATLAS stopped".
+        """
         def __init__(self, ltp=100.0):
             self.last_price = ltp
             self.orders = []
@@ -198,6 +217,8 @@ def section_gtt_failure_halts():
 
         def place_order(self, **kw):
             self.orders.append(kw)
+            if str(kw.get("order_type", "")).upper() == "SL":
+                raise RuntimeError("INJECTED: Zerodha refused the day-0 SL")
             return "ORD-1"
 
         def ltp(self, inst):
@@ -206,7 +227,7 @@ def section_gtt_failure_halts():
             return {i: {"last_price": self.last_price} for i in inst}
         quote = ltp
 
-    k = GTTRefusingKite()
+    k = StopRefusingKite()
     out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
                             product="CNC", fill_price=100.0, stop_price=95.0,
                             kite=k)
@@ -215,19 +236,19 @@ def section_gtt_failure_halts():
     print(f"  gtt attempts: {k.gtts}   orders sent: "
           f"{[(o.get('order_type'), o.get('transaction_type'), o.get('price')) for o in k.orders]}")
 
-    check("the GTT failed as injected", out["protected"] is False,
+    check("the DAY-0 STOP failed as injected", out["protected"] is False,
           str(out["prot"].get("reason"))[:70])
     check("THE POSITION WAS EXITED", out["exited"] is True,
           str((out["exit"] or {}).get("reason"))[:70])
-    check("  on the orders API, as a LIMIT",
-          [o.get("order_type") for o in k.orders] == ["LIMIT"],
+    check("  the SL was attempted, then a LIMIT completed it",
+          [o.get("order_type") for o in k.orders] == ["SL", "LIMIT"],
           str([o.get("order_type") for o in k.orders]))
+    lim = [o for o in k.orders if str(o.get("order_type")).upper() == "LIMIT"]
     check("  priced through the book (a sell below the last trade)",
-          bool(k.orders) and float(k.orders[0]["price"]) < k.last_price,
-          f"{k.orders[0]['price']} vs ltp {k.last_price}" if k.orders else "")
-    check("  and NO second GTT was attempted", k.gtts == 1,
-          f"{k.gtts} attempt(s) — a retry on the refusing endpoint is not a "
-          f"fallback")
+          bool(lim) and float(lim[0]["price"]) < k.last_price,
+          f"{lim[0]['price']} vs ltp {k.last_price}" if lim else "")
+    check("  and NO GTT was touched on the fill path", k.gtts == 0,
+          f"{k.gtts} — the GTT belongs to the pre-close job")
     check("must_halt is set even though the exit SUCCEEDED",
           out["must_halt"] is True,
           "the protection mechanism is broken, so no further entries")
@@ -235,7 +256,7 @@ def section_gtt_failure_halts():
     # ── AND THE CALLER ACTUALLY HALTS ────────────────────────────
     print("\n  the caller acting on must_halt:")
     breaker.halt("GTT_FAILED",
-                 "RELIANCE: the OCO GTT would not place (INJECTED). Position "
+                 "RELIANCE: the day-0 SL would not place (INJECTED). Position "
                  "closed on a marketable LIMIT, mechanism is broken.")
     exists = tmp.exists()
     check("the halt file was written", exists, str(tmp))

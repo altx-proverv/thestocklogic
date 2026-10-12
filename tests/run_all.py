@@ -76,6 +76,11 @@ SUITES = [
     # rather than run by hand: both are claims the operator asked to see held,
     # and a claim nothing re-checks is a claim that decays.
     ("long only",        [sys.executable, "-m", "tools.verify_long_only"]),
+    # The day-0/day-1 handover and the move-up-only stop guard. In the suite
+    # because both are claims the operator asked to see held, and the stop
+    # guard in particular is the one thing in the engine that must never
+    # regress quietly.
+    ("day0 and trail",   [sys.executable, "-m", "tools.verify_day0_and_trail"]),
     ("market flash",    [sys.executable, "tests/test_market_flash.py"]),
     ("meridian iv",     [sys.executable, "tests/test_meridian_iv.py"]),
     ("signal schema",   [sys.executable, "tests/test_signal_schema.py"]),

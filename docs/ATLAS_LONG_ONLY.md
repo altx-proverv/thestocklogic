@@ -1,11 +1,32 @@
 # ATLAS — long only, one mechanism
 
-**2026-10-12 · the simplification pass after 7 October**
+**2026-10-12, revised 2026-10-13 · the simplification passes after 7 October**
 
-> **THE RULE**
+> **THE RULE** · revised 2026-10-13
 >
-> Trade only when regime **AND** sentiment are both bullish. Otherwise stay in
-> cash. Strict, both must hold. That means **longs only**.
+> **Longs are permitted by SENTIMENT alone.** Regime is not read at entry — the
+> nightly scoring stage already filters on it, over the full universe, with the
+> pipeline's own data. Longs only; shorts stay disabled.
+
+> **WHY REGIME LEFT THE ENTRY GATE**
+>
+> It was **double-counting**. `engine/03b_score.py`'s
+> `bear_regime_no_reversal` disqualified **42,187 longs on 7 October**, so a
+> signal reaching `allowed_side()` has already passed a regime test. And the
+> entry-side copy was the broken one: it reads **361 symbols of 746**, with
+> breadth that has been inverted. A gate on worse data, applied a second time
+> to a population the better one already filtered, cannot add safety — it can
+> only subtract trades. It did: **one tradeable state out of twenty**.
+>
+> The nightly filter is untouched and remains the regime authority.
+> `tests/test_batch_and_report.py` now asserts the backstop *there*, which is
+> where it actually lives. The regime gate's data source is a separate job.
+>
+> | | Before | Now |
+> | --- | --- | --- |
+> | Tradeable states | 1 of 20 | **4 of 16** — every bullish-sentiment cell |
+> | Regime at entry | applied | **reported, not applied** |
+> | `blocked_by` labels | CONFLICT / LONG_ONLY / STRICT_RULE / SENTIMENT / REGIME | **LONG_ONLY / SENTIMENT** |
 
 ---
 
@@ -35,42 +56,167 @@ took a long. The comment was right and the code was wrong.
 
 ## 02 · What the trading path is now
 
-| | Before | Now |
-| --- | --- | --- |
-| Sides | LONG and SHORT, from a 4-branch matrix | **LONG only**, one cell of sixteen |
-| Product | CNC for longs, MIS for shorts | **CNC only** |
-| Entry | MARKET (+ `market_protection`) | **LIMIT at the live price** |
-| Stop | GTT for CNC, SL for MIS | **one two-leg OCO GTT** |
-| Target | off (`ALLOW_AUTOMATED_TARGET=False`) | **on — an OCO needs both legs** |
-| Fallback | marketable LIMIT | **marketable LIMIT, and now a self-halt** |
-| On GTT failure | halt only if the exit ALSO failed | **halt whenever the GTT failed** |
+| | 7 Oct | After 12 Oct | **Now (13 Oct)** |
+| --- | --- | --- | --- |
+| Sides | LONG and SHORT | LONG only, 1 of 20 states | **LONG only, 4 of 16** |
+| Entry permission | regime AND sentiment | regime AND sentiment, strictly | **sentiment alone** |
+| Product | CNC longs, MIS shorts | CNC only | CNC only |
+| Entry order | MARKET | LIMIT at the live price | LIMIT at the live price |
+| Day-0 stop | SL-M → rejected | one OCO GTT | **regular SL order** |
+| Day-1 stop | — | the same OCO GTT | **two GTTs: OCO + stop-only** |
+| Target | none | 2R on the whole position | **2R on half** |
+| Trailing | none | none | **breakeven at +3%, then swing lows** |
+| Fallback | MARKET — same rule, failed too | marketable LIMIT + self-halt | marketable LIMIT + self-halt |
 
-### The matrix, collapsed
+### The permission rule
 
 ```
-regime     sentiment   →  side
-bull       bullish        LONG          the only tradeable state
-everything else           cash
+sentiment   →  side
+bullish        LONG       regardless of regime
+bearish        cash       the side it names is a short
+mixed          cash       breadth and the index disagree
+unknown        cash       an unreadable input is never a side
 ```
 
-`blocked_by` is still **attributed precisely**, because it exists to be counted
-from `atlas_entry_log` without parsing prose:
+`blocked_by` is still **attributed**, because it exists to be counted from
+`atlas_entry_log` without parsing prose — but there are two labels now, not
+five, and that is a consequence of the rule rather than a loss:
 
 | State | `blocked_by` | Meaning |
 | --- | --- | --- |
-| bull + bullish | — | the one trade |
-| bull + bearish, bear + bullish | `CONFLICT` | structure and participation disagree |
-| bear/sideways + bearish | `LONG_ONLY` | the side it names is a short |
-| sideways + bullish | `STRICT_RULE` | the branch the strict rule removes |
-| any + mixed/unknown | `SENTIMENT` | an unreadable input is never a side |
-| unknown regime | `REGIME` | |
+| any regime + bullish | — | the trade |
+| any regime + bearish | `LONG_ONLY` | the side it names is a short |
+| any + mixed / unknown | `SENTIMENT` | the reading is unusable |
 
-### The cost, stated
+`CONFLICT` is gone. It meant *"structure and participation disagree"* and was
+only meaningful while both were applied here; with regime reported and not
+applied, a bull regime with bearish breadth is simply bearish sentiment.
+`STRICT_RULE` and `REGIME` are gone for the same reason.
 
-The regime has been **sideways throughout the live history**, and
-sideways + bullish was the only branch that produced a long in that state. On
-this rule ATLAS takes **zero trades** over that period. That is the rule
-working, not a regression.
+### What this costs, and what it buys
+
+The previous rule took **zero trades** over the live history, because the regime
+has been sideways throughout and the strict AND required bull. On sentiment
+alone, a sideways-but-bullish market is tradeable — which is the state the
+strategy was designed for and the one it had been locked out of by a gate
+reading 361 of 746 symbols.
+
+---
+
+## 02b · Protection: day 0 is an order, day 1 onwards is a GTT
+
+**The seam.** A GTT checks the **demat** account; shares bought today reach
+demat at T+1. A regular SL order checks the **order book**, which knows about
+today's buy. Different systems, different requirements.
+
+```
+09:20–15:20   day-0 SL order resting        (order book)
+15:20         both GTTs placed              (overlap — the SL is still live)
+16:00         the SL order is flushed
+next open     the GTTs carry the position   (demat)
+```
+
+**Verified against the live broker rules before any of this was written**
+(2026-10-13):
+
+> *"Shares you purchase for delivery using the CNC product type appear under
+> positions on the same day… Showing delivery shares in positions on the
+> purchase day allows you to participate in intraday trading."*
+
+> *"If your SL is triggered the same day, your trade will be considered
+> intraday… however, you'll have to place a fresh SL order every day since all
+> pending orders are cancelled at the end of the day."*
+
+> *"Unmatched pending orders are automatically cancelled when the market
+> closes."* — equity, 4:00 PM.
+
+So a SELL SL on a same-day CNC buy **is accepted**, it works, and it dies at
+the close. That is the day-0 mechanism and the reason it must hand over before
+the close rather than next morning — a GTT placed next morning leaves the
+position naked overnight, which is exactly when gaps happen. A GTT placed at
+15:20 cannot fire today, so the two overlap instead of leaving a window.
+
+### A defect this verification found in the GTT already shipped
+
+The stop leg was priced **at** the stop (95.00) with its trigger 0.1% inside it
+(94.90) — so for a SELL, the limit sat **above** the trigger. Price falls
+through 94.90, the GTT fires, and a SELL LIMIT at 95.00 rests above the market
+unfilled. Zerodha names it exactly:
+
+> *"Your order's Last Traded Price (LTP) did not match the limit price you
+> set… position your limit price more favorably (above trigger for buys, below
+> trigger for sells)."*
+
+**A stop that triggers and does not fill is worse than no stop, because the
+position looks protected.** `gtt_leg_limit()` now puts every SELL leg's limit
+below its own trigger, on both GTTs and on the day-0 SL.
+
+### The 50/50 split — two GTTs per position
+
+| Half | Instruction | Purpose |
+| --- | --- | --- |
+| half the quantity | **OCO GTT** — stop + target | booked at 2R |
+| half the quantity | **single-leg GTT** — stop only | trailed, runs |
+
+An OCO forces a target to be named, which fights *"winners are held and
+trailed."* Doing both on the same position resolves it. The 500-pending-GTT cap
+binds at 250 concurrent positions, so two per position is irrelevant.
+
+**The odd share goes to the trailed half** — that is the half whose purpose is
+to run, and at qty=1 the alternative is a position with a target and no
+trailing leg. At **qty=1 there is no OCO leg at all** and the stop-only GTT
+carries the position; a zero-quantity instruction is never sent.
+
+| qty | OCO | trailed |
+| --- | --- | --- |
+| 1 | 0 | 1 |
+| 2 | 1 | 1 |
+| 3 | 1 | 2 |
+| 45 | 22 | 23 |
+
+### Trailing — stops move up only. Absolute.
+
+```
+price up 3% from entry  →  stop to the entry price (breakeven)
+thereafter              →  trail to the most recent swing low as it forms
+price through the stop  →  the stop fires. The trade was wrong.
+```
+
+**`tighten_only()` REFUSES a loosening update.** It is a structural guard, not
+a convention: *"no code moves the stop down"* is a property of today's code
+that the next edit can remove without anyone noticing — which is the shape of
+the 7 October failure, where the guarantee lived in another module's behaviour
+rather than in a local check.
+
+It **raises** rather than returning the old value, because silently keeping the
+old stop would make a loosening attempt invisible: the caller would log a
+successful trail. Equal is allowed and is a no-op.
+
+Every stop change in the codebase passes through it, and `next_stop()` ends by
+calling it — so even if the arithmetic above produced a looser stop, it cannot
+reach the broker. A swing low forming **below** the current stop in a pullback
+is ignored, not followed down.
+
+Measured from the **high since entry**, not the last close: a position that ran
+8% and came back to +1% has earned its breakeven stop. Run **once** after the
+close by `atlas/execution/preclose_gtt.py` — no intraday churn, because a stop
+that moves on every tick is a stop that gets hit by noise.
+
+### ⚠ One precondition the engine cannot create for itself
+
+A sell GTT needs **DDPI (or POA)** on the account, or a CDSL TPIN authorisation
+that is valid for **one day** and must be redone every trading day after 7 AM:
+
+> *"You must authorise sell GTT orders on equity holdings using the CDSL TPIN,
+> unless you have submitted a POA or DDPI."*
+
+> *"If you have a non-POA/DDPI account, you must pre-authorise your GTT sell
+> order by entering the CDSL TPIN before the GTT is triggered to avoid
+> rejection."*
+
+**Without DDPI the overnight GTTs rest and are rejected at trigger, silently.**
+The preflight prints this and cannot test it. Confirm DDPI is active before
+relying on any of the overnight protection.
 
 ---
 
@@ -249,14 +395,16 @@ two-single-GTT shape, which is gone. One OCO has no sibling to orphan.
 
 ---
 
-## 07 · Not built: partial booking
+## 07 · Partial booking — BUILT, 2026-10-13
 
 > Hemal once described exiting 50% at target and trailing the rest with the
 > stop at breakeven — but that was said about **MERIDIAN**, and its status is
 > unclear.
 
-**Full-quantity stop and target are what shipped.** Both GTT legs are for the
-whole position.
+**RESOLVED 2026-10-13 — the 50/50 split is built.** See §02b. Half the quantity
+takes an OCO with a 2R target; half takes a stop-only GTT and is trailed. The
+tension below is what that resolves, and the note is kept because the reasoning
+is still the reasoning.
 
 The tension this leaves is real and worth naming: a fixed 2R target caps every
 winner at 2R, against the *"target = NONE. Winners are held and trailed"* line

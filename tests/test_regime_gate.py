@@ -70,36 +70,44 @@ def main() -> int:
     case("bull + breadth + above 20DMA", ctx(), "LONG", True, None)
     case("bull, breadth NEGATIVE", ctx(adv=700, dec=1300), "LONG", False, "SENTIMENT")
     case("bull, Nifty BELOW 20DMA", ctx(close=24000, ma20=24500), "LONG", False, "SENTIMENT")
-    # bull structure against bearish participation is a CONFLICT, not a sentiment
-    # failure: attributing a disagreement to one half would be arbitrary, and the
-    # split is what makes a long flat stretch legible.
-    case("bull structure vs bearish participation",
+    # CONFLICT IS GONE AS A LABEL, and that follows from the change rather than
+    # being a loss. "Structure and participation disagree" was only meaningful
+    # while BOTH were applied here. With regime reported and not applied, a
+    # bull regime with bearish breadth is simply bearish sentiment -- and the
+    # side that names is a short, so the label is LONG_ONLY.
+    case("bull structure vs bearish participation -> LONG_ONLY",
          ctx(adv=700, dec=1300, close=24000, ma20=24500),
-         "LONG", False, "CONFLICT")
-    # STRICT BULL AND BULLISH, 2026-10-12. This assertion has now been all three
-    # ways -- sideways is cash, sideways follows sentiment, sideways is cash --
-    # and the third is the operator's rule stated plainly: "trade only when
-    # regime AND sentiment are both bullish, otherwise stay in cash."
+         "LONG", False, "LONG_ONLY")
+    # SENTIMENT ALONE PERMITS A LONG, 2026-10-13. Regime is no longer applied
+    # at entry: the nightly scoring stage already filters on it over the full
+    # universe (bear_regime_no_reversal), and the entry-side copy was the
+    # broken one -- 361 symbols of 746, inverted breadth. Applying a worse
+    # version of the same test a second time could only subtract trades, and
+    # it did: one tradeable state out of twenty.
     #
-    # blocked_by DISTINGUISHES WHY, and that is the part worth asserting. A
-    # sideways-bullish state is cash because of the strict rule; a
-    # sideways-bearish or bear-bearish state is cash because the side it names
-    # is a SHORT and shorts are off. Collapsing both to one label would make a
-    # long flat stretch unreadable in atlas_entry_log.
-    case("SIDEWAYS + bullish -> cash (STRICT_RULE)", ctx(regime="sideways"),
-         "LONG", False, "STRICT_RULE")
-    case("SIDEWAYS + bearish -> cash (LONG_ONLY)",
-         ctx(regime="sideways", adv=700, dec=1300, close=24000),
-         "SHORT", False, "LONG_ONLY")
-    # bear structure with bullish participation is the mirror conflict, and it
-    # keeps its own label rather than being absorbed by the strict rule.
-    case("bear structure vs bullish participation", ctx(regime="bear"),
-         "LONG", False, "CONFLICT")
-    # the state that USED to be the only short, now excluded for being a short
-    case("bear + bearish -> cash (LONG_ONLY)",
-         ctx(regime="bear", adv=700, dec=1300, close=24000),
-         "SHORT", False, "LONG_ONLY")
-    case("unknown regime", ctx(regime="unknown"), "LONG", False, "REGIME")
+    # THIS ASSERTION HAS NOW BEEN FOUR WAYS and the churn is worth naming:
+    # sideways is cash, sideways follows sentiment, strict bull-AND-bullish,
+    # and now sentiment-only. Each time the TEST was changed to match the code.
+    # What makes this one different is that the regime test did not disappear
+    # -- it moved to where the good data is, and tests/test_batch_and_report.py
+    # asserts it there.
+    case("SIDEWAYS + bullish -> LONG (regime not applied)",
+         ctx(regime="sideways"), "LONG", True, None)
+    case("BEAR + bullish -> LONG (the nightly filter owns regime)",
+         ctx(regime="bear"), "LONG", True, None)
+    case("UNKNOWN regime + bullish -> LONG",
+         ctx(regime="unknown"), "LONG", True, None)
+    # Bearish sentiment is cash whatever the regime, because the side it names
+    # is a SHORT and shorts are disabled.
+    for reg in ("bull", "bear", "sideways"):
+        case(f"{reg.upper()} + bearish -> cash (LONG_ONLY)",
+             ctx(regime=reg, adv=700, dec=1300, close=24000),
+             "SHORT", False, "LONG_ONLY")
+    # AN UNKNOWN REGIME NO LONGER BLOCKS A LONG. It cannot: regime is not read
+    # at entry. The nightly filter is what sees the regime, and it sees it on
+    # the pipeline's own data rather than on the 361-of-746 entry-side copy.
+    case("unknown regime + bullish -> LONG", ctx(regime="unknown"),
+         "LONG", True, None)
 
     for label, got, blocked, good, reason in rows:
         print(f"  {label:<34}{'ENTER' if got else 'cash':<7}{blocked:<11}"
@@ -109,14 +117,20 @@ def main() -> int:
     print()
     print("NEITHER INPUT DECIDES ALONE")
     print("-" * 92)
-    # This asserted a plain AND, with "regime fails" represented by SIDEWAYS.
-    # Sideways is a valid cell now -- it follows sentiment -- so the property has
-    # to be restated: each input can still veto on its own, and an UNREADABLE one
-    # always does. A missing half is never carried by the half that is present.
+    # RESTATED AGAIN, 2026-10-13. This has asserted a plain AND, then "each
+    # input can veto on its own". Neither is the rule now: there is ONE input
+    # for a long, and the property that survives is the one that actually
+    # matters -- SENTIMENT MUST BE READABLE AND BULLISH, and an unreadable or
+    # half-formed reading is never carried by the half that is present.
+    #
+    # Regime is deliberately NOT in this list any more. An unknown regime
+    # permitting a long is the intended behaviour, and asserting otherwise
+    # would be asserting the double-counting that was removed.
     for label, c in (
             ("bull regime, mixed sentiment", ctx(adv=700, dec=1300)),
             ("bull regime, bearish sentiment", ctx(adv=700, dec=1300, close=24000)),
-            ("bullish breadth, regime unknown", ctx(regime="unknown")),
+            ("breadth up but index down = mixed",
+             ctx(adv=1200, dec=800, close=24000, ma20=24500)),
             ("bull regime, sentiment unreadable",
              ctx(adv=None, dec=None, close=None, ma20=None)),
             ("sideways, sentiment unreadable",
@@ -154,25 +168,28 @@ def main() -> int:
     print()
     print("THE SPLIT IS COUNTABLE, NOT JUST READABLE")
     print("-" * 92)
-    # THREE reasons to sit out now, and they must stay distinguishable in
-    # atlas_entry_log.status: no side from the structure, participation unclear or
-    # unreadable, and the two pointing opposite ways. Over a long flat stretch the
-    # split between the last two is the interesting number -- "the trend is there
-    # and nobody is buying it" is not "there is no trend".
-    _, _, b_regime = regime_allows_side(ctx(regime="unknown"), "LONG")
-    _, _, b_sent   = regime_allows_side(
+    # TWO reasons to sit out now, down from three, and they must stay
+    # distinguishable in atlas_entry_log.status: the sentiment reading is
+    # unusable, or it is usable and bearish. CONFLICT is gone because it was
+    # only meaningful while regime and sentiment were both applied here -- see
+    # the note on the bull-vs-bearish case above.
+    #
+    # The split still matters over a long flat stretch: "we could not read the
+    # market" and "we read it and stood aside" are different facts, and only
+    # the second is the strategy working.
+    _, _, b_sent = regime_allows_side(
         ctx(adv=None, dec=None, close=None, ma20=None), "LONG")
-    # close must drop below the 20DMA too, or this is MIXED rather than bearish --
-    # breadth alone is not a bearish reading, which is the point of three values.
-    _, _, b_conf   = regime_allows_side(ctx(adv=700, dec=1300, close=24000), "LONG")
-    got = (b_regime, b_sent, b_conf)
-    distinct = got == ("REGIME", "SENTIMENT", "CONFLICT") and len(set(got)) == 3
+    _, _, b_mixed = regime_allows_side(
+        ctx(adv=1200, dec=800, close=24000, ma20=24500), "LONG")
+    _, _, b_bear = regime_allows_side(ctx(adv=700, dec=1300, close=24000), "LONG")
+    got = (b_sent, b_mixed, b_bear)
+    distinct = got == ("SENTIMENT", "SENTIMENT", "LONG_ONLY")
     ok &= distinct
-    for lbl, b in (("regime gives no side", b_regime),
-                   ("sentiment unreadable", b_sent),
-                   ("the two disagree", b_conf)):
+    for lbl, b in (("sentiment unreadable", b_sent),
+                   ("sentiment mixed", b_mixed),
+                   ("sentiment bearish (a short)", b_bear)):
         print(f"  {lbl:<34}-> SKIPPED_{b}")
-    print(f"  {'three distinct statuses:':<44}"
+    print(f"  {'statuses are (SENTIMENT, SENTIMENT, LONG_ONLY):':<44}"
           f"{'ok' if distinct else '** COLLAPSED **'}")
 
     # build_market owns `bull`; the gate trusts it. Pin them together so a
@@ -237,15 +254,19 @@ def main() -> int:
     # ONE TRADEABLE CELL OUT OF SIXTEEN. That is what "strict, both must hold"
     # means, and seeing it as a table is the clearest statement of the rule
     # anywhere in the codebase.
+    # SENTIMENT IS THE ONLY COLUMN THAT MATTERS NOW. Every bullish row is a
+    # LONG whatever the regime; everything else is cash. Seeing it as a table
+    # is the clearest statement of the rule anywhere in the codebase -- and
+    # the regime column being irrelevant is the change, made visible.
     MATRIX = {
-        ("bull", "bullish"): "LONG",   ("bull", "bearish"): None,
-        ("bull", "mixed"):   None,     ("bull", "unknown"): None,
-        ("bear", "bullish"): None,     ("bear", "bearish"): None,
-        ("bear", "mixed"):   None,     ("bear", "unknown"): None,
-        ("sideways", "bullish"): None, ("sideways", "bearish"): None,
-        ("sideways", "mixed"):   None, ("sideways", "unknown"): None,
-        ("unknown", "bullish"): None,  ("unknown", "bearish"): None,
-        ("unknown", "mixed"):   None,  ("unknown", "unknown"): None,
+        ("bull", "bullish"): "LONG",     ("bull", "bearish"): None,
+        ("bull", "mixed"):   None,       ("bull", "unknown"): None,
+        ("bear", "bullish"): "LONG",     ("bear", "bearish"): None,
+        ("bear", "mixed"):   None,       ("bear", "unknown"): None,
+        ("sideways", "bullish"): "LONG", ("sideways", "bearish"): None,
+        ("sideways", "mixed"):   None,   ("sideways", "unknown"): None,
+        ("unknown", "bullish"): "LONG",  ("unknown", "bearish"): None,
+        ("unknown", "mixed"):   None,    ("unknown", "unknown"): None,
     }
     bad = []
     for (regime, sent), want in MATRIX.items():
@@ -269,22 +290,27 @@ def main() -> int:
 
     # THE ONE cell that takes a side, named individually so a policy change
     # cannot pass by editing the table above alone.
-    got = allowed_side(mctx("bull", "bullish"))[0]
-    ok &= got == "LONG"
-    print(f"  {'bull + bullish -> LONG (the only tradeable cell)':<58}"
-          f"{'ok' if got == 'LONG' else '** ' + str(got) + ' **'}")
+    longs = [k for k in MATRIX if allowed_side(mctx(*k))[0] == "LONG"]
+    ok &= len(longs) == 4
+    print(f"  {'every bullish-sentiment cell returns LONG (4 of 16)':<58}"
+          f"{'ok' if len(longs) == 4 else '** ' + str(len(longs)) + ' **'}")
+    only_bullish = all(k[1] == "bullish" for k in longs)
+    ok &= only_bullish
+    print(f"  {'  and ONLY the bullish ones':<58}"
+          f"{'ok' if only_bullish else '** ' + str(longs) + ' **'}")
     # AND NO CELL ANYWHERE RETURNS A SHORT.
     shorty = [k for k in MATRIX if allowed_side(mctx(*k))[0] == "SHORT"]
     ok &= not shorty
     print(f"  {'no cell in the matrix returns SHORT':<58}"
           f"{'ok' if not shorty else '** ' + str(shorty) + ' **'}")
 
-    # a disagreement is its own countable status, not attributed to either half
-    for regime, sent in (("bull", "bearish"), ("bear", "bullish")):
+    # bearish sentiment is LONG_ONLY from any regime -- the countable reason is
+    # "the side would be a short", not a disagreement between two gates.
+    for regime, sent in (("bull", "bearish"), ("bear", "bearish")):
         blk = allowed_side(mctx(regime, sent))[2]
-        good = blk == "CONFLICT"
+        good = blk == "LONG_ONLY"
         ok &= good
-        print(f"  {regime + ' vs ' + sent + ' is blocked_by CONFLICT':<58}"
+        print(f"  {regime + ' + ' + sent + ' is blocked_by LONG_ONLY':<58}"
               f"{'ok' if good else '** ' + str(blk) + ' **'}")
 
     # the master switches still override the matrix, checked before any market

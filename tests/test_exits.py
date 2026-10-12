@@ -278,14 +278,22 @@ def main() -> int:
     # And a FAILED GTT must be reported as needing a halt, which is the signal
     # the caller acts on. Checked here against protect_or_exit, since protect()
     # itself does not own that decision.
-    k2 = FakeKite(fail=("gtt",))
+    # protect_or_exit RUNS ON FILL, so its primary is the DAY-0 SL order, not
+    # the GTT. The GTT is placed before the close by preclose_gtt. Injecting on
+    # the GTT here would exercise nothing, which is what this test did for a
+    # moment after the day-0/day-1 split landed.
+    k2 = FakeKite(fail=("sl",))
     pe = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=45,
                            product="CNC", fill_price=100.0, stop_price=95.0,
                            kite=k2)
-    check("a failed GTT sets must_halt", pe["must_halt"], True,
+    check("a failed DAY-0 SL sets must_halt", pe["must_halt"], True,
           "a broken protection mechanism must stop further entries even when "
           "this position was closed cleanly")
     check("  and the position was exited", pe["exited"], True)
+    check("  the primary attempted was an SL, not a GTT",
+          [c[1]["order_type"] for c in k2.calls if c[0] == "place_order"],
+          ["SL", "LIMIT"],
+          "SL refused -> marketable LIMIT; no GTT is placed on fill")
 
     # THE FALLBACK IS A LIMIT PRICED THROUGH THE BOOK, NOT A MARKET ORDER.
     # On 2026-10-07 it was MARKET, and MARKET was refused by the same rule that

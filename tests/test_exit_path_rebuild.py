@@ -69,8 +69,9 @@ class StrictKite:
     """Refuses what Zerodha refuses. reject names order types to fail."""
 
     def __init__(self, ltp=1833.0, reject=(), reject_gtt=False,
-                 gtt_pending=0):
+                 gtt_pending=0, reject_reason=None):
         self.reject = {str(r).upper() for r in reject}
+        self.reject_reason = reject_reason
         self.orders = []
         self.gtts = []
         self.reject_gtt = reject_gtt
@@ -137,7 +138,7 @@ class StrictKite:
         if ot in ("SL", "LIMIT") and not kw.get("price"):
             raise RuntimeError(f"price is required for {ot}")
         if ot in self.reject:
-            raise RuntimeError(f"broker refusing {ot}")
+            raise RuntimeError(self.reject_reason or f"broker refusing {ot}")
         self.n += 1
         return str(9000 + self.n)
 
@@ -215,11 +216,20 @@ def main() -> int:
     check("  leg 0 is the stop, leg 1 the target",
           legs[0]["price"] < legs[1]["price"], True,
           f"stop {legs[0]['price']} / target {legs[1]['price']}")
-    check("  the stop leg is priced at the stop, not the trigger",
-          legs[0]["price"], 95.0,
-          "a gap through the trigger still works the order at the level "
-          "structure defined")
-    check("  the target is 2R from the ACTUAL fill", legs[1]["price"], 110.0,
+    # BOTH LEG LIMITS SIT BELOW THEIR OWN TRIGGER, because both legs are SELLs.
+    # This asserted the stop leg was priced AT the stop (95.0) with the trigger
+    # at 94.90 -- the limit ABOVE the trigger, which is a stop that fires and
+    # then rests above the market, unfilled. Zerodha names it: "Your order's
+    # LTP did not match the limit price you set... position your limit price
+    # more favorably (below trigger for sells)." A stop that triggers and does
+    # not fill is worse than no stop, because the position looks protected.
+    check("  the stop leg's limit is BELOW its trigger",
+          legs[0]["price"] < tv[0], True,
+          f"limit {legs[0]['price']} < trigger {tv[0]}")
+    check("  the target leg's limit is BELOW its trigger too",
+          legs[1]["price"] < tv[1], True,
+          f"limit {legs[1]['price']} < trigger {tv[1]}")
+    check("  the target TRIGGER is 2R from the actual fill", tv[1], 110.0,
           "fill 100, stop 95 -> risk 5 -> 2R = 110")
 
     # THE RETIRED PATHS REFUSE. Nothing routes a short or an MIS position
@@ -257,9 +267,15 @@ def main() -> int:
     # THE INJECTION IS NOW ON THE GTT ENDPOINT, which is the whole point: the
     # primary fails at /gtt/triggers and the fallback goes to /orders, so there
     # is no rule either of them shares.
+    # ON FILL THE PRIMARY IS THE DAY-0 SL, so the injection is on the SL order.
+    # The GTT path is exercised separately below against place_overnight_gtts,
+    # which is what the pre-close job calls. Injecting on the GTT here
+    # exercised nothing once the day-0/day-1 split landed.
     for kwargs, label in (
-        ({"reject_gtt": True}, "the broker refuses GTT placement"),
-        ({"gtt_pending": 500}, "the account is at its 500-GTT cap"),
+        ({"reject": ("SL",)}, "the broker refuses the day-0 SL"),
+        ({"reject": ("SL",),
+          "reject_reason": "Trigger price out of the permitted range"},
+         "the day-0 SL trigger is refused"),
     ):
         k3 = StrictKite(**kwargs)
         out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
@@ -268,17 +284,18 @@ def main() -> int:
         check(f"[{label}] the primary failed", out["protected"], False)
         check(f"[{label}] the FALLBACK completed", out["exited"], True,
               str((out["exit"] or {}).get("reason", ""))[:40])
-        check(f"[{label}] it completed with a LIMIT on the orders API",
-              types_sent(k3), ["LIMIT"])
-        check(f"[{label}] and NO second GTT was attempted", len(k3.gtts), 1,
-              "a retry on the refusing endpoint is not a fallback")
+        check(f"[{label}] it completed with a LIMIT", types_sent(k3),
+              ["SL", "LIMIT"])
+        check(f"[{label}] and NO GTT was placed on fill", len(k3.gtts), 0,
+              "the GTT belongs to the pre-close job; nothing on the fill path "
+              "touches /gtt/triggers")
         check(f"[{label}] must_halt is set", out.get("must_halt"), True,
               "a broken protection mechanism stops further entries even when "
               "this position closed cleanly")
 
     # AND THE CONVERSE: if the fallback's own family is refused, the result is
     # an honest "unprotected", not a silent success.
-    k4 = StrictKite(reject=("LIMIT",), reject_gtt=True)
+    k4 = StrictKite(reject=("SL", "LIMIT"))
     out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
                             product="CNC", fill_price=100.0, stop_price=95.0,
                             kite=k4)
