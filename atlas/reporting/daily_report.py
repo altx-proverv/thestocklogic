@@ -446,8 +446,14 @@ def build_report() -> str:
     else:
         stance = ("accumulation permitted" if ctx.get("allow_accumulation")
                   else "accumulation blocked")
+        # "hedge shorts open" WOULD NOW BE A FALSE CLAIM. Shorts are disabled
+        # (ALLOW_SHORT_ENTRIES=False, 2026-10-12) and refused at the broker, so
+        # an extreme-bear reading no longer opens anything. The condition is
+        # still worth reporting -- it is a much stronger statement than "bear
+        # regime" and it is the natural knob if shorts ever return -- but it is
+        # reported as a market reading, not as a stance ATLAS will act on.
         if ctx.get("extreme_bearish"):
-            stance += " · extreme bear (hedge shorts open)"
+            stance += " · extreme bear (long-only: no shorts taken)"
         regime_line = f"Regime: {regime} · {stance}"
 
     funds_line = (f"Broker funds: Rs{_inr(funds['available'])} available"

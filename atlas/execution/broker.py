@@ -237,6 +237,34 @@ def place_order(
     """
     from atlas.risk.kill_switch import check as kill_switch_check
 
+    # ── NO SHORT ENTRY CAN REACH THE BROKER ───────────────────────
+    #
+    # Longs only, by the operator's rule of 2026-10-12. ALLOW_SHORT_ENTRIES is
+    # checked in regime_allows_side before any market reading, and this is the
+    # second, independent guard -- at the bottom of the stack, where every
+    # entry order must pass whatever the caller believes.
+    #
+    # WHY A SECOND GUARD RATHER THAN TRUSTING THE FLAG. A config flag consulted
+    # by one branch is a convention, and this is the convention that broke on
+    # 7 October: shorts were reachable because the guarantee lived in another
+    # module's behaviour instead of in a local check. Same principle as the
+    # exit fallback.
+    #
+    # EXITS ARE NOT AFFECTED. An exit on a long IS a SELL, so this gates on
+    # intent rather than on transaction type -- blocking SELL outright would
+    # make it impossible to close a position, which is the failure mode the
+    # halt guard below is careful to avoid for the same reason.
+    if str(intent).upper() != "EXIT" and str(direction).upper() == "SHORT":
+        from atlas.config import ALLOW_SHORT_ENTRIES
+        if not ALLOW_SHORT_ENTRIES:
+            log.error(f"SHORT ENTRY REFUSED at the broker layer — longs only "
+                      f"(ALLOW_SHORT_ENTRIES is False). {qty} {symbol} was "
+                      f"not sent.")
+            return {"success": False,
+                    "reason": "short entries are disabled — ATLAS is long-only",
+                    "blocked_by": "long_only", "error_type": "LongOnly",
+                    "determinate": True}
+
     if str(intent).upper() != "EXIT":
         from atlas.risk import breaker
         _halted, _why = breaker.is_halted()

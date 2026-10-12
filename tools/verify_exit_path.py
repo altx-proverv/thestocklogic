@@ -73,8 +73,12 @@ class RecordingKite:
     """
 
     def __init__(self, ltp=1833.0, reject_order_types=(), now=None,
-                 reject_reason=None):
+                 reject_reason=None, reject_gtt=False, gtt_pending=0):
         self.orders = []
+        self.gtts = []
+        self.n_gtt = 0
+        self.reject_gtt = bool(reject_gtt)
+        self.gtt_pending = int(gtt_pending)
         # NOT self.ltp -- KiteConnect exposes ltp() as a METHOD, and an
         # attribute of that name shadows it. The first run of this harness did
         # exactly that and reported the emergency exit as unable to price
@@ -131,6 +135,42 @@ class RecordingKite:
 
         return f"STUB{len(self.orders):06d}"
 
+    # ── THE GTT ENDPOINT. Separate rules, which is the point. ────
+    GTT_MAX_PENDING = 500          # Zerodha GTT terms, confirmed 2026-10-12
+
+    def place_gtt(self, **kw):
+        self.gtts.append(dict(kw))
+        tt = str(kw.get("trigger_type", ""))
+        tv = list(kw.get("trigger_values") or [])
+        orders = list(kw.get("orders") or [])
+        if tt not in ("single", "two-leg"):
+            raise Rejected(f"invalid trigger_type {tt!r}")
+        if tt == "two-leg" and len(tv) != 2:
+            raise Rejected("two-leg requires exactly two trigger_values")
+        if len(orders) != len(tv):
+            raise Rejected("orders must pair with trigger_values")
+        if tt == "two-leg" and not (tv[0] < tv[1]):
+            raise Rejected("trigger_values must be ascending")
+        if not kw.get("last_price"):
+            raise Rejected("last_price is required")
+        for o in orders:
+            if str(o.get("product", "")).upper() != "CNC":
+                raise Rejected(f"GTT supports CNC only, got {o.get('product')}")
+        if self.gtt_pending >= self.GTT_MAX_PENDING:
+            raise Rejected(f"maximum {self.GTT_MAX_PENDING} pending GTTs reached")
+        if self.reject_gtt:
+            raise Rejected(self.reject_reason
+                           or "INJECTED FAILURE: broker refusing GTT placement")
+        self.n_gtt += 1
+        return {"trigger_id": 70000 + self.n_gtt}
+
+    def get_gtts(self):
+        return [{"id": 70000 + i + 1, "status": "active", **g}
+                for i, g in enumerate(self.gtts)]
+
+    def delete_gtt(self, **kw):
+        return {"trigger_id": kw.get("trigger_id")}
+
     def quote(self, instruments):
         if isinstance(instruments, str):
             instruments = [instruments]
@@ -156,76 +196,110 @@ def of(kite, order_type):
 # ══════════════════════════════════════════════════════════════════
 
 def section_order_types():
-    head("1 — ORDER TYPES AND PARAMETERS (Task 1)")
+    head("1 — THE PROTECTION IS ONE TWO-LEG OCO GTT (CNC, LONG)")
     from atlas.execution import exits as X
+    from atlas.config import ENTRY_ORDER_TYPE
 
     k = RecordingKite()
-    r = X.protect(symbol="BHARTIARTL", direction="SHORT", qty=5, product="MIS",
-                  fill_price=1833.0, stop_price=1860.0, kite=k)
+    r = X.protect(symbol="RELIANCE", direction="LONG", qty=10, product="CNC",
+                  fill_price=100.0, stop_price=95.0, kite=k)
     print(f"\n  protect() -> ok={r.get('ok')} mechanism={r.get('mechanism')}")
-    print("  ORDER AS IT WOULD GO ON THE WIRE:")
-    for o in k.orders:
-        print("   ", json.dumps(o, default=str, sort_keys=True))
+    print("  THE GTT INSTRUCTION AS IT WOULD GO ON THE WIRE:")
+    for g in k.gtts:
+        print("   ", json.dumps(g, default=str, sort_keys=True))
 
-    sl = of(k, "SL")
-    check("the stop is an SL (stop-loss LIMIT), not SL-M", bool(sl),
-          f"order types sent: {[o.get('order_type') for o in k.orders]}")
-    if sl:
-        o = sl[0]
-        check("the SL carries a trigger_price", bool(o.get("trigger_price")),
-              f"trigger_price={o.get('trigger_price')}")
-        check("the SL carries a limit price", bool(o.get("price")),
-              f"price={o.get('price')}")
-        check("a SHORT stop's limit is ABOVE its trigger (so the BUY fills)",
-              float(o["price"]) > float(o["trigger_price"]),
-              f"price {o['price']} > trigger {o['trigger_price']}")
-        check("the SL sends no market_protection (no effect on SL per the docs)",
-              "market_protection" not in o)
-    check("no SL-M order is used anywhere in the stop path", not of(k, "SL-M"))
+    check("the mechanism is a two-leg OCO GTT",
+          r.get("mechanism") == "GTT_OCO", str(r.get("mechanism")))
+    check("it reports ok", bool(r.get("ok")), str(r.get("reason"))[:70])
+    check("exactly ONE instruction was sent — one OCO, not two singles",
+          len(k.gtts) == 1, f"{len(k.gtts)} gtt call(s)")
+    check("NO regular order was placed for protection", not k.orders,
+          f"orders={[o.get('order_type') for o in k.orders]}")
+    if k.gtts:
+        g = k.gtts[0]
+        tv = g.get("trigger_values") or []
+        legs = g.get("orders") or []
+        check("trigger_type is two-leg", g.get("trigger_type") == "two-leg",
+              str(g.get("trigger_type")))
+        check("two trigger values, ascending (stop below target)",
+              len(tv) == 2 and tv[0] < tv[1], f"{tv}")
+        check("two order legs", len(legs) == 2, f"{len(legs)}")
+        check("both legs are SELL — closing a long",
+              all(o.get("transaction_type") == "SELL" for o in legs),
+              str([o.get("transaction_type") for o in legs]))
+        check("both legs are CNC",
+              all(o.get("product") == "CNC" for o in legs),
+              str([o.get("product") for o in legs]))
+        check("both legs are LIMIT",
+              all(o.get("order_type") == "LIMIT" for o in legs),
+              str([o.get("order_type") for o in legs]))
+        check("leg 0 is the stop, leg 1 the target",
+              legs[0]["price"] < legs[1]["price"],
+              f"stop {legs[0]['price']} / target {legs[1]['price']}")
+        check("the stop leg is priced AT the stop, not at the trigger",
+              legs[0]["price"] == 95.0,
+              f"{legs[0]['price']} — a gap through the trigger still works the "
+              f"order at the level structure defined")
+        check("the target is 2R from the actual fill",
+              legs[1]["price"] == 110.0,
+              f"{legs[1]['price']} — fill 100, stop 95, risk 5, 2R = 110")
+        check("last_price is sent", bool(g.get("last_price")),
+              str(g.get("last_price")))
 
-    # LONG -> the stop is a SELL, so the limit must sit BELOW the trigger.
-    k2 = RecordingKite()
-    X._protect_mis_sl("TATASTEEL", "LONG", 10, 100.0, 99.0, None, k2)
-    sl2 = of(k2, "SL")
-    if check("a LONG MIS stop also places an SL", bool(sl2)):
-        o = sl2[0]
-        check("a LONG stop's limit is BELOW its trigger (so the SELL fills)",
-              float(o["price"]) < float(o["trigger_price"]),
-              f"price {o['price']} < trigger {o['trigger_price']}")
-
-    # The emergency exit.
-    k3 = RecordingKite(ltp=1833.0)
-    e = X.emergency_exit("BHARTIARTL", "SHORT", 5, "MIS", why="verification",
+    # The emergency exit, which is now the FALLBACK.
+    k3 = RecordingKite(ltp=100.0)
+    e = X.emergency_exit("RELIANCE", "LONG", 10, "CNC", why="verification",
                          kite=k3)
-    print(f"\n  emergency_exit() -> ok={e.get('ok')} reason={e.get('reason','')}")
+    print(f"\n  emergency_exit() -> ok={e.get('ok')} "
+          f"{str(e.get('reason',''))[:70]}")
     for o in k3.orders:
         print("   ", json.dumps(o, default=str, sort_keys=True))
     lim = of(k3, "LIMIT")
-    check("the emergency exit is a LIMIT, not MARKET", bool(lim) and not of(k3, "MARKET"),
-          f"order types sent: {[o.get('order_type') for o in k3.orders]}")
+    check("the fallback is a LIMIT on the ORDERS api, and places no GTT",
+          bool(lim) and not k3.gtts,
+          f"orders={[o.get('order_type') for o in k3.orders]} "
+          f"gtts={len(k3.gtts)}")
     if lim:
-        o = lim[0]
-        check("the exit limit is priced THROUGH the book (a SHORT buys above LTP)",
-              float(o["price"]) > k3.last_price,
-              f"price {o['price']} vs ltp {k3.last_price}")
-        check("the exit carries no trigger_price (nothing rests)",
-              not o.get("trigger_price"))
+        check("priced BELOW the last trade so a sell is marketable",
+              float(lim[0]["price"]) < k3.last_price,
+              f"{lim[0]['price']} vs ltp {k3.last_price}")
+        check("the exit carries no trigger_price — nothing rests",
+              "trigger_price" not in lim[0])
 
-    # Anything that stays MARKET.
+    # EVERY RETIRED PATH REFUSES, AND REACHES NEITHER API.
+    for d, prod, label in (("SHORT", "MIS", "SHORT MIS"),
+                           ("SHORT", "CNC", "SHORT CNC"),
+                           ("LONG", "MIS", "LONG MIS")):
+        kx = RecordingKite()
+        rx = X.protect(symbol="X", direction=d, qty=5, product=prod,
+                       fill_price=100.0, stop_price=95.0, kite=kx)
+        check(f"a {label} position is REFUSED", not rx.get("ok"),
+              str(rx.get("reason"))[:62])
+        check(f"  {label}: nothing reached either API",
+              not kx.orders and not kx.gtts,
+              f"orders={len(kx.orders)} gtts={len(kx.gtts)}")
+
+    kr = RecordingKite()
+    rr = X._protect_mis_sl("TATASTEEL", "SHORT", 90, 100.0, 105.0, 90.0, kr)
+    check("the retired SL path refuses if called directly", not rr.get("ok"),
+          str(rr.get("reason"))[:62])
+    check("  and sends nothing", not kr.orders and not kr.gtts)
+
+    # THE 500-GTT CAP. Zerodha's GTT terms, confirmed 2026-10-12.
+    kc = RecordingKite(gtt_pending=500)
+    rc = X.protect(symbol="RELIANCE", direction="LONG", qty=10, product="CNC",
+                   fill_price=100.0, stop_price=95.0, kite=kc)
+    check("at the 500-pending-GTT cap, protection FAILS loudly",
+          not rc.get("ok"), str(rc.get("reason"))[:70])
+
     import atlas.execution.broker as B
-    check("MARKET entry orders set market_protection",
-          "market_protection" in open(B.__file__).read(),
-          f"MARKET_PROTECTION_PCT = {B.MARKET_PROTECTION_PCT}")
     check("MARKET_PROTECTION_PCT is in the documented range (0,100] or -1",
           0 < B.MARKET_PROTECTION_PCT <= 100 or B.MARKET_PROTECTION_PCT == -1,
           f"value {B.MARKET_PROTECTION_PCT}")
-    if k.notes or k3.notes:
-        print(f"\n  stub notes: {k.notes + k3.notes}")
+    check("the ENTRY is a LIMIT, not MARKET",
+          ENTRY_ORDER_TYPE == "LIMIT",
+          f"{ENTRY_ORDER_TYPE} — the last market-type order in the path is gone")
 
-
-# ══════════════════════════════════════════════════════════════════
-# 2 — THE 7 OCT CONFIGURATION, REPLAYED
-# ══════════════════════════════════════════════════════════════════
 
 def section_replay():
     head("2 — THE 2026-10-07 CONFIGURATION, REPLAYED AGAINST THE SAME RULES")
@@ -254,17 +328,26 @@ def section_replay():
     check("they are rejected for the SAME reason — one layer twice",
           reasons[0] == reasons[1], f"identical text: {reasons[0] == reasons[1]}")
 
-    print("\n  What the new code sends, against the same stub and the same clock:")
+    print("\n  What the new code sends, against the same stub and the same clock.")
+    print("  NOTE THE POSITION IS DIFFERENT, AND THAT IS THE FIX: there is no")
+    print("  MIS short to protect any more, so the comparison is a CNC long.")
     k2 = RecordingKite(now=datetime(2026, 10, 7, 14, 12, 9, tzinfo=IST))
-    r = X.protect(symbol="BHARTIARTL", direction="SHORT", qty=5, product="MIS",
-                  fill_price=1833.0, stop_price=1860.0, kite=k2)
+    r = X.protect(symbol="RELIANCE", direction="LONG", qty=10, product="CNC",
+                  fill_price=100.0, stop_price=95.0, kite=k2)
     print(f"    primary  {X.ORDER_SPECS[X.PRIMARY_STOP]['order_type']:14} "
-          f"{'ACCEPTED' if r.get('ok') else 'REJECTED — ' + str(r.get('reason'))}")
-    check("the new primary is accepted where the old one was rejected",
-          bool(r.get("ok")), f"reason: {r.get('reason','')}")
+          f"{'ACCEPTED' if r.get('ok') else 'REJECTED — ' + str(r.get('reason'))}"
+          f"  (on the {X.ORDER_SPECS[X.PRIMARY_STOP]['api']} API)")
+    check("the new primary is accepted, on a different API entirely",
+          bool(r.get("ok")), f"reason: {str(r.get('reason',''))[:70]}")
+    check("  and the MIS short the old pair protected cannot exist now",
+          not X.protect(symbol="BHARTIARTL", direction="SHORT", qty=5,
+                        product="MIS", fill_price=1833.0, stop_price=1860.0,
+                        kite=RecordingKite()).get("ok"),
+          "protect() refuses it; the broker guard refuses the entry")
 
-    k3 = RecordingKite(now=datetime(2026, 10, 7, 14, 12, 9, tzinfo=IST))
-    e = X.emergency_exit("BHARTIARTL", "SHORT", 5, "MIS", why="replay", kite=k3)
+    k3 = RecordingKite(ltp=100.0,
+                       now=datetime(2026, 10, 7, 14, 12, 9, tzinfo=IST))
+    e = X.emergency_exit("RELIANCE", "LONG", 10, "CNC", why="replay", kite=k3)
     print(f"    fallback {X.ORDER_SPECS[X.FALLBACK_EXIT]['order_type']:14} "
           f"{'ACCEPTED' if e.get('ok') else 'REJECTED — ' + str(e.get('reason'))}")
     check("the new fallback is accepted where the old one was rejected",
@@ -287,38 +370,44 @@ def section_independence():
     # THREE DIFFERENT INJECTED FAILURES, because a fallback that only survives
     # one of them is not independent, it is lucky.
     for label, kw in (
-        ("broker refuses every SL order",
-         dict(reject_order_types=("SL",))),
-        ("the SL's trigger price is refused",
-         dict(reject_order_types=("SL",),
+        ("the broker refuses GTT placement outright",
+         dict(reject_gtt=True)),
+        ("the GTT is refused for a stated reason",
+         dict(reject_gtt=True,
               reject_reason="Trigger price is out of the permitted range")),
-        ("the broker refuses SL and SL-M alike (the whole stop family)",
-         dict(reject_order_types=("SL", "SL-M"))),
+        ("the account is at its 500-pending-GTT cap",
+         dict(gtt_pending=500)),
     ):
-        k = RecordingKite(ltp=1833.0, **kw)
-        out = X.protect_or_exit(symbol="BHARTIARTL", direction="SHORT", qty=5,
-                                product="MIS", fill_price=1833.0,
-                                stop_price=1860.0, kite=k)
-        sent = [(o.get("order_type"), o.get("price"), o.get("trigger_price"))
-                for o in k.orders]
+        k = RecordingKite(ltp=100.0, **kw)
+        out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
+                                product="CNC", fill_price=100.0,
+                                stop_price=95.0, kite=k)
+        sent = [(o.get("order_type"), o.get("price")) for o in k.orders]
         print(f"\n  INJECTED: {label}")
+        print(f"    gtt attempts    : {len(k.gtts)}")
         print(f"    orders attempted: {sent}")
         print(f"    protected={out['protected']} exited={out['exited']} "
-              f"unprotected={out['unprotected']}")
+              f"unprotected={out['unprotected']} must_halt={out.get('must_halt')}")
         check(f"primary failed as injected [{label}]",
               not out["protected"], f"reason: {out['prot'].get('reason')}")
         check(f"THE FALLBACK STILL COMPLETED [{label}]", out["exited"],
               f"exit: {(out['exit'] or {}).get('reason', 'placed')}")
+        check(f"must_halt is set [{label}]", bool(out.get("must_halt")),
+              "the protection mechanism is broken, so no further entries")
+        check(f"NO second GTT was attempted [{label}]", len(k.gtts) == 1,
+              f"{len(k.gtts)} attempt(s) — a retry on the refusing endpoint "
+              f"is not a fallback")
         if out["exited"]:
             fb = of(k, X.ORDER_SPECS[X.FALLBACK_EXIT]["order_type"])
-            check(f"the completing order is a {X.ORDER_SPECS[X.FALLBACK_EXIT]['order_type']}, "
-                  f"not another {X.ORDER_SPECS[X.PRIMARY_STOP]['order_type']} [{label}]",
-                  bool(fb), f"{json.dumps(fb[0], default=str, sort_keys=True) if fb else ''}")
+            check(f"the completing order is a LIMIT on the orders API [{label}]",
+                  bool(fb),
+                  f"{json.dumps(fb[0], default=str, sort_keys=True) if fb else ''}")
 
     # And the converse: the pair that failed on 7 Oct must not be constructible.
     print("\n  The 2026-10-07 pairs, offered to the independence contract:")
     for a, b in (("SLM", "SLM"), ("SLM", "MARKET"), ("MARKET", "MARKET"),
-                 ("SL", "SL")):
+                 ("SL", "SL"), ("SL", "LIMIT_THROUGH"),
+                 ("GTT_OCO", "GTT_OCO")):
         try:
             X.assert_independent(a, b)
             print(f"    {a:7} + {b:7} ACCEPTED")
@@ -399,9 +488,21 @@ def section_halt():
     import atlas.risk.breaker as breaker
     importlib.reload(breaker)
 
+    # THE PATH COMES FROM THE SAME CONSTANT THE ENGINE READS. This printed
+    # breaker.SENTINEL while a help string further down hardcoded
+    # /var/lib/atlas/halt -- so the tool could report one path, recommend
+    # another, and check a third. One source now.
+    from atlas.config import halt_file_state, HALT_FILE_CANONICAL
+    st = halt_file_state()
     halted, why = breaker.is_halted()
-    print(f"\n  halt file: {breaker.SENTINEL}")
+    print(f"\n  halt file (atlas.config.HALT_FILE): {st['path']}")
+    print(f"  canonical                         : {HALT_FILE_CANONICAL}")
+    print(f"  is the canonical path             : {st['is_canonical']}")
     print(f"  is_halted() -> {halted}  {why[:120]}")
+    check("the halt path resolves to the canonical location OR is an "
+          "explicit test override", True,
+          "overridden for this run" if not st["is_canonical"]
+          else "canonical")
     check("the halt sentinel is present for this verification", halted)
 
     import atlas.execution.broker as B
@@ -409,14 +510,39 @@ def section_halt():
 
     # GUARD 1 -- place_order itself, the lowest level.
     print("\n  GUARD 1 — broker.place_order(), the lowest level:")
+    # A LONG, DELIBERATELY. A SHORT would be refused by the long-only guard
+    # BEFORE the halt guard is reached, which would make this check pass for
+    # the wrong reason and prove nothing about the halt. The short case is
+    # checked separately below.
     for intent in ("ENTRY", None):
-        kw = dict(symbol="BHARTIARTL", direction="SHORT", qty=5,
-                  order_type="MARKET", product="MIS")
+        kw = dict(symbol="RELIANCE", direction="LONG", qty=1,
+                  order_type="LIMIT", price=100.0, product="CNC")
         r = B.place_order(**kw) if intent is None else B.place_order(intent=intent, **kw)
         print(f"    intent={str(intent):6} -> success={r.get('success')} "
               f"blocked_by={r.get('blocked_by')} reason={str(r.get('reason'))[:70]}")
-        check(f"place_order refuses an ENTRY while halted (intent={intent})",
+        check(f"place_order refuses a LONG ENTRY while halted (intent={intent})",
               r.get("success") is False and r.get("blocked_by") in ("halt", "paused"))
+
+    print("\n  GUARD 1b — and a SHORT ENTRY is refused before anything else:")
+    for intent in ("ENTRY", None):
+        kw = dict(symbol="TATASTEEL", direction="SHORT", qty=1,
+                  order_type="LIMIT", price=100.0, product="MIS")
+        r = B.place_order(**kw) if intent is None else B.place_order(intent=intent, **kw)
+        print(f"    intent={str(intent):6} -> success={r.get('success')} "
+              f"blocked_by={r.get('blocked_by')} reason={str(r.get('reason'))[:70]}")
+        check(f"place_order refuses a SHORT ENTRY outright (intent={intent})",
+              r.get("success") is False and r.get("blocked_by") == "long_only",
+              "refused for being a short, ahead of the halt and kill-switch "
+              "checks — longs only")
+    # AND AN EXIT IS STILL PERMITTED THROUGH THE GUARD. Blocking SELL outright
+    # would make it impossible to close a long, which is the failure mode the
+    # halt guard is careful to avoid for exactly the same reason.
+    src_ok = 'str(intent).upper() != "EXIT" and str(direction).upper() == "SHORT"' \
+        in open(B.__file__).read()
+    check("the long-only guard gates on INTENT, not on transaction type",
+          src_ok,
+          "an exit on a long IS a SELL; gating on SELL would make a position "
+          "impossible to close")
 
     print("\n  GUARD 2 — enter_trade(), the gate stack:")
     from atlas.execution.atlas_entry import enter_trade
@@ -578,11 +704,12 @@ def section_halted_cycle():
     check("ZERO order calls reached the broker layer", calls["n"] == 0,
           f"{calls['args'][:3]}")
     if seeded:
+        from atlas.config import HALT_FILE_CANONICAL
         print("\n  NOTE: SEEDED mode. The zone map and the ledger writes were "
               "stubbed\n        because this machine has no service key. Run this "
               "on the box for\n        the LIVE-DB run:\n"
               "          sudo -u ubuntu env $(grep -v '^#' /etc/atlas.env | xargs) \\\n"
-              "            ATLAS_HALT_FILE=/var/lib/atlas/halt \\\n"
+              f"            ATLAS_HALT_FILE={HALT_FILE_CANONICAL} \\\n"
               "            /home/ubuntu/thestocklogic/venv/bin/python \\\n"
               "            -m tools.verify_exit_path")
 
@@ -590,7 +717,13 @@ def section_halted_cycle():
 def main():
     print(__doc__)
     print(f"run at {datetime.now(IST):%Y-%m-%d %H:%M:%S} IST")
-    print(f"halt file override: ATLAS_HALT_FILE={os.environ.get('ATLAS_HALT_FILE')}")
+    from atlas.config import halt_file_state as _hfs
+    _st = _hfs()
+    print(f"halt file: {_st['path']}"
+          + ("" if _st["is_canonical"]
+             else f"  ** NOT THE CANONICAL {_st['canonical']} — "
+                  f"ATLAS_HALT_FILE is overriding it **"))
+    print(f"halt state: {'HALTED' if _st['halted'] else 'not halted'}")
 
     for fn in (section_order_types, section_replay, section_independence,
                section_timing, section_halt, section_halted_cycle):

@@ -22,6 +22,31 @@ from atlas.config import (
 )
 from atlas.reporting.telegram import send
 from atlas.reporting.directives import _rules_line
+
+
+def _halt_line() -> str:
+    """The halt file and the halt state, in the first message of the day.
+
+    WHY THIS IS IN THE 08:30 MESSAGE. The halt used to resolve from an
+    environment variable that THIS job does not set, so zerodha_morning read
+    ~/.atlas/halt while the market-hours service read /var/lib/atlas/halt. Two
+    processes, two answers to "is ATLAS halted", and nothing printed either
+    path -- so the operator's only daily signal said nothing about the one
+    control that stops the engine. Now it names the file and states the answer,
+    and shouts if the path is not the canonical one.
+    """
+    from atlas.config import halt_file_state
+    st = halt_file_state()
+    if not st["is_canonical"]:
+        return (f"\u26a0\ufe0f <b>HALT PATH WRONG</b> \u2014 resolved "
+                f"<code>{st['path']}</code>, expected "
+                f"<code>{st['canonical']}</code>. A halt written to the "
+                f"canonical path would NOT stop the engine.")
+    if st["halted"]:
+        return (f"\U0001f6d1 <b>HALTED</b> \u2014 <code>{st['path']}</code>"
+                + (f"\n{st['reason'][:160]}" if st["reason"] else "")
+                + "\nNo entries will be placed. /resume or delete the file.")
+    return f"\u25b6\ufe0f Not halted \u00b7 <code>{st['path']}</code>"
 from atlas.execution.zerodha_login import (
     get_stored_token, verify_token, complete_login, login
 )
@@ -128,6 +153,7 @@ def run():
             # function the sizer's own mode selects means a future mode change
             # cannot leave this behind.
             f"{_rules_line()}\n"
+            f"{_halt_line()}\n"
             f"Market opens in 45 minutes."
         )
         return True

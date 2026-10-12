@@ -200,64 +200,92 @@ def main() -> int:
           all(o["transaction_type"] == "SELL" for o in g["orders"]), True)
     check("  product is CNC so it survives the session",
           all(o["product"] == "CNC" for o in g["orders"]), True)
-    # If the account has no two-leg GTT the fallback must still protect
+    # TRIGGER VALUES MUST ASCEND AND PAIR WITH THEIR LEGS. A reversed pair is
+    # accepted by the broker and arms the stop at the target price -- silent,
+    # and only visible once it fires on the wrong side.
+    check("  trigger_values ascend: stop trigger below target",
+          g["trigger_values"][0] < g["trigger_values"][1], True,
+          f"{g['trigger_values']}")
+    check("  leg 0 is the stop, leg 1 is the target",
+          g["orders"][0]["price"] < g["orders"][1]["price"], True,
+          f"stop {g['orders'][0]['price']} / target {g['orders'][1]['price']}")
+
+    # THE SINGLE-GTT FALLBACK IS GONE, 2026-10-12. It used to place two
+    # independent GTTs when two-leg was refused and let reconcile_exits() pair
+    # them. That was a SECOND MECHANISM ON THE SAME ENDPOINT: whatever makes
+    # /gtt/triggers refuse a two-leg instruction will almost certainly refuse
+    # two single ones a moment later, which is the shared-failure-mode shape of
+    # 7 October wearing different clothes. The fallback is now the marketable
+    # LIMIT, on the orders API.
     k = FakeKite(gtt_two_leg=False)
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
                   place_target=True)
-    check("no two-leg on the account -> two single GTTs",
-          r["mechanism"], "GTT_SINGLE")
-    check("  still protected", r["ok"], True)
-    check("  both legs recorded for reconciliation", len(r["legs"]), 2)
+    check("two-leg refused -> NOT ok, no second GTT attempt", r["ok"], False)
+    check("  mechanism is still named GTT_OCO", r["mechanism"], "GTT_OCO")
+    check("  exactly one place_gtt call was made",
+          len([c for c in k.calls if c[0] == "place_gtt"]), 1,
+          "a retry on the same endpoint is not a fallback")
+    check("  and no legs are recorded", len(r["legs"]), 0)
 
     print()
-    print("SHORTS ARE PROTECTED BY SL-M, AND STAY MIS")
+    print("THERE IS NO SHORT PATH AND NO MIS PATH LEFT")
     print("-" * 78)
+    # LONGS ONLY, CNC ONLY, 2026-10-12. protect() used to dispatch on product:
+    # GTT for a CNC long, SL for an MIS short. Both retired branches now
+    # REFUSE, and a refusal makes the caller exit the position rather than
+    # quietly routing it back onto the path that failed.
     k = FakeKite()
     r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
                   place_target=True)
-    check("mechanism is SL, not GTT", r["mechanism"], "SL")
-    check("  ok", r["ok"], True)
-    check("  target is 2R below the fill", r["target"], 90.0)
-    orders = [c[1] for c in k.calls if c[0] == "place_order"]
-    # WAS SL-M, WITH THE RATIONALE "an SL is a limit on trigger and can go
-    # unfilled in the move it escapes". That reasoning was sound and the order
-    # was still rejected outright on 2026-10-07 for having no market protection,
-    # so it protected nothing at all. An SL with the limit set well past the
-    # trigger carries the unfilled risk the old comment names; a rejected SL-M
-    # carries all of it.
-    check("  the stop is SL (stop-loss LIMIT), not SL-M",
-          orders[0]["order_type"], "SL",
-          "SL-M was rejected outright on 2026-10-07; an unfillable limit is a "
-          "risk, a rejected order is a certainty")
-    check("  the SL's limit is past its trigger, on the fillable side",
-          orders[0]["price"] > orders[0]["trigger_price"], True,
-          f"limit {orders[0]['price']} > trigger {orders[0]['trigger_price']} "
-          f"for a short's BUY stop")
-    check("  product stays MIS (no overnight gap risk added)",
-          all(o["product"] == "MIS" for o in orders), True)
-    check("  legs are BUY to close a short",
-          all(o["transaction_type"] == "BUY" for o in orders), True)
-    check("  no GTT was placed for a short",
-          any(c[0] == "place_gtt" for c in k.calls), False)
+    check("a SHORT is refused, not protected", r["ok"], False)
+    check("  mechanism is NONE", r["mechanism"], "NONE")
+    check("  and it says why", "long-only" in r["reason"], True, r["reason"][:56])
+    check("  nothing reached the broker at all", len(k.calls), 0)
+
+    k = FakeKite()
+    r = X.protect("RELIANCE", "LONG", 45, "MIS", 100.0, 95.0, kite=k,
+                  place_target=True)
+    check("an MIS long is refused too (GTT is CNC-only)", r["ok"], False)
+    check("  nothing reached the broker", len(k.calls), 0)
+
+    k = FakeKite()
+    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
+                  place_target=False)
+    check("half an OCO is refused rather than degraded", r["ok"], False,
+          "an OCO needs both legs; one resting stop is a different mechanism")
+    check("  nothing reached the broker", len(k.calls), 0)
+
+    k = FakeKite()
+    r = X._protect_mis_sl("TATASTEEL", "SHORT", 90, 100.0, 105.0, 90.0, k)
+    check("the retired SL path refuses if called directly", r["ok"], False)
+    check("  and places nothing", len(k.calls), 0,
+          "kept rather than deleted, but it must not be a way back")
 
     print()
-    print("A STOP THAT WILL NOT PLACE MEANS THE POSITION LEAVES")
+    print("A GTT THAT WILL NOT PLACE MEANS THE POSITION LEAVES")
     print("-" * 78)
-    k = FakeKite(fail=("sl",))
-    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
-                  place_target=True)
-    check("SL refused -> protect() reports NOT ok", r["ok"], False)
     k = FakeKite(fail=("gtt",))
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
                   place_target=True)
-    check("every GTT refused -> NOT ok", r["ok"], False)
-    # A TARGET failure is not an escalation: the position is protected.
-    k = FakeKite(fail=("limit",))
-    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
-                  place_target=True)
-    check("stop placed but target refused -> still ok", r["ok"], True,
-          "downside is covered; the upside leg is a missed convenience")
-    check("  and it says so", "target" in r["reason"].lower(), True)
+    check("the OCO GTT refused -> NOT ok", r["ok"], False)
+    # THERE IS NO LONGER A "TARGET REFUSED BUT STOP PLACED" STATE. One
+    # instruction carries both legs, so it is placed whole or not at all --
+    # which also removes the orphan-sibling bookkeeping the two-GTT shape
+    # needed. The old assertion ("stop placed but target refused -> still ok")
+    # described a partial-protection state that can no longer exist.
+    check("  no legs are left behind to orphan", len(r.get("legs") or {}), 0,
+          "one instruction, both legs: placed whole or not at all")
+    # And a FAILED GTT must be reported as needing a halt, which is the signal
+    # the caller acts on. Checked here against protect_or_exit, since protect()
+    # itself does not own that decision.
+    k2 = FakeKite(fail=("gtt",))
+    pe = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=45,
+                           product="CNC", fill_price=100.0, stop_price=95.0,
+                           kite=k2)
+    check("a failed GTT sets must_halt", pe["must_halt"], True,
+          "a broken protection mechanism must stop further entries even when "
+          "this position was closed cleanly")
+    check("  and the position was exited", pe["exited"], True)
 
     # THE FALLBACK IS A LIMIT PRICED THROUGH THE BOOK, NOT A MARKET ORDER.
     # On 2026-10-07 it was MARKET, and MARKET was refused by the same rule that
@@ -389,31 +417,29 @@ def main() -> int:
           ALLOW_AUTOMATED_STOP_LOSS, True,
           "False would not disable stops, it would just be a lie")
 
-    # ALLOW_AUTOMATED_TARGET=False is the trail-instead-of-2R option, reachable
-    # without touching code. A fixed 2R caps every winner at 2R, which is the
-    # opposite of what zone_entry describes.
+    # ALLOW_AUTOMATED_TARGET IS NO LONGER A STRATEGY OPTION. It used to select
+    # "trail instead of 2R", and with it False protect() placed a single stop
+    # GTT. The mechanism is now ONE two-leg OCO, which needs both legs by
+    # construction, so False means there is no OCO to place -- and that is
+    # refused rather than silently degraded to a different mechanism.
+    #
+    # WHAT THIS GIVES UP IS REAL AND IS FLAGGED, NOT HIDDEN: a fixed 2R target
+    # caps every winner at 2R, against the "winners are held and trailed" line
+    # in engine/zone_entry.py. See PARTIAL BOOKING in docs/ATLAS_LONG_ONLY.md,
+    # which is the operator's open question and is deliberately NOT built.
+    check("ALLOW_AUTOMATED_TARGET is True — an OCO needs both legs",
+          ALLOW_AUTOMATED_TARGET, True)
     k = FakeKite()
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
                   place_target=False)
-    check("target off -> a single stop GTT", r["mechanism"], "GTT_STOP_ONLY")
-    check("  no target price", r["target"], None)
-    check("  one leg, so nothing to orphan", len(r["legs"]), 1)
-    check("  still protected", r["ok"], True)
-    k = FakeKite()
-    r = X.protect("TATASTEEL", "SHORT", 90, "MIS", 100.0, 105.0, kite=k,
-                  place_target=False)
-    check("short with target off is still SL protected", r["ok"], True)
-    check("  and only the stop was sent",
-          [c[1]["order_type"] for c in k.calls if c[0] == "place_order"], ["SL"])
-    # and a stop failure in stop-only mode is still an escalation
-    r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0,
-                  kite=FakeKite(fail=("gtt",)), place_target=False)
-    check("stop-only, stop refused -> NOT ok", r["ok"], False)
+    check("target off -> refused, not degraded to a single stop", r["ok"], False)
+    check("  nothing was sent", len(k.calls), 0,
+          "half an OCO is a different mechanism, not a smaller one")
     # the DEFAULT follows config, which is the deployed decision
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=FakeKite())
-    check("default (no arg) follows ALLOW_AUTOMATED_TARGET",
-          r["target"] is None, not ALLOW_AUTOMATED_TARGET,
-          "config says stop-only, so no target leg")
+    check("default (no arg) places the target leg",
+          r["target"] is not None, True,
+          f"target {r.get('target')} from ALLOW_AUTOMATED_TARGET=True")
 
     print()
     print("THERE IS NO EXPOSURE CEILING, AND THAT IS THE POINT")

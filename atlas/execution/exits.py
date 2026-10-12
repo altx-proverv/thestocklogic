@@ -117,22 +117,46 @@ TERMINAL_BAD = ("REJECTED", "CANCELLED")
 # primary/fallback pair that shares an order_type or a trigger dependency, and it
 # is called at module import, so a future change that quietly makes the fallback
 # the same shape as the primary breaks the import rather than the position.
+# `api` IS THE STRONGEST INDEPENDENCE AXIS AND IT IS NEW HERE. A GTT is not a
+# regular order: it is a resting instruction at the broker, placed through
+# POST /gtt/triggers, governed by its own rules (500 pending per client, its own
+# rejection reasons, its own status vocabulary). A marketable LIMIT goes through
+# POST /orders. Two mechanisms on two endpoints with two rule sets cannot share
+# a rejection the way SL-M and MARKET did -- which is the failure this axis
+# exists to make structurally impossible rather than merely unlikely.
 ORDER_SPECS = {
-    # resting at the exchange, fires on a trigger, limit-priced
-    "SL":           {"order_type": "SL",     "needs_trigger": True,
-                     "market_protection": False, "immediate": False},
+    # ONE two-leg OCO instruction resting at the broker: stop leg and target
+    # leg, either firing cancels the other. CNC only -- GTT does not exist for
+    # MIS, which is the fact that forced SL-M on 7 October.
+    "GTT_OCO":      {"order_type": "GTT",    "needs_trigger": True,
+                     "market_protection": False, "immediate": False,
+                     "api": "gtt", "product": "CNC"},
     # immediate, priced through the book, no trigger and no market protection
     "LIMIT_THROUGH": {"order_type": "LIMIT", "needs_trigger": False,
-                      "market_protection": False, "immediate": True},
-    # kept only so the independence check can name it as the thing NOT to pair
+                      "market_protection": False, "immediate": True,
+                      "api": "orders", "product": "any"},
+    # RETIRED 2026-10-12, kept so the independence check can still name it and
+    # so the record of what was tried survives. The SL stop built in 954b68e
+    # existed because MIS shorts cannot take a GTT. There are no MIS shorts any
+    # more, so there is nothing for it to protect.
+    "SL":           {"order_type": "SL",     "needs_trigger": True,
+                     "market_protection": False, "immediate": False,
+                     "api": "orders", "product": "MIS"},
+    # kept only so the independence check can name them as the thing NOT to pair
     "SLM":          {"order_type": "SL-M",   "needs_trigger": True,
-                     "market_protection": True, "immediate": False},
+                     "market_protection": True, "immediate": False,
+                     "api": "orders", "product": "MIS"},
     "MARKET":       {"order_type": "MARKET", "needs_trigger": False,
-                     "market_protection": True, "immediate": True},
+                     "market_protection": True, "immediate": True,
+                     "api": "orders", "product": "any"},
 }
 
 # What protects a position, and what is used when that fails.
-PRIMARY_STOP = "SL"
+#
+# THE OCO GTT IS THE MECHANISM THE OPERATOR ALREADY USES BY HAND AND TRUSTS.
+# That is the reason it is the primary, and it is a better reason than any
+# property of the API: it is the thing whose behaviour is actually known.
+PRIMARY_STOP = "GTT_OCO"
 FALLBACK_EXIT = "LIMIT_THROUGH"
 
 
@@ -149,8 +173,18 @@ def assert_independent(primary: str = PRIMARY_STOP,
                           not fire. A fallback that also needs one inherits that.
       immediacy           a fallback that rests is not a fallback: the position is
                           already unprotected when it is called.
+      api endpoint        /gtt/triggers and /orders have separate rule sets,
+                          separate rejection reasons and separate failure modes.
+                          Two mechanisms on the SAME endpoint share whatever
+                          that endpoint refuses -- which is precisely how SL-M
+                          and MARKET turned two layers into one.
     """
     a, b = ORDER_SPECS[primary], ORDER_SPECS[fallback]
+    if a.get("api") and a.get("api") == b.get("api"):
+        raise AssertionError(
+            f"{primary} and {fallback} both go through the {a['api']} API; a "
+            f"fallback on the same endpoint inherits every rule that endpoint "
+            f"enforces, which is how SL-M and MARKET collapsed into one layer")
     if a["order_type"] == b["order_type"]:
         raise AssertionError(
             f"exit fallback shares an order_type with the primary "
@@ -306,172 +340,166 @@ def protect(symbol: str, direction: str, qty: int, product: str,
     escalated.
     """
     d = str(direction).upper()
+    prod = str(product).upper()
+
+    # ── LONGS ONLY, CNC ONLY. ONE MECHANISM. ──────────────────────
+    #
+    # This function used to dispatch on product: GTT for a CNC long, SL for an
+    # MIS short. That branch is the complexity the 2026-10-12 simplification
+    # removes, and it is where 7 October came from -- not because the SL path
+    # was badly written, but because it existed at all.
+    #
+    # Anything that is not a CNC long is now REFUSED rather than quietly routed
+    # somewhere. A refusal makes the caller exit the position; a silent reroute
+    # would put it back on the path being retired.
+    if d != "LONG":
+        return {"ok": False, "mechanism": "NONE", "legs": {},
+                "reason": f"ATLAS is long-only; refusing to protect a {d} "
+                          f"position. Nothing should have opened it -- see "
+                          f"ALLOW_SHORT_ENTRIES and the broker guard."}
+    if prod != "CNC":
+        return {"ok": False, "mechanism": "NONE", "legs": {},
+                "reason": f"the only protection mechanism is a CNC OCO GTT; "
+                          f"product is {prod}. GTT does not exist for MIS, "
+                          f"which is the fact that forced SL-M on 2026-10-07."}
+
     if place_target is None:
         from atlas.config import ALLOW_AUTOMATED_TARGET
         place_target = ALLOW_AUTOMATED_TARGET
-    # None means stop only: the position is held and trailed rather than capped
-    # at 2R. See ALLOW_AUTOMATED_TARGET -- a strategy choice, not a safety one.
-    tgt = target_price(fill_price, stop_price, d) if place_target else None
-    if str(product).upper() == "CNC":
-        return _protect_cnc_gtt(symbol, d, qty, fill_price, stop_price, tgt, kite)
-    return _protect_mis_sl(symbol, d, qty, fill_price, stop_price, tgt, kite)
+
+    # AN OCO NEEDS BOTH LEGS BY CONSTRUCTION. place_target=False would leave a
+    # single resting stop and no OCO at all, so it is refused rather than
+    # silently degraded -- the operator asked for the two-leg mechanism they
+    # already use, and half of it is a different mechanism.
+    if not place_target:
+        return {"ok": False, "mechanism": "NONE", "legs": {},
+                "reason": "ALLOW_AUTOMATED_TARGET is False, so there is no "
+                          "target leg and no OCO. The protection mechanism is "
+                          "a TWO-leg GTT; refusing to place half of it."}
+
+    tgt = target_price(fill_price, stop_price, d)
+    return _protect_cnc_gtt(symbol, d, qty, fill_price, stop_price, tgt, kite)
 
 
 def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
-    """
-    A LONG held overnight needs a stop that survives the close, so: GTT.
+    """ONE two-leg OCO GTT. Stop leg and target leg, either cancelling the other.
 
-    TWO-LEG OCO IF THE ACCOUNT HAS IT. One leg firing cancels the other at the
-    broker, which removes the race our own reconciliation would otherwise have to
-    win every cycle. If the API refuses two-leg, fall back to two SINGLE GTTs and
-    let reconcile_exits() pair them -- correct, just with a window.
+    THE MECHANISM THE OPERATOR ALREADY USES BY HAND. One leg firing cancels the
+    other AT THE BROKER, which removes the orphan race our own reconciliation
+    would otherwise have to win every cycle -- and removes the two-sibling
+    bookkeeping that the old GTT_SINGLE fallback required.
+
+    THE SINGLE-GTT FALLBACK IS GONE. It used to place two independent GTTs when
+    two-leg was refused, and let reconcile_exits() pair them. That was correct
+    and it was also a second mechanism on the SAME endpoint: whatever makes
+    /gtt/triggers refuse a two-leg instruction is overwhelmingly likely to
+    refuse two single ones a moment later. A fallback that shares its failure
+    mode with the primary is exactly what 7 October was. The fallback is now
+    the marketable LIMIT in protect_or_exit, on a different API.
+
+    PAYLOAD CONFIRMED against https://kite.trade/docs/connect/v3/gtt/ on
+    2026-10-12, not from memory:
+        type              "two-leg"   (the SDK's trigger_type)
+        condition         {exchange, tradingsymbol, trigger_values[2], last_price}
+        orders            two order objects, each {exchange, tradingsymbol,
+                          transaction_type, quantity, order_type, product, price}
+    The Python SDK takes the condition fields as keyword arguments and
+    assembles the condition object itself, which is why they are passed flat
+    here rather than nested.
+
+    TRIGGER ORDER MATTERS: trigger_values must be ascending, and the orders
+    array is positional against it. For a long, the stop is BELOW and the
+    target ABOVE, so [stop_trigger, target] pairs with [stop_leg, target_leg].
+    Reversing them would arm the stop at the target price.
     """
     if kite is None:
         from atlas.execution.broker import get_kite
         kite = get_kite()
     if kite is None:
-        return {"ok": False, "reason": "kite unavailable", "legs": {}}
+        return {"ok": False, "mechanism": "GTT_OCO", "legs": {},
+                "reason": "kite unavailable — cannot place the OCO GTT"}
+    if tgt is None:
+        return {"ok": False, "mechanism": "GTT_OCO", "legs": {},
+                "reason": "no target price; an OCO requires two legs"}
 
-    side = exit_side(direction)
+    side = exit_side(direction)                      # SELL, for a long
     trig = stop_trigger(stop, direction)
+    stop_px, tgt_px = round_tick(stop), round_tick(tgt)
+    trig = round_tick(trig)
+
+    # SANITY BEFORE SENDING. A long's stop must sit below its target or the two
+    # trigger values are not ascending and the legs pair against the wrong
+    # prices. Checked here rather than trusted, because the symptom at the
+    # broker would be an accepted GTT armed inside out.
+    if not (trig < tgt_px):
+        return {"ok": False, "mechanism": "GTT_OCO", "legs": {},
+                "reason": f"stop trigger {trig} is not below the target "
+                          f"{tgt_px}; refusing to arm an inverted OCO"}
+
     common = {"exchange": "NSE", "tradingsymbol": symbol,
               "transaction_type": side, "quantity": int(qty),
               "order_type": "LIMIT", "product": "CNC"}
-    # A GTT leg is a LIMIT order placed when the trigger fires. The stop leg is
-    # priced AT the stop rather than at the trigger, so a gap through the trigger
-    # still works the order at the level structure defined.
-    legs = [{**common, "price": round_tick(stop)}]
-    if tgt is not None:
-        legs.append({**common, "price": round_tick(tgt)})
-
-    if tgt is None:
-        # Stop only: a single GTT, nothing to pair with and nothing to cancel.
-        try:
-            sid = kite.place_gtt(trigger_type="single", tradingsymbol=symbol,
-                                 exchange="NSE", trigger_values=[trig],
-                                 last_price=round_tick(fill), orders=legs)
-            sid = sid.get("trigger_id") if isinstance(sid, dict) else sid
-            return {"ok": True, "mechanism": "GTT_STOP_ONLY",
-                    "legs": {"stop_trigger_id": sid},
-                    "stop": round_tick(stop), "target": None,
-                    "reason": f"stop GTT {sid}; no target (held and trailed)"}
-        except Exception as e:
-            return {"ok": False, "mechanism": "GTT_STOP_ONLY", "legs": {},
-                    "stop": round_tick(stop), "target": None,
-                    "reason": f"stop GTT failed: {e}"}
+    # Each leg is a LIMIT placed when its trigger fires. The stop leg is priced
+    # AT the stop rather than at the trigger, so a gap through the trigger still
+    # works the order at the level structure defined.
+    orders = [{**common, "price": stop_px},          # pairs with trig
+              {**common, "price": tgt_px}]           # pairs with tgt_px
 
     try:
         gid = kite.place_gtt(trigger_type="two-leg", tradingsymbol=symbol,
-                             exchange="NSE", trigger_values=[trig, round_tick(tgt)],
-                             last_price=round_tick(fill), orders=legs)
+                             exchange="NSE",
+                             trigger_values=[trig, tgt_px],
+                             last_price=round_tick(fill), orders=orders)
         gid = gid.get("trigger_id") if isinstance(gid, dict) else gid
-        log.info(f"{symbol}: OCO GTT {gid} stop {stop:.2f} / target {tgt:.2f}")
-        return {"ok": True, "mechanism": "GTT_OCO", "legs": {"oco_trigger_id": gid},
-                "stop": round_tick(stop), "target": round_tick(tgt),
-                "reason": f"OCO GTT {gid}"}
     except Exception as e:
-        log.warning(f"{symbol}: two-leg GTT refused ({e}) — falling back to "
-                    f"two single GTTs")
+        # NO SECOND GTT ATTEMPT. The caller exits the position on a different
+        # API and halts.
+        log.error(f"{symbol}: OCO GTT REFUSED ({type(e).__name__}: {e})")
+        return {"ok": False, "mechanism": "GTT_OCO", "legs": {},
+                "stop": stop_px, "target": tgt_px,
+                "reason": f"OCO GTT failed: {type(e).__name__}: {e}"}
 
-    out = {"mechanism": "GTT_SINGLE", "legs": {},
-           "stop": round_tick(stop), "target": round_tick(tgt)}
-    try:
-        sid = kite.place_gtt(trigger_type="single", tradingsymbol=symbol,
-                             exchange="NSE", trigger_values=[trig],
-                             last_price=round_tick(fill), orders=[legs[0]])
-        out["legs"]["stop_trigger_id"] = (sid.get("trigger_id")
-                                          if isinstance(sid, dict) else sid)
-    except Exception as e:
-        out["ok"] = False
-        out["reason"] = f"stop GTT failed: {e}"
-        return out
-    try:
-        tid = kite.place_gtt(trigger_type="single", tradingsymbol=symbol,
-                             exchange="NSE", trigger_values=[round_tick(tgt)],
-                             last_price=round_tick(fill), orders=[legs[1]])
-        out["legs"]["target_trigger_id"] = (tid.get("trigger_id")
-                                            if isinstance(tid, dict) else tid)
-    except Exception as e:
-        # Stop is placed; the position is protected. Not an escalation.
-        out["reason"] = f"stop placed, target GTT failed: {e}"
-        out["ok"] = True
-        return out
-    out["ok"] = True
-    out["reason"] = "stop and target GTTs placed"
-    return out
+    if not gid:
+        # A 200 with no trigger_id is not a placed GTT. Treated as a failure
+        # rather than recorded as a leg we cannot later cancel or read back.
+        log.error(f"{symbol}: place_gtt returned no trigger_id")
+        return {"ok": False, "mechanism": "GTT_OCO", "legs": {},
+                "stop": stop_px, "target": tgt_px,
+                "reason": "place_gtt returned no trigger_id"}
+
+    log.info(f"{symbol}: OCO GTT {gid} — stop trigger {trig} limit {stop_px} / "
+             f"target {tgt_px}, {qty} {side} CNC")
+    return {"ok": True, "mechanism": "GTT_OCO",
+            "legs": {"oco_trigger_id": gid},
+            "stop": stop_px, "target": tgt_px, "stop_trigger": trig,
+            "reason": f"OCO GTT {gid} (stop {stop_px} / target {tgt_px})"}
 
 
 def _protect_mis_sl(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
+    """RETIRED 2026-10-12. Unreachable, kept rather than deleted. DO NOT REVIVE.
+
+    This placed an SL (stop-loss LIMIT) regular order with the limit set past
+    the trigger, built in 954b68e to replace the SL-M that Kite refused on
+    2026-10-07. It was correct for what it was: the stop an MIS short can have,
+    because GTT is CNC-only.
+
+    IT HAS NOTHING LEFT TO PROTECT. ATLAS is long-only and CNC-only, so there
+    are no MIS positions, so there is no case where this would be called. The
+    operator asked for it to be retired rather than deleted in this pass; it is
+    listed in docs/ATLAS_LONG_ONLY.md under dead code.
+
+    It REFUSES rather than placing. Leaving a working implementation here would
+    be an invitation: the next person who wants to protect a short finds a
+    ready-made path back to the mechanism that failed, and ALLOW_SHORT_ENTRIES
+    is the only thing standing between them and it.
     """
-    A MIS short: SL stop (limit on trigger) plus a LIMIT target, both DAY validity.
+    log.error(f"{symbol}: _protect_mis_sl is RETIRED and must not be called. "
+              f"ATLAS is long-only and CNC-only; the only protection mechanism "
+              f"is a two-leg OCO GTT. Nothing was placed.")
+    return {"ok": False, "mechanism": "SL_RETIRED", "legs": {},
+            "reason": "the SL stop path is retired — ATLAS is long-only, CNC "
+                      "only, and protected by a two-leg OCO GTT"}
 
-    WAS SL-M, AND THE OLD REASONING IS KEPT HERE BECAUSE IT WAS NOT WRONG, ONLY
-    UNAVAILABLE. The argument for SL-M was that an SL is a limit order on trigger
-    and can go unfilled in exactly the fast move it exists to escape. That is true.
-    But BSE has discontinued SL-M across equity, equity derivatives, currency and
-    commodity, Zerodha blocks it for index options, and on 2026-10-07 this exact
-    call was rejected -- so the choice was never between SL-M and SL, it was
-    between SL and nothing.
-
-    THE UNFILLED-LIMIT RISK IS ANSWERED BY THE LIMIT PRICE, not by the order type.
-    stop_limit_price() sets the limit 0.5% THROUGH the trigger on the closing side,
-    which is Zerodha's own published guidance for making an SL behave like an
-    SL-M. A fill 0.5% worse than the trigger is a cost; the band is there so the
-    order is not rejected by Limit Price Protection.
-
-    NO market_protection HERE. It is a parameter of MARKET and SL-M only. Sending
-    it on an SL is sending a field the order type does not take.
-
-    DAY validity is sufficient here and only here: the position cannot outlive the
-    session, because squareoff_mis() closes it before the broker's cutoff.
-    """
-    if kite is None:
-        from atlas.execution.broker import get_kite
-        kite = get_kite()
-    if kite is None:
-        return {"ok": False, "reason": "kite unavailable", "legs": {}}
-
-    side = exit_side(direction)
-    trig = stop_trigger(stop, direction)
-    lim = stop_limit_price(trig, direction)
-    out = {"mechanism": "SL", "legs": {}, "stop": round_tick(stop),
-           "trigger": trig, "stop_limit": lim,
-           "target": round_tick(tgt) if tgt is not None else None}
-    try:
-        sid = kite.place_order(variety="regular", exchange="NSE",
-                               tradingsymbol=symbol, transaction_type=side,
-                               quantity=int(qty), product="MIS",
-                               order_type=ORDER_SPECS[PRIMARY_STOP]["order_type"],
-                               trigger_price=trig, price=lim,
-                               validity="DAY", tag="ATLAS_SL")
-        out["legs"]["stop_order_id"] = sid
-    except Exception as e:
-        out["ok"] = False
-        out["reason"] = f"SL stop failed: {e}"
-        return out
-    if tgt is None:
-        out["ok"] = True
-        out["reason"] = "SL stop placed; no target (held and trailed)"
-        return out
-    try:
-        tid = kite.place_order(variety="regular", exchange="NSE",
-                               tradingsymbol=symbol, transaction_type=side,
-                               quantity=int(qty), product="MIS",
-                               order_type="LIMIT", price=round_tick(tgt),
-                               validity="DAY", tag="ATLAS_TGT")
-        out["legs"]["target_order_id"] = tid
-    except Exception as e:
-        out["reason"] = f"SL stop placed, target LIMIT failed: {e}"
-        out["ok"] = True
-        return out
-    out["ok"] = True
-    out["reason"] = "SL stop and LIMIT target placed"
-    return out
-
-
-# ══════════════════════════════════════════════════════════════════
-# THE FAILURE PATH
-# ══════════════════════════════════════════════════════════════════
 
 def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
                     fill_price: float, stop_price: float, kite=None) -> dict:
@@ -493,15 +521,26 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
     Step 1 cannot be skipped by a caller, because the caller no longer chooses the
     pair.
 
-    -> {"protected": bool,   the stop is resting -- nothing further is needed
-        "exited":    bool,   no stop, but the position is closed
-        "unprotected": bool, open with no stop AND no exit -- operator incident
+    -> {"protected": bool,   the GTT is resting -- nothing further is needed
+        "exited":    bool,   no GTT, but the position is closed
+        "unprotected": bool, open with no GTT AND no exit -- operator incident
+        "must_halt": bool,   TRUE whenever the primary failed, even if the
+                             fallback worked. See below.
         "prot": {...},       what protect() returned
         "exit": {...}|None,  what emergency_exit() returned, if it was reached
         "mechanism": str, "reason": str}
 
-    It does not alert and does not halt. Those are the caller's, because only the
-    caller knows the trade id and what to write to the ledger.
+    MUST_HALT IS SET WHENEVER THE GTT DID NOT PLACE, successful fallback or
+    not. A failed GTT means the only protection mechanism is not working, and
+    the next entry would be opened into the same condition -- so ATLAS stops
+    taking entries even though this particular position was closed cleanly.
+    Halting only when BOTH failed, which is what the previous shape did, treats
+    a working fallback as evidence that the primary is fine.
+
+    It does not alert and does not halt ITSELF. The flag is returned and the
+    caller acts on it, because only the caller knows the trade id and what to
+    write to the ledger. A flag rather than a convention: a caller that ignores
+    it is a test failure, not a silent omission.
     """
     # BEFORE EITHER ORDER IS BUILT. A pair that shares a failure mode must break
     # here, where no position exists yet, rather than at the moment the fallback
@@ -512,7 +551,7 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
                    fill_price=fill_price, stop_price=stop_price, kite=kite)
     if prot.get("ok"):
         return {"protected": True, "exited": False, "unprotected": False,
-                "prot": prot, "exit": None,
+                "must_halt": False, "prot": prot, "exit": None,
                 "mechanism": prot.get("mechanism", ""),
                 "reason": ""}
 
@@ -526,23 +565,24 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
     # of protection that were one layer twice. What follows shares none of the
     # primary's three dependencies: no trigger price, no resting order, and no
     # market-protection requirement.
-    log.error(f"{symbol}: stop placement FAILED ({prot.get('reason')}) — "
-              f"falling back to an immediate "
-              f"{ORDER_SPECS[FALLBACK_EXIT]['order_type']} exit, which shares "
-              f"no failure mode with the "
-              f"{ORDER_SPECS[PRIMARY_STOP]['order_type']} that just failed")
+    log.error(f"{symbol}: OCO GTT FAILED ({prot.get('reason')}) — exiting NOW "
+              f"with an immediate {ORDER_SPECS[FALLBACK_EXIT]['order_type']} "
+              f"through the book, on the "
+              f"{ORDER_SPECS[FALLBACK_EXIT]['api']} API rather than the "
+              f"{ORDER_SPECS[PRIMARY_STOP]['api']} API that just refused us. "
+              f"ATLAS will self-halt: the protection mechanism is not working.")
     ex = emergency_exit(symbol, direction, qty, product,
                         why=f"stop placement failed: {prot.get('reason')}",
                         kite=kite)
     if ex.get("ok"):
         return {"protected": False, "exited": True, "unprotected": False,
-                "prot": prot, "exit": ex,
+                "must_halt": True, "prot": prot, "exit": ex,
                 "mechanism": f"{prot.get('mechanism', '?')}->FALLBACK_EXIT",
                 "reason": prot.get("reason", "")}
     return {"protected": False, "exited": False, "unprotected": True,
-            "prot": prot, "exit": ex, "mechanism": "NONE",
-            "reason": (f"stop failed ({prot.get('reason')}) AND the fallback "
-                       f"exit failed ({ex.get('reason')})")}
+            "must_halt": True, "prot": prot, "exit": ex, "mechanism": "NONE",
+            "reason": (f"the OCO GTT failed ({prot.get('reason')}) AND the "
+                       f"fallback exit failed ({ex.get('reason')})")}
 
 
 def emergency_exit(symbol: str, direction: str, qty: int, product: str,

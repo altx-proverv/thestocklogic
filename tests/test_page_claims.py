@@ -211,13 +211,16 @@ def main() -> int:
     # A short on the screener is information. The page must not read as a
     # short instruction, and the entry path must be unable to take one --
     # that half is proved in tests/test_regime_gate.py.
-    # SHORTS ARE LIVE NOW. This asserted they were disabled, which was true while
-    # the mandate was long-only. What must still hold is that the PAGE does not
-    # describe a policy the agent no longer follows -- the banner used to say
-    # "ATLAS itself takes neither", which became false the moment shorts shipped.
+    # LONG-ONLY AGAIN, 2026-10-12. This has now asserted both answers in turn --
+    # shorts disabled, then "both sides are enabled", now disabled again -- and
+    # the lesson is that the ASSERTION should never have been "what is the
+    # config set to". That is a tautology against config.py. What matters is
+    # that the PAGE does not describe a policy the agent no longer follows, and
+    # that no market state can produce a short, which is checked below and in
+    # tests/test_regime_gate.py against the gate itself.
     from atlas.config import ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES
-    check("both sides are enabled in config",
-          ALLOW_SHORT_ENTRIES and ALLOW_LONG_ENTRIES, True)
+    check("longs enabled, shorts disabled",
+          (ALLOW_LONG_ENTRIES, ALLOW_SHORT_ENTRIES), (True, False))
     check("the page no longer claims ATLAS takes neither side",
           "takes neither" not in signals, True)
     # The side-and-cash wording lived in the removed explanation box. It is not
@@ -235,6 +238,17 @@ def main() -> int:
             if regime_allows_side(cx, "LONG")[0] and regime_allows_side(cx, "SHORT")[0]:
                 both.append(reg)
     check("no market state permits both sides at once", not both, str(both))
+    # AND NO MARKET STATE PERMITS A SHORT AT ALL. Stronger than the above and
+    # the thing that actually matters now.
+    shorts = []
+    for reg in ("bull", "bear", "sideways", "unknown"):
+        for a, d, c_, m_ in ((1200, 800, 25000, 24500), (800, 1200, 24000, 24500),
+                             (1200, 800, 24000, 24500)):
+            cx = {"regime": reg, "advance_count": a, "decline_count": d,
+                  "nifty_close": c_, "nifty_20dma": m_, "source": "market.parquet"}
+            if regime_allows_side(cx, "SHORT")[0]:
+                shorts.append((reg, a > d))
+    check("  and no market state permits a SHORT", not shorts, str(shorts))
 
     print()
     print("THE WATCHLIST IS PRESENTED AS A WATCHLIST, NOT AS CALLS")

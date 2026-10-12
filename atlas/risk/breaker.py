@@ -74,11 +74,21 @@ log = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# FROM CONFIG, AND THE DEFAULT IS THE REAL PATH. This resolved as
+#
+#     Path(os.environ.get("ATLAS_HALT_FILE", str(Path.home()/".atlas"/"halt")))
+#
+# which made the halt FAIL OPEN: the real file is /var/lib/atlas/halt, the
+# variable was set in only one of the eight places that run ATLAS code, and
+# everywhere else this pointed at a path that does not exist, read "not
+# halted", and would have traded. See atlas/config.HALT_FILE for the full list
+# of entry points that were affected.
+#
 # Outside the repo on purpose. The box deploys with `git reset --hard`, and
 # while that leaves untracked files alone, a halt marker should not depend on
 # that staying true.
-SENTINEL = Path(os.environ.get(
-    "ATLAS_HALT_FILE", str(Path.home() / ".atlas" / "halt")))
+from atlas.config import HALT_FILE as SENTINEL              # noqa: E402
+from atlas.config import HALT_FILE_CANONICAL, halt_file_state, log_halt_state  # noqa: E402,F401
 
 # Consecutive transient failures tolerated before halting. Reads get three
 # because they have 360 chances a day; ledger writes get two because they are

@@ -76,7 +76,7 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
     BLOCKING_STATUSES,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO, FUNDS_SAFETY_BUFFER_PCT,
-    ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES,
+    ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES, STRICT_BULL_AND_BULLISH,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
 from atlas.risk.position_sizing import size_for_trade
@@ -287,15 +287,13 @@ def allowed_side(ctx: dict) -> tuple:
     answer:
 
         regime    sentiment   ->  side
-        bull      bullish         LONG
-        bear      bearish         SHORT
-        sideways  bullish         LONG     follow sentiment
-        sideways  bearish         SHORT    follow sentiment
-        bull      bearish         cash     structure and participation conflict
-        bear      bullish         cash     same, other way round
-        any       mixed           cash     breadth and index disagree
-        unknown   any             cash     DEFAULT_ON_UNKNOWN_REGIME
-        any       unknown         cash     an unreadable input is never a side
+        bull      bullish         LONG     the ONLY tradeable state
+        everything else            cash
+
+    STRICT_BULL_AND_BULLISH collapses the matrix to that one row. The previous
+    shape took bear+bearish as a SHORT and followed sentiment in a sideways
+    regime; both are gone -- shorts because they are off, sideways because the
+    rule says both conditions must hold and a sideways regime is not bullish.
 
     ONE SIDE AT A TIME, never both. The matrix returns a single direction, so a
     long and a short can never be opened on the same evaluation cycle. Positions
@@ -320,6 +318,58 @@ def allowed_side(ctx: dict) -> tuple:
 
     if regime == "bull" and sent == "bullish":
         return "LONG", f"bull regime; {sreason}", None
+
+    # ── EVERYTHING BELOW HERE IS CASH UNDER THE STRICT RULE ───────
+    #
+    # "Trade only when regime AND sentiment are both bullish. Otherwise stay in
+    # cash. Strict, both must hold." Operator's rule, 2026-10-12.
+    #
+    # THE TWO BRANCHES THIS REPLACES, and why neither survives:
+    #
+    #   bear + bearish    -> SHORT. Shorts are off. The whole 7 October failure
+    #                        chain started here: short forced MIS, MIS forced
+    #                        SL-M, and Kite refuses SL-M via API.
+    #   sideways + either -> follow sentiment. This is the branch the rule
+    #                        names as missing, and the config comment above
+    #                        ALLOW_SHORT_IN_SIDEWAYS already DESCRIBED it as
+    #                        absent: "the entry gate now requires a bull regime
+    #                        ... AND positive sentiment ..., so sideways does
+    #                        not qualify". The comment was right; the code
+    #                        followed sentiment anyway. They agree now.
+    #
+    # WHAT THIS COSTS, stated rather than discovered later: the regime has been
+    # sideways throughout the live history, and sideways+bullish was the only
+    # branch that produced a long in that state. On this rule ATLAS takes zero
+    # trades over that period. That is the rule working, not a regression --
+    # and it is the same thing the config has claimed since the AND-gate note
+    # was written.
+    # blocked_by IS ATTRIBUTED PRECISELY, not collapsed to one label. It exists
+    # so "why did ATLAS sit out" can be COUNTED from atlas_entry_log without
+    # parsing prose, and three different states reach this line for three
+    # genuinely different reasons. Flattening them would make a long flat
+    # stretch unreadable -- "the trend is there and nobody is buying it" is not
+    # the same market as "there is no trend", and the split between them is the
+    # interesting number.
+    if STRICT_BULL_AND_BULLISH:
+        if (regime, sent) in (("bull", "bearish"), ("bear", "bullish")):
+            # Structure and participation point opposite ways. This was already
+            # cash before the strict rule and still is, for the same reason --
+            # so it keeps its own label rather than being absorbed.
+            return (None, f"{regime} regime against {sent} sentiment -- no "
+                          f"side ({sreason})", "CONFLICT")
+        if sent == "bearish":
+            # The side this state would have named is a SHORT, and shorts are
+            # off. Labelled for what actually excludes it.
+            return (None, f"{regime} regime with bearish sentiment would be a "
+                          f"SHORT; ATLAS is long-only ({sreason})",
+                    "LONG_ONLY")
+        # Bullish sentiment but the regime is not bull -- sideways, in practice.
+        # This is the branch the strict rule removes, and the only one whose
+        # exclusion is the strict rule itself.
+        return (None, f"{regime} regime with {sent} sentiment -- the rule is "
+                      f"bull AND bullish, strictly; cash otherwise ({sreason})",
+                "STRICT_RULE")
+
     if regime == "bear" and sent == "bearish":
         return "SHORT", f"bear regime; {sreason}", None
     if regime == "sideways":
@@ -349,8 +399,14 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
         return False, f"unknown direction {d}", "CONFIG"
 
     if d == "SHORT" and not ALLOW_SHORT_ENTRIES:
-        return (False, "short entries are disabled (ALLOW_SHORT_ENTRIES)",
-                "CONFIG")
+        # LONG_ONLY, not CONFIG. "CONFIG" named a switch without naming the
+        # policy, and it shared its label with the unknown-direction case
+        # above. LONG_ONLY is the same label allowed_side uses for a state
+        # whose side would have been a short, so a count over
+        # atlas_entry_log.blocked_by sums the long-only policy into one bucket
+        # however the rejection was reached.
+        return (False, "short entries are disabled — ATLAS is long-only "
+                       "(ALLOW_SHORT_ENTRIES)", "LONG_ONLY")
     if d == "LONG" and not ALLOW_LONG_ENTRIES:
         return (False, "long entries are disabled (ALLOW_LONG_ENTRIES)", "CONFIG")
 
@@ -481,6 +537,68 @@ def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float,
 # ─────────────────────────────────────────────────────────────────────
 # ENTRY
 # ─────────────────────────────────────────────────────────────────────
+
+def _settle_unfilled_limit(order_id: str, symbol: str) -> dict:
+    """A LIMIT that did not fill in the window: cancel it and find out what happened.
+
+    -> {"outcome": "NO_FILL" | "FILLED" | "UNKNOWN",
+        "filled_qty": int, "avg_price": float, "reason": str}
+
+    WHY THIS EXISTS AT ALL. A MARKET order either fills or fails; a LIMIT has a
+    third state -- resting, unfilled, still live -- and that state is the
+    COMMON one when the book moves away from the last traded price. Treating it
+    as INDETERMINATE, which is what await_fill alone would do, would alert the
+    operator on an ordinary no-entry and leave a resting order that could fill
+    minutes later with nothing watching for it.
+
+    CANCEL FIRST, THEN READ. The order is cancelled before its status is
+    trusted, because the alternative order -- read, then cancel -- has a window
+    in which the read says "open", the cancel fails, and the order fills
+    afterwards while the caller has already concluded there is no position.
+
+    THE RACE IS REAL AND IS HANDLED: a cancel can lose to a fill that was
+    already in flight. So the status is re-read AFTER cancelling and a fill is
+    believed over the cancel. A partial fill is a position and is reported as
+    FILLED with the quantity that actually filled -- never rounded up to the
+    order quantity, which would size a stop for shares nobody owns.
+    """
+    from atlas.execution.broker import cancel_order, get_order_status
+
+    cancelled = cancel_order(order_id)
+    status = get_order_status(order_id) or {}
+    st = str(status.get("status", "")).upper()
+    try:
+        filled = int(float(status.get("filled_quantity") or 0))
+    except (TypeError, ValueError):
+        filled = 0
+    try:
+        avg = float(status.get("average_price") or 0)
+    except (TypeError, ValueError):
+        avg = 0.0
+
+    if filled > 0:
+        # It filled, wholly or partly, despite the cancel. A position exists.
+        log.warning(f"{symbol}: entry LIMIT {order_id} filled {filled} "
+                    f"@ {avg} despite the cancel — protecting the position")
+        return {"outcome": "FILLED", "filled_qty": filled, "avg_price": avg,
+                "reason": f"filled {filled} @ {avg} during cancellation"}
+
+    if st in ("CANCELLED", "REJECTED") or (cancelled and st in ("", "CANCELLED")):
+        log.info(f"{symbol}: entry LIMIT {order_id} did not fill and was "
+                 f"cancelled — no position, no entry")
+        return {"outcome": "NO_FILL", "filled_qty": 0, "avg_price": 0.0,
+                "reason": f"limit at {status.get('price')} did not fill; "
+                          f"cancelled cleanly (status {st or 'gone'})"}
+
+    # Cancel failed and nothing is confirmed filled. The order may still be
+    # live. This is the genuine unknown, and it keeps the old handling: the row
+    # stays PENDING and reconcile owns it.
+    log.error(f"{symbol}: entry LIMIT {order_id} could not be settled "
+              f"(cancel_ok={cancelled}, status={st or 'not in book'}) — "
+              f"it may still be live")
+    return {"outcome": "UNKNOWN", "filled_qty": 0, "avg_price": 0.0,
+            "reason": f"cancel_ok={cancelled}, status={st or 'not in book'}"}
+
 
 def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     """Evaluate a candidate and, unless dry_run, enter it.
@@ -805,9 +923,31 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # atlas_trades.id is a bigint, so ATLAS:<id> fits Kite's 20-character tag
     # and reconcile can join broker orders to rows exactly rather than guessing
     # from symbol and timestamp.
+    # ── A LIMIT AT THE LIVE PRICE, NOT MARKET ─────────────────────
+    #
+    # The MARKET entry was the last market-type order in the path. Kite refuses
+    # an API MARKET order that omits market_protection -- the rule that took
+    # out both the stop and its fallback on 7 October -- and the entry survived
+    # only because broker.place_order happens to set market_protection=3. A
+    # LIMIT is outside that rule entirely and prices itself.
+    #
+    # ltp IS THE PRICE READ AT GATE 5, a few hundred milliseconds ago, not a
+    # fresh quote. Deliberate: re-reading here would mean sizing was done
+    # against one price and the order placed at another, and the 2R target is
+    # computed from the actual fill anyway.
+    #
+    # THE COST IS A MISSED FILL. A LIMIT at the last traded price does not fill
+    # if the book moves away, and the settle step below cancels it and records a
+    # clean no-entry rather than chasing. Not entering is a cost this strategy
+    # can carry; an unbounded fill price is not.
+    from atlas.config import ENTRY_ORDER_TYPE
+    entry_px = round(float(ltp), 2)
     order = place_order(symbol=symbol, direction=direction, qty=sizing["qty"],
-                        order_type="MARKET", tag=f"ATLAS:{row_id}",
-                        product=sizing["product"])
+                        order_type=ENTRY_ORDER_TYPE, price=entry_px,
+                        tag=f"ATLAS:{row_id}", product=sizing["product"],
+                        intent="ENTRY")
+    intent["entry_order_type"] = ENTRY_ORDER_TYPE
+    intent["entry_limit_price"] = entry_px
 
     if not order.get("success"):
         reason = order.get("reason", "order failed")
@@ -834,9 +974,14 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     #
     # Detecting the fill on the NEXT cycle would leave a minute of unprotected
     # exposure on every entry in a system nobody is watching, so await_fill
-    # BLOCKS here. A MARKET order fills in well under a second; the wait is
-    # bounded and its timeout is treated as "a position may exist", never as
-    # "no position".
+    # BLOCKS here. The wait is bounded and its timeout is treated as "a
+    # position may exist", never as "no position".
+    #
+    # A LIMIT CHANGES WHAT A TIMEOUT MEANS. A MARKET order that has not filled
+    # in 20s is a genuine unknown; a LIMIT that has not filled is usually just
+    # resting away from the book, which is an ordinary outcome and not an
+    # incident. _settle_unfilled_limit below cancels it and finds out which of
+    # the two it was, so the common case stops being reported as INDETERMINATE.
     # ENABLE_EXIT_MANAGEMENT IS THE SWITCH THAT MAKES ATLAS AUTONOMOUS.
     #
     # False is the behaviour ATLAS has always had: it opens a position and leaves
@@ -863,18 +1008,42 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         return {"status": "ORDER_FAILED", "reason": fill.get("reason")}
 
     if fill["outcome"] == "INDETERMINATE":
-        # The order may still fill. Nothing may be assumed about the position, so
-        # no stop can be sized and none is placed -- the row stays PENDING and
-        # reconcile owns it. This is the one path that can leave an unprotected
-        # position, and it does so because acting on an unknown quantity is worse.
-        log.error(f"{symbol}: fill INDETERMINATE ({fill.get('reason')}) — trade "
-                  f"{row_id} left PENDING, NOT protected. reconcile owns it.")
-        _mark_indeterminate(row_id, f"fill unconfirmed: {fill.get('reason')}")
-        _alert("FILL UNCONFIRMED",
-               f"{symbol} {direction}: {fill.get('reason')}. No stop placed. "
-               f"Trade {row_id} is PENDING and may be a live position.")
-        return {"status": "FILL_UNCONFIRMED", "trade_id": row_id,
-                "reason": fill.get("reason"), **intent}
+        # A RESTING LIMIT IS THE LIKELY CAUSE, NOT AN INCIDENT. Cancel it and
+        # find out, instead of alerting on what is usually an ordinary no-entry.
+        settled = _settle_unfilled_limit(intent["order_id"], symbol)
+
+        if settled["outcome"] == "NO_FILL":
+            # Nothing was bought. Release the reservation -- this is a clean
+            # no-entry and the symbol must stay available tomorrow.
+            _release_intent(row_id, settled["reason"])
+            log.info(f"{symbol}: NO ENTRY — {settled['reason']}")
+            return {"status": "NO_FILL_LIMIT", "reason": settled["reason"],
+                    **intent}
+
+        if settled["outcome"] == "FILLED":
+            # It filled during the cancel. Fall through to protection with the
+            # quantity that ACTUALLY filled.
+            fill = {"outcome": "FILLED",
+                    "filled_qty": settled["filled_qty"],
+                    "avg_price": settled["avg_price"],
+                    "reason": settled["reason"]}
+            intent["fill"] = "FILLED"
+        else:
+            # The genuine unknown. Unchanged handling: nothing may be assumed
+            # about the position, so no stop can be sized and none is placed --
+            # the row stays PENDING and reconcile owns it. This is the one path
+            # that can leave an unprotected position, and it does so because
+            # acting on an unknown quantity is worse.
+            log.error(f"{symbol}: fill INDETERMINATE and the entry LIMIT could "
+                      f"not be settled ({settled['reason']}) — trade {row_id} "
+                      f"left PENDING, NOT protected. reconcile owns it.")
+            _mark_indeterminate(row_id, f"fill unconfirmed: {settled['reason']}")
+            _alert("FILL UNCONFIRMED",
+                   f"{symbol} {direction}: {settled['reason']}. No stop "
+                   f"placed. Trade {row_id} is PENDING and may be a live "
+                   f"position.")
+            return {"status": "FILL_UNCONFIRMED", "trade_id": row_id,
+                    "reason": settled["reason"], **intent}
 
     filled_qty = int(fill["filled_qty"])
     avg_price  = float(fill["avg_price"])
@@ -894,30 +1063,53 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     intent["exit_mechanism"] = prot.get("mechanism", "")
     intent["target_price"] = prot.get("target")
 
+    # ── THE GTT FAILED: EXIT HAPPENED, NOW HALT ───────────────────
+    #
+    # SELF-HALT ON must_halt, WHICHEVER WAY THE FALLBACK WENT. A failed OCO GTT
+    # means the only protection mechanism ATLAS has is not working, so the next
+    # entry would be opened into exactly the same condition. The previous shape
+    # halted only when BOTH the stop and the exit failed, which treats a
+    # working fallback as evidence that the primary is fine -- and on
+    # 7 October that reasoning is what allowed a second unprotected position to
+    # be possible.
+    #
+    # The flag comes from protect_or_exit rather than being re-derived here, so
+    # there is one definition of "the primary failed" and tests can assert both
+    # branches halt.
     if pe["exited"]:
-        _alert("EXITED UNPROTECTED POSITION",
-               f"{symbol} {direction} {filled_qty}: stop could not be placed "
-               f"({prot.get('reason')}), closed on a limit priced through the "
-               f"book — a different order family from the stop that failed.")
+        ex = pe["exit"] or {}
+        if pe.get("must_halt"):
+            breaker.halt("GTT_FAILED",
+                         f"{symbol}: the OCO GTT would not place "
+                         f"({prot.get('reason')}). The position was closed on "
+                         f"a marketable LIMIT, but the protection mechanism is "
+                         f"not working -- no further entries.")
+        _alert("EXITED — GTT WOULD NOT PLACE",
+               f"{symbol} {direction} {filled_qty}: the OCO GTT was refused "
+               f"({prot.get('reason')}), so the position was closed at once on "
+               f"a marketable LIMIT — a different API from the GTT that "
+               f"failed. Position is FLAT. Entries are halted because the "
+               f"stop mechanism is broken, not because this trade went wrong.")
         return {"status": "EXITED_NO_STOP", "trade_id": row_id,
-                "reason": prot.get("reason"), **intent}
+                "reason": prot.get("reason"), "halted": bool(pe.get("must_halt")),
+                **intent}
 
     if pe["unprotected"]:
-        # Both failed. Open, unprotected, and the broker is refusing orders:
-        # halt so nothing else is opened into the same condition. Worth noting
-        # that these two now fail for INDEPENDENT reasons, so reaching here is
-        # evidence of a broker-wide refusal rather than one bad order type --
-        # which is the distinction 2026-10-07 could not make.
+        # Both failed. Open, unprotected, and the broker is refusing on two
+        # different APIs -- which, now that the two are genuinely independent,
+        # is evidence of a broker-wide problem rather than one bad order type.
+        # That distinction is what 2026-10-07 could not make.
         ex = pe["exit"] or {}
         breaker.halt("OPEN_UNPROTECTED",
-                     f"{symbol}: open with no stop — placement failed "
+                     f"{symbol}: OPEN with no stop — the OCO GTT failed "
                      f"({prot.get('reason')}) AND the fallback limit exit "
                      f"failed ({ex.get('reason')})")
         _alert("OPEN AND UNPROTECTED",
-               f"{symbol} {direction} {filled_qty} is OPEN with no stop and the "
-               f"fallback exit failed too. {ex.get('reason')}. Entries halted.")
+               f"{symbol} {direction} {filled_qty} is OPEN with no stop and "
+               f"the fallback exit failed too. {ex.get('reason')}. Entries "
+               f"halted. THIS NEEDS A HUMAN NOW.")
         return {"status": "OPEN_UNPROTECTED", "trade_id": row_id,
-                "reason": ex.get("reason"), **intent}
+                "reason": ex.get("reason"), "halted": True, **intent}
 
     log.info(f"{symbol}: protected via {prot.get('mechanism')} — "
              f"stop {prot.get('stop')} target {prot.get('target')}")

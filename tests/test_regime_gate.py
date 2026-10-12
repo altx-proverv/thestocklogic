@@ -76,20 +76,29 @@ def main() -> int:
     case("bull structure vs bearish participation",
          ctx(adv=700, dec=1300, close=24000, ma20=24500),
          "LONG", False, "CONFLICT")
-    # SIDEWAYS NOW FOLLOWS SENTIMENT. This asserted cash, which was the rule
-    # until the direction matrix landed: a sideways regime takes the side
-    # sentiment names rather than standing aside.
-    case("SIDEWAYS + bullish sentiment -> long", ctx(regime="sideways"),
-         "LONG", True, None)
-    case("SIDEWAYS + bearish sentiment -> short",
+    # STRICT BULL AND BULLISH, 2026-10-12. This assertion has now been all three
+    # ways -- sideways is cash, sideways follows sentiment, sideways is cash --
+    # and the third is the operator's rule stated plainly: "trade only when
+    # regime AND sentiment are both bullish, otherwise stay in cash."
+    #
+    # blocked_by DISTINGUISHES WHY, and that is the part worth asserting. A
+    # sideways-bullish state is cash because of the strict rule; a
+    # sideways-bearish or bear-bearish state is cash because the side it names
+    # is a SHORT and shorts are off. Collapsing both to one label would make a
+    # long flat stretch unreadable in atlas_entry_log.
+    case("SIDEWAYS + bullish -> cash (STRICT_RULE)", ctx(regime="sideways"),
+         "LONG", False, "STRICT_RULE")
+    case("SIDEWAYS + bearish -> cash (LONG_ONLY)",
          ctx(regime="sideways", adv=700, dec=1300, close=24000),
-         "SHORT", True, None)
-    # bear structure with bullish participation is the mirror conflict.
+         "SHORT", False, "LONG_ONLY")
+    # bear structure with bullish participation is the mirror conflict, and it
+    # keeps its own label rather than being absorbed by the strict rule.
     case("bear structure vs bullish participation", ctx(regime="bear"),
          "LONG", False, "CONFLICT")
-    # and the side a bear regime DOES take, when participation agrees
-    case("bear + bearish sentiment -> short",
-         ctx(regime="bear", adv=700, dec=1300, close=24000), "SHORT", True, None)
+    # the state that USED to be the only short, now excluded for being a short
+    case("bear + bearish -> cash (LONG_ONLY)",
+         ctx(regime="bear", adv=700, dec=1300, close=24000),
+         "SHORT", False, "LONG_ONLY")
     case("unknown regime", ctx(regime="unknown"), "LONG", False, "REGIME")
 
     for label, got, blocked, good, reason in rows:
@@ -225,13 +234,16 @@ def main() -> int:
                 "nifty_close": c_, "nifty_20dma": m_,
                 "source": "market.parquet", "extreme_bearish": False}
 
+    # ONE TRADEABLE CELL OUT OF SIXTEEN. That is what "strict, both must hold"
+    # means, and seeing it as a table is the clearest statement of the rule
+    # anywhere in the codebase.
     MATRIX = {
         ("bull", "bullish"): "LONG",   ("bull", "bearish"): None,
         ("bull", "mixed"):   None,     ("bull", "unknown"): None,
-        ("bear", "bullish"): None,     ("bear", "bearish"): "SHORT",
+        ("bear", "bullish"): None,     ("bear", "bearish"): None,
         ("bear", "mixed"):   None,     ("bear", "unknown"): None,
-        ("sideways", "bullish"): "LONG", ("sideways", "bearish"): "SHORT",
-        ("sideways", "mixed"):   None,   ("sideways", "unknown"): None,
+        ("sideways", "bullish"): None, ("sideways", "bearish"): None,
+        ("sideways", "mixed"):   None, ("sideways", "unknown"): None,
         ("unknown", "bullish"): None,  ("unknown", "bearish"): None,
         ("unknown", "mixed"):   None,  ("unknown", "unknown"): None,
     }
@@ -255,17 +267,17 @@ def main() -> int:
     for r_, s_, want, got, lo, sh in bad[:6]:
         print(f"      {r_}+{s_}: want {want}, got {got} (long={lo} short={sh})")
 
-    # the four cells that DO take a side, named individually so a policy change
-    # cannot pass by editing the table above alone
-    for regime, sent, side in (("bull", "bullish", "LONG"),
-                               ("bear", "bearish", "SHORT"),
-                               ("sideways", "bullish", "LONG"),
-                               ("sideways", "bearish", "SHORT")):
-        got = allowed_side(mctx(regime, sent))[0]
-        good = got == side
-        ok &= good
-        print(f"  {regime + ' + ' + sent + ' -> ' + side:<58}"
-              f"{'ok' if good else '** ' + str(got) + ' **'}")
+    # THE ONE cell that takes a side, named individually so a policy change
+    # cannot pass by editing the table above alone.
+    got = allowed_side(mctx("bull", "bullish"))[0]
+    ok &= got == "LONG"
+    print(f"  {'bull + bullish -> LONG (the only tradeable cell)':<58}"
+          f"{'ok' if got == 'LONG' else '** ' + str(got) + ' **'}")
+    # AND NO CELL ANYWHERE RETURNS A SHORT.
+    shorty = [k for k in MATRIX if allowed_side(mctx(*k))[0] == "SHORT"]
+    ok &= not shorty
+    print(f"  {'no cell in the matrix returns SHORT':<58}"
+          f"{'ok' if not shorty else '** ' + str(shorty) + ' **'}")
 
     # a disagreement is its own countable status, not attributed to either half
     for regime, sent in (("bull", "bearish"), ("bear", "bullish")):
@@ -287,7 +299,12 @@ def main() -> int:
             got, why, blk = regime_allows_side(mctx(regime, sent), side)
         finally:
             setattr(AE, flag, saved)
-        good = (not got) and blk == "CONFIG"
+        # LONG_ONLY for the short switch, CONFIG for the long one. The labels
+        # differ on purpose: shorts being off is a standing POLICY worth
+        # counting as one bucket, while longs being off is an operator
+        # intervention and keeps the generic label.
+        want_blk = "LONG_ONLY" if side == "SHORT" else "CONFIG"
+        good = (not got) and blk == want_blk
         ok &= good
         print(f"  {flag + '=False blocks its side outright':<58}"
               f"{'ok' if good else '** ALLOWED **'}")

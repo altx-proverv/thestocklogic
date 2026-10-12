@@ -68,11 +68,62 @@ def check(label, got, want, extra=""):
 class StrictKite:
     """Refuses what Zerodha refuses. reject names order types to fail."""
 
-    def __init__(self, ltp=1833.0, reject=()):
+    def __init__(self, ltp=1833.0, reject=(), reject_gtt=False,
+                 gtt_pending=0):
         self.reject = {str(r).upper() for r in reject}
         self.orders = []
+        self.gtts = []
+        self.reject_gtt = reject_gtt
+        # Zerodha's ToS: "At a particular point of time, You / each client may
+        # only have a maximum of 500 pending GTTs." Confirmed 2026-10-12.
+        self.gtt_pending = int(gtt_pending)
         self.last_price = ltp
         self.n = 0
+
+    # ── THE GTT ENDPOINT, WITH ITS OWN RULE SET ──────────────────
+    #
+    # This is the point of the independence axis: /gtt/triggers enforces
+    # different things from /orders, so a refusal here is not a refusal there.
+    # Rules taken from https://kite.trade/docs/connect/v3/gtt/ and
+    # https://zerodha.com/tos/gtt/ on 2026-10-12.
+    GTT_MAX_PENDING = 500
+
+    def place_gtt(self, **kw):
+        self.gtts.append(kw)
+        tt = str(kw.get("trigger_type", ""))
+        if tt not in ("single", "two-leg"):
+            raise RuntimeError(f"invalid trigger_type {tt!r}")
+        tv = list(kw.get("trigger_values") or [])
+        orders = list(kw.get("orders") or [])
+        if tt == "two-leg" and len(tv) != 2:
+            raise RuntimeError("two-leg requires exactly two trigger_values")
+        if len(orders) != len(tv):
+            raise RuntimeError("orders must pair with trigger_values")
+        if tt == "two-leg" and not (tv[0] < tv[1]):
+            raise RuntimeError("trigger_values must be ascending")
+        if not kw.get("last_price"):
+            raise RuntimeError("last_price is required")
+        for o in orders:
+            if str(o.get("product", "")).upper() != "CNC":
+                # GTT does not exist for MIS. This is the fact that forced SL-M
+                # on 7 October.
+                raise RuntimeError(f"GTT supports CNC only, got "
+                                   f"{o.get('product')}")
+        if self.gtt_pending >= self.GTT_MAX_PENDING:
+            raise RuntimeError(f"maximum {self.GTT_MAX_PENDING} pending GTTs "
+                               f"reached")
+        if self.reject_gtt:
+            raise RuntimeError("INJECTED: broker refusing GTT placement")
+        self.n += 1
+        return {"trigger_id": 70000 + self.n}
+
+    def get_gtts(self):
+        return [{"id": 70000 + i + 1, "status": "active", **g}
+                for i, g in enumerate(self.gtts)]
+
+    def delete_gtt(self, **kw):
+        self.gtts.append(("delete", kw))
+        return {"trigger_id": kw.get("trigger_id")}
 
     def place_order(self, **kw):
         self.orders.append(kw)
@@ -130,54 +181,106 @@ def main() -> int:
 
     print()
     print("=" * 78)
-    print("2 — THE STOP IS AN SL, AND ITS LIMIT IS ON THE FILLABLE SIDE")
+    print("2 — THE PROTECTION IS ONE TWO-LEG OCO GTT, CNC, LONG")
     print("-" * 78)
+    # PAYLOAD CONFIRMED against https://kite.trade/docs/connect/v3/gtt/ on
+    # 2026-10-12: type "two-leg", a condition carrying exchange, tradingsymbol,
+    # trigger_values[2] and last_price, and an orders array of two objects.
+    # StrictKite.place_gtt enforces that shape plus the 500-pending cap from
+    # Zerodha's GTT terms, so a malformed instruction fails here rather than at
+    # the broker.
     k = StrictKite()
-    r = X.protect(symbol="BHARTIARTL", direction="SHORT", qty=5, product="MIS",
-                  fill_price=1833.0, stop_price=1860.0, kite=k)
-    check("a SHORT MIS stop is placed", bool(r.get("ok")), True, r.get("reason", ""))
-    check("the order type sent is SL", types_sent(k), ["SL"])
-    o = k.orders[0]
-    check("it carries a trigger_price", bool(o.get("trigger_price")), True,
-          str(o.get("trigger_price")))
-    check("a SHORT stop's limit is ABOVE its trigger",
-          float(o["price"]) > float(o["trigger_price"]), True,
-          f"{o['price']} > {o['trigger_price']}")
-    check("no market_protection on an SL (no effect per the docs)",
-          "market_protection" in o, False)
+    r = X.protect(symbol="RELIANCE", direction="LONG", qty=10, product="CNC",
+                  fill_price=100.0, stop_price=95.0, kite=k)
+    check("a CNC LONG gets an OCO GTT", bool(r.get("ok")), True,
+          str(r.get("reason", ""))[:60])
+    check("mechanism is GTT_OCO", r.get("mechanism"), "GTT_OCO")
+    check("exactly one GTT instruction was sent", len(k.gtts), 1)
+    check("NO regular order was sent for protection", types_sent(k), [])
+    g = k.gtts[0]
+    check("  trigger_type is two-leg", g.get("trigger_type"), "two-leg")
+    check("  two trigger values", len(g.get("trigger_values") or []), 2)
+    check("  two order legs", len(g.get("orders") or []), 2)
+    check("  last_price is sent", bool(g.get("last_price")), True,
+          str(g.get("last_price")))
+    tv = g["trigger_values"]
+    check("  trigger_values ascend (stop below target)", tv[0] < tv[1], True,
+          f"{tv}")
+    legs = g["orders"]
+    check("  both legs SELL to close a long",
+          all(o["transaction_type"] == "SELL" for o in legs), True)
+    check("  both legs CNC", all(o["product"] == "CNC" for o in legs), True)
+    check("  both legs LIMIT", all(o["order_type"] == "LIMIT" for o in legs),
+          True)
+    check("  leg 0 is the stop, leg 1 the target",
+          legs[0]["price"] < legs[1]["price"], True,
+          f"stop {legs[0]['price']} / target {legs[1]['price']}")
+    check("  the stop leg is priced at the stop, not the trigger",
+          legs[0]["price"], 95.0,
+          "a gap through the trigger still works the order at the level "
+          "structure defined")
+    check("  the target is 2R from the ACTUAL fill", legs[1]["price"], 110.0,
+          "fill 100, stop 95 -> risk 5 -> 2R = 110")
 
-    k2 = StrictKite()
-    X._protect_mis_sl("TATASTEEL", "LONG", 10, 100.0, 99.0, None, k2)
-    o2 = k2.orders[0]
-    check("a LONG stop's limit is BELOW its trigger",
-          float(o2["price"]) < float(o2["trigger_price"]), True,
-          f"{o2['price']} < {o2['trigger_price']}")
-    # THE SIDE IS THE WHOLE POINT. A long's stop sells; a sell limit above the
-    # trigger never fills.
-    check("a LONG stop sells", str(o2.get("transaction_type")), "SELL")
-    check("a SHORT stop buys", str(o.get("transaction_type")), "BUY")
+    # THE RETIRED PATHS REFUSE. Nothing routes a short or an MIS position
+    # anywhere, and nothing reaches either API.
+    for d, prod, label in (("SHORT", "MIS", "a SHORT MIS position"),
+                           ("SHORT", "CNC", "a SHORT CNC position"),
+                           ("LONG", "MIS", "an MIS LONG position")):
+        kx = StrictKite()
+        rx = X.protect(symbol="X", direction=d, qty=5, product=prod,
+                       fill_price=100.0, stop_price=95.0, kite=kx)
+        check(f"{label} is refused", bool(rx.get("ok")), False,
+              str(rx.get("reason", ""))[:54])
+        check(f"  and nothing reached either API",
+              (len(kx.orders), len(kx.gtts)), (0, 0))
+
+    kr = StrictKite()
+    rr = X._protect_mis_sl("TATASTEEL", "SHORT", 90, 100.0, 105.0, 90.0, kr)
+    check("the retired SL path refuses if called directly",
+          bool(rr.get("ok")), False, str(rr.get("reason"))[:54])
+    check("  and sends nothing", (len(kr.orders), len(kr.gtts)), (0, 0))
+
+    # THE 500-GTT CAP IS A REAL LIMIT AND IS HANDLED AS A FAILURE, not as a
+    # silently unprotected position. Zerodha's GTT terms: "a maximum of 500
+    # pending GTTs".
+    kc = StrictKite(gtt_pending=500)
+    rc = X.protect(symbol="RELIANCE", direction="LONG", qty=10, product="CNC",
+                   fill_price=100.0, stop_price=95.0, kite=kc)
+    check("at the 500-GTT cap, protection FAILS loudly", bool(rc.get("ok")),
+          False, str(rc.get("reason"))[:60])
 
     print()
     print("=" * 78)
     print("3 — THE FALLBACK SURVIVES A FAILURE OF THE PRIMARY")
     print("-" * 78)
-    for reject, label in ((("SL",), "the broker refuses SL"),
-                          (("SL", "SL-M"), "the broker refuses the whole stop family")):
-        k3 = StrictKite(reject=reject)
-        out = X.protect_or_exit(symbol="BHARTIARTL", direction="SHORT", qty=5,
-                                product="MIS", fill_price=1833.0,
-                                stop_price=1860.0, kite=k3)
+    # THE INJECTION IS NOW ON THE GTT ENDPOINT, which is the whole point: the
+    # primary fails at /gtt/triggers and the fallback goes to /orders, so there
+    # is no rule either of them shares.
+    for kwargs, label in (
+        ({"reject_gtt": True}, "the broker refuses GTT placement"),
+        ({"gtt_pending": 500}, "the account is at its 500-GTT cap"),
+    ):
+        k3 = StrictKite(**kwargs)
+        out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
+                                product="CNC", fill_price=100.0,
+                                stop_price=95.0, kite=k3)
         check(f"[{label}] the primary failed", out["protected"], False)
         check(f"[{label}] the FALLBACK completed", out["exited"], True,
               str((out["exit"] or {}).get("reason", ""))[:40])
-        check(f"[{label}] it completed with a LIMIT, not another SL",
-              types_sent(k3), ["SL", "LIMIT"])
+        check(f"[{label}] it completed with a LIMIT on the orders API",
+              types_sent(k3), ["LIMIT"])
+        check(f"[{label}] and NO second GTT was attempted", len(k3.gtts), 1,
+              "a retry on the refusing endpoint is not a fallback")
+        check(f"[{label}] must_halt is set", out.get("must_halt"), True,
+              "a broken protection mechanism stops further entries even when "
+              "this position closed cleanly")
 
     # AND THE CONVERSE: if the fallback's own family is refused, the result is
     # an honest "unprotected", not a silent success.
-    k4 = StrictKite(reject=("SL", "LIMIT"))
-    out = X.protect_or_exit(symbol="BHARTIARTL", direction="SHORT", qty=5,
-                            product="MIS", fill_price=1833.0, stop_price=1860.0,
+    k4 = StrictKite(reject=("LIMIT",), reject_gtt=True)
+    out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
+                            product="CNC", fill_price=100.0, stop_price=95.0,
                             kite=k4)
     check("both refused -> unprotected is reported, not swallowed",
           out["unprotected"], True, out["reason"][:50])
@@ -332,6 +435,116 @@ def main() -> int:
     else:
         check("with exit management OFF it says so plainly",
               "places no stop-losses" in f, True)
+
+    print()
+    print("=" * 78)
+    print("7 — THE HALT PATH DOES NOT FAIL OPEN")
+    print("-" * 78)
+    # THE BUG: breaker.py resolved the halt file as
+    #   os.environ.get("ATLAS_HALT_FILE", "~/.atlas/halt")
+    # while the real file is /var/lib/atlas/halt. The variable was set in ONE
+    # of the eight places that run ATLAS code, so seven of them read a path
+    # that does not exist, concluded "not halted", and would have traded.
+    import os
+    import importlib
+    import atlas.config as CFG
+    import atlas.risk.breaker as BR
+    check("the canonical halt path is /var/lib/atlas/halt",
+          CFG.HALT_FILE_CANONICAL, "/var/lib/atlas/halt")
+    # THE DEFAULT IS THE REAL PATH. Asserted without the env var set, which is
+    # the configuration seven entry points actually had.
+    env_saved = os.environ.pop("ATLAS_HALT_FILE", None)
+    try:
+        import importlib
+        importlib.reload(CFG)
+        check("with NO environment variable, it defaults to the real file",
+              str(CFG.HALT_FILE), "/var/lib/atlas/halt",
+              "an unset environment is now the CORRECT configuration, not the "
+              "broken one")
+        check("  and it reports itself as canonical",
+              CFG.halt_file_state()["is_canonical"], True)
+    finally:
+        if env_saved is not None:
+            os.environ["ATLAS_HALT_FILE"] = env_saved
+        importlib.reload(CFG)
+
+    # breaker MUST read the constant, not re-derive the path.
+    #
+    # COMMENT-FREE SOURCE. Both files still EXPLAIN the old resolution in a
+    # comment -- quoting the broken line is the clearest way to record what was
+    # wrong -- and a raw substring search finds the explanation and reports the
+    # defect it is meant to prevent. This repo has made that mistake nine times;
+    # tests/_srcutil.executable_source exists for it.
+    from _srcutil import executable_source
+    br_src = (ROOT / "atlas" / "risk" / "breaker.py").read_text()
+    br_exec = executable_source(ROOT / "atlas" / "risk" / "breaker.py")
+    check("breaker imports the path from config",
+          "from atlas.config import HALT_FILE as SENTINEL" in br_src, True)
+    check("  and no executable line reads ATLAS_HALT_FILE itself",
+          "ATLAS_HALT_FILE" in br_exec, False,
+          "the home-directory fallback is what made the halt fail open; it "
+          "survives only as a comment recording the bug")
+
+    # AN OVERRIDE MUST ANNOUNCE ITSELF. This is what keeps the remaining env
+    # read from being the same silent trap in a different coat.
+    import tempfile
+    tmpdir = tempfile.mkdtemp()
+    os.environ["ATLAS_HALT_FILE"] = str(Path(tmpdir) / "halt")
+    try:
+        importlib.reload(CFG)
+        stx = CFG.halt_file_state()
+        check("an override is reported as NOT canonical",
+              stx["is_canonical"], False)
+        check("  and the summary says so in words",
+              "NOT THE CANONICAL PATH" in stx["summary"], True,
+              stx["summary"][:80])
+    finally:
+        if env_saved is None:
+            os.environ.pop("ATLAS_HALT_FILE", None)
+        else:
+            os.environ["ATLAS_HALT_FILE"] = env_saved
+        importlib.reload(CFG)
+        importlib.reload(BR)
+
+    # UNREADABLE COUNTS AS HALTED. Not knowing whether the operator stopped us
+    # is not permission to trade.
+    saved_path = CFG.HALT_FILE
+    try:
+        # A DIRECTORY. exists() is True, read_text() raises IsADirectoryError.
+        # The first attempt used a path with a NUL byte, which exists()
+        # answers False for on macOS -- so it tested "absent", not
+        # "unreadable", and passed for the wrong reason.
+        CFG.HALT_FILE = Path(tmpdir)
+        stx = CFG.halt_file_state()
+        check("an unreadable halt file counts as HALTED", stx["halted"], True,
+              stx["reason"][:70])
+        check("  and it is reported as unreadable, not as absent",
+              stx["readable"], False)
+    finally:
+        CFG.HALT_FILE = saved_path
+
+    # THE 08:30 MESSAGE CARRIES IT, which is the only daily signal the operator
+    # gets and said nothing about the halt before.
+    zm = (ROOT / "atlas" / "execution" / "zerodha_morning.py").read_text()
+    check("the 08:30 Telegram renders a halt line",
+          "_halt_line()" in zm, True)
+    from atlas.execution.zerodha_morning import _halt_line
+    check("  and the line names the file",
+          str(CFG.HALT_FILE) in _halt_line(), True, _halt_line()[:80])
+    mo = (ROOT / "atlas" / "signal" / "market_open.py").read_text()
+    check("the engine logs the halt path on every startup",
+          "log_halt_state(log)" in mo, True)
+    check("  and alerts when the path is not canonical",
+          'alert("HALT PATH WRONG"' in mo, True)
+
+    # THE VERIFICATION TOOL READS THE SAME CONSTANT rather than hardcoding it.
+    vt = (ROOT / "tools" / "verify_exit_path.py").read_text()
+    vt_exec = executable_source(ROOT / "tools" / "verify_exit_path.py")
+    check("verify_exit_path reads the constant, not a literal",
+          "HALT_FILE_CANONICAL" in vt, True)
+    check("  and no executable line hardcodes the path",
+          "/var/lib/atlas/halt" in vt_exec, False,
+          "it used to print one path and recommend another")
 
     print()
     print("=" * 78)

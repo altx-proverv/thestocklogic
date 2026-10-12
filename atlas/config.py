@@ -3,6 +3,7 @@ ATLAS — Agentic Trading & Lifecycle Automation System
 Central configuration. All modules import from here.
 """
 import os
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -294,7 +295,130 @@ ALLOW_AUTOMATED_STOP_LOSS = True
 # the second. It also restores what zone_entry already documented: target = NONE,
 # winners are held and trailed. A single resting stop has the side benefit of
 # having no sibling to orphan.
-ALLOW_AUTOMATED_TARGET = False
+# TRUE, 2026-10-12. The protection mechanism is now ONE two-leg OCO GTT --
+# stop leg and target leg, either cancelling the other at the broker -- which
+# is what the operator already places by hand and trusts. An OCO needs both
+# legs by construction, so this is no longer a free strategy choice: with it
+# False there is no second leg and no OCO, just a single resting stop.
+#
+# What is given up is explicit: a 2R target caps every winner at 2R, against
+# the "winners are held and trailed" line in engine/zone_entry.py. That
+# tension is real and is the operator's to resolve -- see PARTIAL BOOKING in
+# docs/ATLAS_LONG_ONLY.md, which is flagged and NOT built in this pass.
+ALLOW_AUTOMATED_TARGET = True
+
+# ENTRY ORDER TYPE. LIMIT at the live price, not MARKET.
+#
+# A MARKET entry was the last market-type order left in the path. Kite refuses
+# an API MARKET order that omits market_protection, and that single rule took
+# out the stop AND its fallback on 7 October; the entry survived only because
+# broker.place_order happened to set market_protection=3. A LIMIT has no such
+# rule and no slippage surprise.
+#
+# THE TRADE-OFF IS A MISSED FILL, NOT A BAD ONE. A LIMIT at the last traded
+# price does not fill if the book moves away, so enter_trade cancels it and
+# records a clean no-entry rather than chasing. Not entering is a cost this
+# strategy can carry; an unbounded fill price is not.
+ENTRY_ORDER_TYPE = "LIMIT"
+
+# How long to wait for the LIMIT to fill before cancelling it. Short, because
+# an unfilled resting entry is a position that may appear after the engine has
+# stopped looking.
+ENTRY_LIMIT_FILL_SECONDS = 20
+
+# ══════════════════════════════════════════════════════════════════
+# THE HALT FILE — ONE CONSTANT, AND IT DEFAULTS TO THE REAL LOCATION
+# ══════════════════════════════════════════════════════════════════
+#
+# THIS FIXES A HALT THAT FAILED OPEN. breaker.py resolved it as
+#
+#     Path(os.environ.get("ATLAS_HALT_FILE", "~/.atlas/halt"))
+#
+# while the real file is /var/lib/atlas/halt. The halt therefore worked only
+# where that variable happened to be set, and it was set in exactly ONE of the
+# eight places that run ATLAS code:
+#
+#     SET      atlas-market-hours.service
+#     MISSING  atlas-engine-report.service
+#     MISSING  atlas-mis-squareoff.service
+#     MISSING  5 cron jobs -- zerodha_morning, daily_report, bot_listener,
+#              trade_outcome_checker, decay
+#
+# Every one of those resolved the halt to ~/.atlas/halt, which does not exist,
+# read "not halted", and would have traded. Including zerodha_morning, the job
+# that sends the 08:30 message now asked to REPORT the halt state -- it would
+# have reported the wrong file and the wrong answer.
+#
+# THE DEFAULT IS THE REAL PATH. An unset environment is now the correct
+# configuration rather than the broken one, so losing the variable is no longer
+# a failure mode. The env var remains readable ONLY so the verification
+# harness and the test suite can point at a scratch file without touching the
+# live sentinel -- and when it points anywhere else, halt_file_state() says so
+# loudly and startup logs it. A silent override is the thing being removed; an
+# override that announces itself is not.
+HALT_FILE_CANONICAL = "/var/lib/atlas/halt"
+HALT_FILE = Path(os.environ.get("ATLAS_HALT_FILE") or HALT_FILE_CANONICAL)
+
+
+def halt_file_state() -> dict:
+    """Where the halt file is, whether it is the canonical path, and its state.
+
+    -> {"path", "canonical", "is_canonical", "exists", "halted", "reason",
+        "readable", "summary"}
+
+    ONE FUNCTION FOR EVERY REPORTER, so the startup log, the 08:30 Telegram,
+    /status and the verification harness cannot disagree about which file they
+    are talking about. They disagreed before: the harness printed
+    /var/lib/atlas/halt from a hardcoded help string while the engine it was
+    checking read ~/.atlas/halt.
+
+    UNREADABLE COUNTS AS HALTED. Not knowing whether the operator stopped us is
+    not permission to trade.
+    """
+    exists = halted = False
+    reason = ""
+    readable = True
+    try:
+        exists = HALT_FILE.exists()
+        if exists:
+            halted = True
+            reason = HALT_FILE.read_text().strip()[:320]
+    except Exception as e:
+        readable = False
+        halted = True
+        reason = f"halt file unreadable: {e}"
+
+    is_canon = str(HALT_FILE) == HALT_FILE_CANONICAL
+    bits = [f"halt file {HALT_FILE}"]
+    if not is_canon:
+        bits.append(f"NOT THE CANONICAL PATH ({HALT_FILE_CANONICAL}) — "
+                    f"ATLAS_HALT_FILE is overriding it")
+    bits.append("HALTED" if halted else "not halted")
+    if reason:
+        bits.append(reason)
+    return {"path": str(HALT_FILE), "canonical": HALT_FILE_CANONICAL,
+            "is_canonical": is_canon, "exists": exists, "halted": halted,
+            "reason": reason, "readable": readable,
+            "summary": " · ".join(bits)}
+
+
+def log_halt_state(logger=None) -> dict:
+    """Log the resolved path and the halt state. Called on every startup.
+
+    AT ERROR LEVEL WHEN THE PATH IS NOT CANONICAL, because that is the
+    condition under which the halt silently does nothing, and it has to be
+    impossible to miss in a journal.
+    """
+    st = halt_file_state()
+    lg = logger or logging.getLogger("ATLAS-HALT")
+    if not st["is_canonical"]:
+        lg.error(f"HALT FILE IS NOT THE CANONICAL PATH — {st['summary']}")
+    elif st["halted"]:
+        lg.warning(f"ATLAS IS HALTED — {st['summary']}")
+    else:
+        lg.info(f"halt check — {st['summary']}")
+    return st
+
 
 # ── MASTER LIVE-TRADING GATE ──────────────────────────────────────
 #
@@ -361,18 +485,49 @@ ALLOW_SHORT_IN_SIDEWAYS = False
 # master switches above it, so a side can be taken off the table without
 # reasoning about market state.
 #
-# Shorts were False while the mandate was long-only. They are True now: ATLAS
-# takes the side the matrix names, shorts included, MIS and intraday.
+# SHORTS ARE OFF. 2026-10-12, operator decision, and it is the whole point of
+# this pass.
 #
-# ALLOW_SHORT_ENTRIES is still checked FIRST and unconditionally in the SHORT
-# branch, ahead of any market reading. It was added because the previous
-# guarantee was emergent -- SHORT required bull AND extreme_bearish, two
-# individually satisfiable conditions that conflicted only because
-# build_market._classify cannot emit them together. That is not a guarantee, it
-# is an invariant in another module, and a sweep found the corner where it held.
-# The switch stays for the same reason it was added: so the answer is local.
+# THE RULE: trade only when regime AND sentiment are both bullish, otherwise
+# cash. Strict, both must hold. That is LONGS ONLY, and the short path should
+# never have existed under it.
+#
+# EVERY FAILURE OF 7 OCTOBER CAME OUT OF THE HEDGE-SHORT PATH, as a chain of
+# forced consequences rather than a bug:
+#
+#     shorts    ->  forced MIS (rule 10, no overnight short)
+#     MIS       ->  no GTT (GTT is CNC-only)
+#     no GTT    ->  forced SL-M as the stop
+#     SL-M      ->  Zerodha refuses it via API without market_protection
+#     rejected  ->  fallback was a MARKET order, refused by the SAME rule
+#
+# Removing the first link removes the class. Longs are CNC, CNC takes a GTT,
+# and a GTT is the mechanism the operator already uses by hand and trusts.
+#
+# CHECKED FIRST AND UNCONDITIONALLY, ahead of any market reading, and now also
+# enforced at the bottom of the stack in broker.place_order -- which refuses a
+# SHORT entry whatever the caller believes. Two independent guards, same
+# principle as the exit fallback: a config flag alone is a convention, and a
+# convention is what a future edit breaks silently.
 ALLOW_LONG_ENTRIES  = True
-ALLOW_SHORT_ENTRIES = True
+ALLOW_SHORT_ENTRIES = False
+
+# LONGS ARE CNC. Stated here rather than inferred from position_sizing, which
+# is where the product is actually chosen, so the pair is readable together
+# with SHORT_PRODUCT_TYPE above it.
+LONG_PRODUCT_TYPE = "CNC"
+
+# STRICT AND-GATE. When True, allowed_side returns LONG only for bull regime
+# AND bullish sentiment, and cash for everything else -- including
+# sideways+bullish, which the matrix used to take as a long.
+#
+# THE CODE AND THE CONFIG COMMENTS DISAGREED ABOUT THIS, and the comment above
+# ALLOW_SHORT_IN_SIDEWAYS was already the correct description: "The entry gate
+# now requires a bull regime ... AND positive sentiment ..., so sideways does
+# not qualify." allowed_side did not implement that -- it followed sentiment in
+# a sideways regime. The comment was right and the code was wrong; this makes
+# them agree.
+STRICT_BULL_AND_BULLISH = True
 
 # SUPERSEDED BY THE MATRIX, and set False rather than deleted so its absence is
 # the visible change. Shorts used to require extreme_bearish -- close < 200DMA-3%,

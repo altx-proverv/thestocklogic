@@ -1230,6 +1230,21 @@ def serve() -> int:
     log.info(f"ATLAS market-hours engine starting [{mode}] "
              f"{WINDOW_START}–{WINDOW_END} IST, {CYCLE_SECONDS}s cycle")
 
+    # THE HALT PATH, LOGGED ON EVERY STARTUP. Which file, and what it says.
+    # Before this the halt resolved from an environment variable set in one of
+    # eight entry points, so "is ATLAS halted" had a different answer depending
+    # on which process asked -- and nothing printed the path, so the
+    # disagreement was invisible. log_halt_state() logs at ERROR when the
+    # resolved path is not the canonical one, which is the only condition under
+    # which a halt silently does nothing.
+    from atlas.config import log_halt_state
+    _halt = log_halt_state(log)
+    if not _halt["is_canonical"]:
+        alert("HALT PATH WRONG",
+              f"ATLAS resolved its halt file to {_halt['path']}, not "
+              f"{_halt['canonical']}. A halt written to the canonical path "
+              f"would NOT stop this process.")
+
     # RESTART RESUMES FROM THE BROKER. Settle anything left PENDING by a
     # previous process before evaluating a single candidate -- a PENDING row
     # from a death mid-order is exactly what must not be re-entered.
