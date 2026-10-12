@@ -425,18 +425,64 @@ def test_zone_side_invariant():
     # and the entry path asserts it independently
     print()
     print("  and check_entry_range asserts the same thing, with the stop:")
+    # entry_ref IS NOW REQUIRED, and these fixtures pass one at the LTP so the
+    # band and stop logic is what is being tested rather than the proximity
+    # term. Before 2026-10-13 the gate took no reference price and these calls
+    # omitted it; a missing entry_ref is now a REFUSAL, not a pass, so the
+    # fixtures have to supply it.
     for label, d, ltp, lo, hi, stop, want in (
             ("long in band, above stop",    "LONG",  95.0, 94.0, 96.0, 92.0, True),
             ("long in band, AT the stop",   "LONG",  92.0, 94.0, 96.0, 92.0, False),
             ("long mitigated below band",   "LONG",  93.0, 94.0, 96.0, 92.0, False),
             ("short in band, below stop",   "SHORT", 105.0, 104.0, 106.0, 108.0, True),
             ("short mitigated above band",  "SHORT", 107.0, 104.0, 106.0, 108.0, False)):
-        got, why = check_entry_range(d, ltp, lo, hi, stop)
+        got, why = check_entry_range(d, ltp, lo, hi, stop, entry_ref=ltp)
         good = got == want
         ok &= good
         print(f"    {label:<32}{'ENTER' if got else 'no':<7}"
               f"{'ok' if good else '** WRONG **':<14}{why[:40]}")
-    # no distance gate anywhere
+
+    # ── THE 1% PROXIMITY GATE ─────────────────────────────────────
+    #
+    # The band test is not a distance test: a wide band admits a price far from
+    # the reference the setup was published against and sizing was computed
+    # from. ENTRY_PROXIMITY_PCT closes that, and MAX_ZONE_DIST_PCT (15%,
+    # engine/active_zones.py) remains the SCREENING filter -- it governs what
+    # is published, not what is bought.
+    print()
+    print("  and the 1% proximity gate, measured from entry_ref:")
+    from atlas.config import ENTRY_PROXIMITY_PCT
+    ok &= ENTRY_PROXIMITY_PCT == 1.0
+    print(f"    {'ENTRY_PROXIMITY_PCT is 1.0':<32}{str(ENTRY_PROXIMITY_PCT):<7}"
+          f"{'ok' if ENTRY_PROXIMITY_PCT == 1.0 else '** WRONG **'}")
+    for label, ltp, want in (("at the reference",        1000.0, True),
+                             ("0.99% away",              1009.9, True),
+                             ("exactly 1.00% away",      1010.0, True),
+                             ("1.01% away",              1010.1, False),
+                             ("2% away, still in band",  1020.0, False),
+                             ("1% below",                 990.0, True),
+                             ("1.5% below",               985.0, False)):
+        got, why = check_entry_range("LONG", ltp, 960.0, 1040.0, 950.0,
+                                     entry_ref=1000.0)
+        good = got == want
+        ok &= good
+        print(f"    {label:<32}{'ENTER' if got else 'skip':<7}"
+              f"{'ok' if good else '** WRONG **':<14}{why[:40]}")
+    # THE BOUNDARY IS INCLUSIVE. 1010/1000-1 is 0.010000000000000009 in float,
+    # so a price exactly 1% away compared greater-than and was skipped -- a gate
+    # that rejects its own stated boundary is one nobody can reason about.
+    got_b, _ = check_entry_range("LONG", 1010.0, 960.0, 1040.0, 950.0,
+                                 entry_ref=1000.0)
+    ok &= got_b
+    print(f"    {'the 1% boundary is INCLUSIVE':<32}{'ENTER' if got_b else 'skip':<7}"
+          f"{'ok' if got_b else '** WRONG **'}")
+    # A MISSING REFERENCE IS NOT PERMISSION. Admitting a trade because the
+    # reference price is absent would make a data gap the widest gate here.
+    got_n, why_n = check_entry_range("LONG", 1000.0, 960.0, 1040.0, 950.0,
+                                     entry_ref=0.0)
+    ok &= (not got_n)
+    print(f"    {'a missing entry_ref REFUSES':<32}{'ENTER' if got_n else 'skip':<7}"
+          f"{'ok' if not got_n else '** WRONG **':<14}{why_n[:40]}")
     print()
     # A MISSING DISPLAY COLUMN MUST NOT STOP THE ENGINE TRADING. publication_kind
     # arrives with a hand-applied migration, and until it lands PostgREST answers

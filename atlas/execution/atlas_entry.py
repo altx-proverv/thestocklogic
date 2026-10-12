@@ -76,6 +76,7 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED,
     BLOCKING_STATUSES,
     ENFORCE_ENTRY_RANGE, OPENING_RANGE_GATE_APPLIES_TO, FUNDS_SAFETY_BUFFER_PCT,
+    ENTRY_PROXIMITY_PCT,
     ALLOW_SHORT_ENTRIES, ALLOW_LONG_ENTRIES, STRICT_BULL_AND_BULLISH,
     DEFAULT_ON_UNKNOWN_REGIME,
 )
@@ -444,8 +445,9 @@ def get_open_position(symbol: str) -> tuple:
 
 
 def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float,
-                     stop: float = 0.0) -> tuple:
-    """Enter ONLY if LTP is inside the zone band, AND on the right side of it.
+                     stop: float = 0.0, entry_ref: float = 0.0) -> tuple:
+    """Enter ONLY if LTP is within ENTRY_PROXIMITY_PCT of entry_ref, inside the
+    zone band, AND on the right side of it.
 
     THE SIDE-OF-PRICE INVARIANT, asserted here as well as in market_open.at_zone
     and engine/zone_entry. Three places is not redundancy by accident: zone_entry
@@ -490,9 +492,46 @@ def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float,
             return False, (f"LTP Rs{ltp:.1f} at or above the stop Rs{stop:.1f} "
                            f"— already beyond the structural level")
 
-    if lo <= ltp <= hi:
-        return True, f"LTP Rs{ltp:.1f} inside zone Rs{lo:.1f}-Rs{hi:.1f}"
-    return False, f"LTP Rs{ltp:.1f} not yet at zone Rs{lo:.1f}-Rs{hi:.1f}"
+    if not (lo <= ltp <= hi):
+        return False, f"LTP Rs{ltp:.1f} not yet at zone Rs{lo:.1f}-Rs{hi:.1f}"
+
+    # ── PROXIMITY: WITHIN 1% OF entry_ref ─────────────────────────
+    #
+    # THE BAND TEST ABOVE IS NOT A DISTANCE TEST. A band can be wide, and
+    # "inside a wide band" is not "at the level" -- a 6% demand band admits a
+    # price 5% from the reference the setup was published against and sizing was
+    # computed from. This closes that.
+    #
+    # LAST, so the log reads in order of severity: a mitigated zone is a dead
+    # setup, a price outside the band is not there yet, and a price inside the
+    # band but beyond 1% is there-ish but not close enough. Three different
+    # facts, and the third used to be invisible.
+    #
+    # SKIPPED, NOT QUEUED. No widening, no retry at a worse price. If the setup
+    # comes to the level the next cycle takes it; if it does not, there was no
+    # trade. MAX_ZONE_DIST_PCT (15%, engine/active_zones.py) remains the
+    # SCREENING filter and is untouched -- it governs what gets published, not
+    # what gets bought.
+    if entry_ref and entry_ref > 0:
+        dist = abs(ltp / entry_ref - 1.0) * 100.0
+        # THE BOUNDARY IS INCLUSIVE, and the epsilon is what makes it so in
+        # floating point. 1010/1000 - 1 is 0.010000000000000009, so a price
+        # exactly 1% away compared greater-than and was SKIPPED -- "within
+        # 1.0%" has to include 1.0%, and a gate that rejects its own stated
+        # boundary is a gate nobody can reason about.
+        if dist > ENTRY_PROXIMITY_PCT + 1e-9:
+            return False, (f"LTP Rs{ltp:.1f} is {dist:.2f}% from entry_ref "
+                           f"Rs{entry_ref:.1f}, outside the "
+                           f"{ENTRY_PROXIMITY_PCT:.1f}% proximity gate — "
+                           f"skipped, not queued")
+        return True, (f"LTP Rs{ltp:.1f} inside zone Rs{lo:.1f}-Rs{hi:.1f} and "
+                      f"{dist:.2f}% from entry_ref Rs{entry_ref:.1f}")
+
+    # NO entry_ref MEANS NO PROXIMITY TEST, AND THAT IS A REFUSAL rather than a
+    # pass. Admitting a trade because the reference price is missing would make
+    # a data gap the widest gate in the system.
+    return False, ("no entry_ref on the signal — cannot measure proximity, "
+                   "and a missing reference is not permission")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -725,7 +764,8 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # price feed. get_ltp remains the fallback for a one-shot caller.
     ltp = float(signal.get("ltp") or 0) or get_ltp(symbol) or entry_ref
     in_range, range_reason = check_entry_range(direction, ltp, entry_low,
-                                              entry_high, stop_price)
+                                              entry_high, stop_price,
+                                              entry_ref=entry_ref)
     if not in_range:
         return {"status": "SKIPPED_RANGE", "reason": range_reason}
 

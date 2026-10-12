@@ -385,6 +385,7 @@ only remaining job.
 | What | Superseded by |
 | --- | --- |
 | `tools/live_exit_test.py` | `tools/live_gtt_check.py` — it tests the retired SL path |
+| `tools/live_day0_check.py` | **DELETED 2026-10-13.** We are not running a 1-share verification. The exit-path logic it drove lives in `atlas/execution/exits.py` and stays. |
 | `docs/LIVE_EXIT_TEST.md` | §08 below |
 
 ### Partially dead

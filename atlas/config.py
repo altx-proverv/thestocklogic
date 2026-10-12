@@ -327,6 +327,33 @@ ENTRY_ORDER_TYPE = "LIMIT"
 ENTRY_LIMIT_FILL_SECONDS = 20
 
 # ══════════════════════════════════════════════════════════════════
+# ENTRY PROXIMITY — 1% OF THE ZONE'S entry_ref
+# ══════════════════════════════════════════════════════════════════
+#
+# A TRADE IS TAKEN ONLY WHEN LAST PRICE IS WITHIN THIS OF entry_ref. Outside
+# it the setup is SKIPPED -- not queued, not widened, not retried at a worse
+# price. Operator rule, 2026-10-13.
+#
+# WHAT THIS IS NOT. MAX_ZONE_DIST_PCT = 15.0 in engine/active_zones.py is a
+# SCREENING filter: it decides how far from price a zone may sit and still be
+# published at all. It has never been what admits a live entry, and it is left
+# alone -- the screening stage is a separate job and other things read that
+# frame.
+#
+# WHAT ADMITTED A LIVE ENTRY BEFORE THIS. atlas_entry.check_entry_range, which
+# tests LTP inside [entry_low, entry_high] plus a mitigation and side-of-stop
+# invariant. That band is structural and stays: it is what stops a knife-catch
+# below a demand zone. But a band can be wide, and "inside a wide band" is not
+# the same as "at the level" -- this adds the distance test the band cannot
+# express.
+#
+# MEASURED FROM entry_ref, NOT FROM THE BAND EDGE. entry_ref is the level the
+# setup was published against and the price sizing was computed from; the band
+# is tolerance around it. Measuring from the nearer edge would make a wide band
+# admit a far price, which is the thing being closed.
+ENTRY_PROXIMITY_PCT = 1.0
+
+# ══════════════════════════════════════════════════════════════════
 # PROTECTION: DAY 0 IS AN ORDER, DAY 1 ONWARDS IS A GTT
 # ══════════════════════════════════════════════════════════════════
 #

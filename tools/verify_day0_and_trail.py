@@ -15,12 +15,20 @@ THE THREE CLAIMS THE OPERATOR ASKED TO SEE PROVED, 2026-10-13:
 
 ON CLAIM 1 AND WHAT A STUB CAN AND CANNOT SETTLE. The ACCEPTANCE of a SELL SL
 against a same-day CNC buy is a BROKER RULE, and the only honest way to settle
-it is Zerodha's own documentation plus a live order. The documentation is
-quoted in §1 below and it is unambiguous. The live order is
-tools/live_day0_check.py, which the operator runs. What the stub here proves is
-the other half: that ATLAS builds an order of the shape the rules describe --
-SL, SELL, CNC, trigger present, limit below the trigger, DAY validity -- and
-that nothing in the fill path touches the GTT API.
+it is Zerodha's own documentation. It is quoted in §1 below and it is
+unambiguous.
+
+THERE IS NO LIVE DRIVER. tools/live_day0_check.py drove a one-share
+verification and was DELETED on 2026-10-13 by operator decision -- we are not
+running it. The exit-path logic it exercised lives in
+atlas/execution/exits.py and is unchanged; only the driver is gone, so nobody
+runs it by accident.
+
+So what this file proves is the half a stub can prove: that ATLAS builds an
+order of the shape the rules describe -- SL, SELL, CNC, trigger present, limit
+below the trigger, DAY validity -- and that nothing in the fill path touches
+the GTT API. The acceptance of that order by the real broker rests on the
+quoted documentation alone.
 """
 
 from __future__ import annotations
@@ -362,9 +370,10 @@ def main() -> int:
     for f in FAIL:
         print(f"    FAILED: {f}")
     print("\n  §1's ACCEPTANCE claim rests on Zerodha's documentation, quoted "
-          "above,\n  plus the live order in tools/live_day0_check.py. A stub "
-          "cannot settle a\n  broker rule; it can only show that ATLAS builds "
-          "the right shape.")
+          "above.\n  There is no live driver -- tools/live_day0_check.py was "
+          "deleted on\n  2026-10-13 by operator decision. A stub cannot "
+          "settle a broker rule; it\n  can only show that ATLAS builds the "
+          "right shape, which is what this does.")
     return 1 if FAIL else 0
 
 
