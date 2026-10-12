@@ -1,4 +1,23 @@
-# The live one-share exit test
+# The live one-share exit test — DEPRECATED, DO NOT FOLLOW
+
+> **THIS RUNBOOK CANNOT BE FOLLOWED AND MUST NOT BE.** 2026-10-13.
+>
+> `tools/live_exit_test.py` is **deleted**, along with `live_gtt_check.py` and
+> `live_day0_check.py`. Every command below fails with `ModuleNotFoundError`.
+>
+> **ATLAS does not run 1-share verifications anywhere** — standing policy. The
+> first real trades are the verification. See
+> `docs/ATLAS_LONG_ONLY.md` §08.
+>
+> The opening line below — *"ATLAS stays halted until this passes"* — is also
+> false: the halt was cleared on 2026-10-13.
+>
+> Kept only as a record of what was tried and why. The exit-path logic this
+> drove lives in `atlas/execution/exits.py` and is unchanged.
+
+---
+
+*Everything below is historical.*
 
 ATLAS stays halted until this passes. Nothing else in the repo can replace it:
 every other test runs against a stub, and the 2026-10-07 incident happened

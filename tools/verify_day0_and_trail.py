@@ -18,11 +18,11 @@ against a same-day CNC buy is a BROKER RULE, and the only honest way to settle
 it is Zerodha's own documentation. It is quoted in §1 below and it is
 unambiguous.
 
-THERE IS NO LIVE DRIVER. tools/live_day0_check.py drove a one-share
-verification and was DELETED on 2026-10-13 by operator decision -- we are not
-running it. The exit-path logic it exercised lives in
-atlas/execution/exits.py and is unchanged; only the driver is gone, so nobody
-runs it by accident.
+THERE IS NO LIVE DRIVER, AND THERE IS NOT MEANT TO BE. All three one-share
+drivers were deleted on 2026-10-13: ATLAS does not run 1-share verifications
+anywhere, as standing policy, and the first real trades are the verification.
+The exit-path logic they exercised lives in atlas/execution/exits.py and is
+unchanged; only the drivers went, so nobody runs one by accident.
 
 So what this file proves is the half a stub can prove: that ATLAS builds an
 order of the shape the rules describe -- SL, SELL, CNC, trigger present, limit
@@ -370,10 +370,10 @@ def main() -> int:
     for f in FAIL:
         print(f"    FAILED: {f}")
     print("\n  §1's ACCEPTANCE claim rests on Zerodha's documentation, quoted "
-          "above.\n  There is no live driver -- tools/live_day0_check.py was "
-          "deleted on\n  2026-10-13 by operator decision. A stub cannot "
-          "settle a broker rule; it\n  can only show that ATLAS builds the "
-          "right shape, which is what this does.")
+          "above.\n  There is no live driver: ATLAS runs no 1-share "
+          "verifications, and the\n  first real trades are the verification. "
+          "A stub cannot settle a broker\n  rule; it can only show that ATLAS "
+          "builds the right shape, which it does.")
     return 1 if FAIL else 0
 
 

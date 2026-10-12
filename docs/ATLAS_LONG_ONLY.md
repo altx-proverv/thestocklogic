@@ -262,9 +262,10 @@ from T+1 the GTT is sound, and ATLAS holds longs overnight so most of the life
 of the position is covered.
 
 A Zerodha forum comment raised exactly this and went unanswered by their team.
-This is the single most important thing the live check cannot prove, and it is
-called out in `tools/live_gtt_check.py` as well as here. **Resolving it needs
-either a Zerodha support answer in writing, or one observed same-day trigger.**
+This is the single most important thing the test suite cannot prove.
+**Resolving it needs either a Zerodha support answer in writing, or one
+observed same-day trigger on a real position** — and since there is no
+verification trade (§08), that observation will come from a real entry.
 
 ---
 
@@ -384,9 +385,14 @@ only remaining job.
 
 | What | Superseded by |
 | --- | --- |
-| `tools/live_exit_test.py` | `tools/live_gtt_check.py` — it tests the retired SL path |
-| `tools/live_day0_check.py` | **DELETED 2026-10-13.** We are not running a 1-share verification. The exit-path logic it drove lives in `atlas/execution/exits.py` and stays. |
-| `docs/LIVE_EXIT_TEST.md` | §08 below |
+| `tools/live_exit_test.py` | **DELETED 2026-10-13** |
+| `tools/live_gtt_check.py` | **DELETED 2026-10-13** |
+| `tools/live_day0_check.py` | **DELETED 2026-10-13** |
+| `docs/LIVE_EXIT_TEST.md` | §08 — kept as a record, marked deprecated at the top |
+
+All three live drivers are gone. **ATLAS does not run 1-share verifications
+anywhere** — standing policy from 2026-10-13. The exit-path logic they drove
+lives in `atlas/execution/exits.py` and is unchanged; only the drivers went.
 
 ### Partially dead
 
@@ -422,26 +428,88 @@ construction, so that option no longer exists without changing the mechanism.
 
 ---
 
-## 08 · The live check
+## 08 · How ATLAS goes live
 
-`tools/verify_exit_path.py` and `tools/verify_long_only.py` run against stubs
-that enforce the documented rules. **A stub cannot tell you what Zerodha does.**
+### Position size
 
-```
-# on the box, market open, 10:00–14:00 IST
-cd /home/ubuntu/thestocklogic
-venv/bin/python -m tools.live_gtt_check --preflight
-venv/bin/python -m tools.live_gtt_check --run --live
-```
+**₹10,000 notional per trade**, share count **rounded to the nearest whole
+share** — `FIXED_NOTIONAL_PER_TRADE` in `atlas/config.py`, the only place the
+figure appears.
 
-Buys **one share** CNC on a LIMIT, places the real OCO GTT through
-`exits.protect()`, **reads it back from Zerodha** and checks both legs and both
-trigger prices against what was sent, deletes the GTT, sells the share, and
-confirms the account is flat with no GTT left resting.
+| price | shares | notional |
+| --- | --- | --- |
+| 150 | 67 | 10,050 |
+| 1,200 | 8 | 9,600 |
+| 4,000 | 3 | 12,000 |
+| 6,666 | 2 | 13,332 |
+| 6,667 | 1 | 6,667 |
+| 15,000 | 1 | 15,000 |
 
-**A tool must never print READY when one of its own checks failed its stated
-expectation.** Every stated expectation goes through `expect()` and the verdict
-is the AND of all of them — including *"ATLAS is HALTED"*, which the previous
-preflight printed with "(expected True)" beside it and did not score.
+Rounded, not floored: flooring put the median position 10.7% off target across
+1,484 published signals, rounding to the nearest single share 1.7%. Above
+₹10,000 a share, one share is taken regardless and the trade is flagged
+`oversized` — the instrument must not be blind to MRF or MARUTI because of its
+own test size.
 
-ATLAS stays halted until this passes.
+**Expected to move to ₹1–1.5 lakh per trade once the system is proven.** At
+that size the share count stops being 1–3 and the rounding question stops
+mattering; the figure changes in one constant.
+
+### There is no separate verification trade
+
+**The first real trades are the verification.** There is no 1-share dry run and
+no live driver — `tools/live_exit_test.py`, `tools/live_gtt_check.py` and
+`tools/live_day0_check.py` are all deleted. ATLAS does not run 1-share
+verifications anywhere. That is standing policy, not a gap.
+
+### What is verified, and what is not
+
+The day-0 stop-loss path and the GTT handover are verified against **Zerodha's
+documented behaviour** and against **the test suite** — 39 suites,
+`verify_exit_path` 78/0, `verify_long_only` 33/0, `verify_day0_and_trail` 47/0.
+
+They are **not** verified against a live fill.
+
+**Broker acceptance of the day-0 SL is expected but unproven.** The expectation
+rests on Zerodha's own documentation, quoted in §02b: delivery shares appear
+under Positions on the purchase day explicitly so they can be traded
+intraday, and *"if your SL is triggered the same day, your trade will be
+considered intraday."* That is a strong reading. It is not a fill.
+
+The first real entry is where it stops being a reading. Watch that one.
+
+### Stops and targets are indicative, not a guarantee
+
+The protection layer is a **best effort**, and the gaps are named rather than
+glossed:
+
+- Zerodha: a GTT *"does not assure execution of an order."*
+- A sell GTT needs **DDPI or POA**, else a daily CDSL TPIN authorisation —
+  without it the overnight GTTs rest and are **rejected at trigger, silently**
+  (§02b).
+- A GTT triggering on day 0 can be rejected for want of demat holdings, which
+  is the whole reason day 0 uses an SL order instead.
+- A triggered stop is a LIMIT, and a limit can go unfilled in a gap.
+
+**Hemal watches positions manually during market hours.** The automation
+reduces how much has to be watched; it does not replace watching.
+
+### Entry conditions, and why zero entries is correct
+
+An entry requires **both**:
+
+1. price **inside the zone band** `[entry_low, entry_high]`, not mitigated, and
+   on the correct side of the stop; and
+2. price **within `ENTRY_PROXIMITY_PCT` (1.0%) of `entry_ref`**.
+
+Plus bullish sentiment, long only, CNC only.
+
+**Expect very few entries per session — sometimes zero.** Measured on the
+2026-10-12 batch: of 394 published zones with a live price, **3** passed the
+band test and **1** was an enterable LONG signal. Within 1% of `entry_ref`: 30
+of 394. The band is currently the stricter of the two.
+
+**Zero entries is correct behaviour, not a fault.** The gates are there to sit
+out; a session with no trade means nothing came to its level. The thing to
+investigate is not a quiet day — it is a day where `atlas_entry_log` is empty,
+because that means the engine did not look.
