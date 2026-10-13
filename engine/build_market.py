@@ -131,7 +131,12 @@ def _fetch_index_daily(index_key: str, days: int = BACKFILL_DAYS) -> pd.DataFram
 
 def _compute_breadth() -> pd.DataFrame:
     """Advance/decline counts from the stock universe already on disk."""
-    files = sorted(STOCKS_DIR.glob("*.parquet"))
+    # THE UNIVERSE, NOT THE FOLDER. Breadth is a count over a population, so
+    # the population has to be a definition and not whatever parquets are on
+    # disk -- 19 of which belonged to symbols that had left the universe and
+    # contributed to the historical advance/decline counts this file carries.
+    from engine.paths import universe_symbol_files
+    files = universe_symbol_files(STOCKS_DIR)
     if not files:
         log.warning("no stock parquets -- breadth unavailable")
         return pd.DataFrame()

@@ -536,7 +536,12 @@ def load_all_smc() -> pd.DataFrame:
     log.warning("load_all_smc() loads the whole universe into memory; "
                 "smc_batches() is the bounded version")
     dfs = []
-    for f in tqdm(sorted(SMC_DIR.glob("*.parquet")), desc="Loading"):
+    # THE UNIVERSE, NOT THE FOLDER. 02b is universe-driven now so it writes no
+    # orphan SMC parquet, but an SMC file left behind by an earlier run would
+    # otherwise still be scored and published -- derived data outliving its
+    # symbol is how a delisted name reaches the screener.
+    from engine.paths import universe_symbol_files
+    for f in tqdm(universe_symbol_files(SMC_DIR), desc="Loading"):
         try:
             df = pd.read_parquet(f)
             df["date"] = pd.to_datetime(df["date"])
@@ -563,7 +568,8 @@ def smc_batches(batch_size: int = 100):
     Yields (batch_no, total_batches, frame) so the caller can log progress
     without counting files itself.
     """
-    files = sorted(SMC_DIR.glob("*.parquet"))
+    from engine.paths import universe_symbol_files
+    files = universe_symbol_files(SMC_DIR)
     total = max(1, (len(files) + batch_size - 1) // batch_size)
     log.info(f"{len(files)} SMC file(s), {total} batch(es) of up to {batch_size}")
     for i in range(0, len(files), batch_size):

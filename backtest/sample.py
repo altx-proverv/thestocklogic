@@ -44,7 +44,11 @@ def available_symbols(stocks_dir: Path = None) -> list:
     """Every symbol with a price parquet, sorted. Sorted matters: it is the
     input to the draw, and glob order is filesystem-dependent."""
     stocks_dir = stocks_dir or STOCKS_DIR
-    return sorted(p.stem for p in stocks_dir.glob("*.parquet"))
+    # THE UNIVERSE, NOT THE FOLDER. A backtest sampled from the directory drew
+    # from a population the live engine does not have, which is the one thing a
+    # backtest must not do.
+    from engine.paths import universe_symbol_files
+    return [p.stem for p in universe_symbol_files(stocks_dir)]
 
 
 def draw(seed: int = DEFAULT_SEED, size: int = DEFAULT_SIZE,

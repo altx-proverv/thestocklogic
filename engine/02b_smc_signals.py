@@ -868,8 +868,21 @@ def main():
         market_df["date"] = pd.to_datetime(market_df["date"])
         log.info(f"Market data: {len(market_df)} rows")
 
-    files = sorted(STOCKS_DIR.glob("*.parquet"))
+    # THE UNIVERSE, NOT THE FOLDER. This globbed the directory, which on
+    # 2026-10-13 held 765 files for a 746-symbol universe: 19 belonged to
+    # symbols that had left SYMBOL_SECTOR_MAP (TATAMOTORS, INFOSYS, GMRINFRA,
+    # LTIM and 15 more) and were counted in the STALE warning below every
+    # night, where they were indistinguishable from a real ingestion failure.
+    # 59 names in that warning was 19 orphans plus 40 unwritten exclusions;
+    # neither was the thing the warning exists to catch.
+    from engine.paths import universe_symbol_files, orphan_symbol_files
+    files = universe_symbol_files(STOCKS_DIR)
+    _orphans = orphan_symbol_files(STOCKS_DIR)
     log.info(f"Processing {len(files)} stocks...")
+    if _orphans:
+        log.info(f"ignoring {len(_orphans)} parquet(s) not in the universe: "
+                 f"{', '.join(p.stem for p in _orphans[:8])}"
+                 f"{' ...' if len(_orphans) > 8 else ''}")
 
     session, stale = _session_and_stale(files)
     stale_syms = {s for s, _, _ in stale}

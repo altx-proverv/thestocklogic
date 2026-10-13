@@ -77,6 +77,36 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> tuple:
     """
     Computes sector momentum for a given date.
     Returns DataFrame with one row per sector, ranked by momentum.
+
+    ONLY SYMBOLS THAT TRADED THIS SESSION ARE MEASURED.
+    ---------------------------------------------------
+    This took close.iloc[-1] vs iloc[-2] from whatever the parquet's last two
+    bars were, with no check that the newest one belongs to the session being
+    published. From 2026-09-14 to 2026-10-13 that meant 40 frozen parquets --
+    universe members that ingestion had stopped writing -- each contributing
+    its 11 SEPTEMBER one-day move as though it were today's:
+
+        PINELABS   as of 2026-09-11   ret_1d published  +16.75%
+        PWL        as of 2026-09-11                      +7.39%
+        YESBANK    as of 2026-09-11                      +5.29%
+        HFCL       as of 2026-09-02                      -4.38%
+        JBCHEPHARM as of 2026-07-16                      -3.87%
+
+    and the published stock_count of 746 asserted that all 746 had been
+    measured. Sector medians moved by under 0.1pp, so no rank flipped and
+    nothing looked wrong; advancing/declining were off by 14 and 26.
+
+    STOCK_COUNT NOW MEANS "MEASURED THIS SESSION". A symbol whose newest bar
+    predates the session is left out of the computation entirely and named, one
+    line each with the return it WOULD have contributed, in the run's log. The
+    return contract is unchanged at (sector_df, stocks_df) -- callers unpack
+    two values -- and stocks_df now contains only the measured symbols, so
+    len(stocks_df) and the summed stock_count agree by construction.
+
+    THE SESSION IS THE MODAL LAST BAR, the same definition 02b uses, not the
+    maximum. A single symbol with a stray future-dated bar would make the max
+    a session nothing else traded in, and every other symbol would then be
+    "stale" against it.
     """
     all_rows = []
 
@@ -131,6 +161,35 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> tuple:
         return pd.DataFrame(), pd.DataFrame()
 
     stocks_df = pd.DataFrame(all_rows)
+
+    # ── THE FRESHNESS GATE ─────────────────────────────────────────
+    # The session is the modal last bar across the universe. Anything whose
+    # newest bar is older is dropped from the computation and reported.
+    session = pd.Timestamp(stocks_df["date"].mode().iloc[0])
+    fresh_mask = stocks_df["date"] == session
+    stale_df = stocks_df[~fresh_mask].copy()
+    stocks_df = stocks_df[fresh_mask].copy()
+
+    if len(stale_df):
+        log.warning("=" * 66)
+        log.warning(f"STALE — {len(stale_df)} universe symbol(s) have no bar "
+                    f"for {session.date()} and are EXCLUDED from sector "
+                    f"momentum:")
+        for _, r in stale_df.sort_values(["sector", "symbol"]).iterrows():
+            log.warning(f"  {r['symbol']:<14}last bar {pd.Timestamp(r['date']).date()}"
+                        f"  would have reported ret_1d {r['ret_1d']:+.2f}%"
+                        f"  [{r['sector']}]")
+        log.warning("stock_count below counts symbols MEASURED this session, "
+                    "not symbols in the map.")
+        log.warning("=" * 66)
+
+    if stocks_df.empty:
+        log.error(f"no symbol has a bar for {session.date()} — refusing to "
+                  f"publish a sector read computed from nothing")
+        return pd.DataFrame(), pd.DataFrame()
+
+    log.info(f"sector momentum: {len(stocks_df)} symbol(s) measured for "
+             f"{session.date()}, {len(stale_df)} left out as stale")
 
     # Sector aggregation — use median to avoid outlier distortion
     sector_df = stocks_df.groupby("sector").agg(

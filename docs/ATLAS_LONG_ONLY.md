@@ -13,10 +13,9 @@
 > It was **double-counting**. `engine/03b_score.py`'s
 > `bear_regime_no_reversal` disqualified **42,187 longs on 7 October**, so a
 > signal reaching `allowed_side()` has already passed a regime test. And the
-> entry-side copy was the broken one: it reads **361 symbols of 746**, with
-> breadth that has been inverted. A gate on worse data, applied a second time
-> to a population the better one already filtered, cannot add safety — it can
-> only subtract trades. It did: **one tradeable state out of twenty**.
+> entry-side copy is the weaker one: a gate applied a second time to a
+> population the better one already filtered cannot add safety — it can only
+> subtract trades. It did: **one tradeable state out of twenty**.
 >
 > The nightly filter is untouched and remains the regime authority.
 > `tests/test_batch_and_report.py` now asserts the backstop *there*, which is
@@ -98,8 +97,7 @@ applied, a bull regime with bearish breadth is simply bearish sentiment.
 The previous rule took **zero trades** over the live history, because the regime
 has been sideways throughout and the strict AND required bull. On sentiment
 alone, a sideways-but-bullish market is tradeable — which is the state the
-strategy was designed for and the one it had been locked out of by a gate
-reading 361 of 746 symbols.
+strategy was designed for and the one the old strict AND locked it out of.
 
 ---
 

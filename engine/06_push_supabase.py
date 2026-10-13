@@ -124,6 +124,64 @@ def _signals_has(col: str, headers: dict) -> bool:
     return _SIGNALS_HAS[col]
 
 
+# ── THE TRADING EXCLUSION IS ENFORCED HERE, AND ONLY HERE ──────────
+#
+# WHAT CHANGED, 2026-10-13. engine/universe.EXCLUDED used to be enforced by
+# 01b_download_bhavcopy refusing to WRITE excluded symbols: starve them of
+# data, and 02b's staleness guard deletes their SMC output before scoring sees
+# it. That is enforcement by side effect. It froze 37 parquets at their
+# 2026-09-11 bar for a month, and those frozen files went on feeding
+# sector_heatmap a month-old daily return as today's.
+#
+# Ingestion now writes the whole universe, so THIS is the gate. There is no
+# other: 02b globs, 03b globs, and atlas/signal/market_open.py reads
+# public.signals with no universe filter of its own. A symbol that reaches the
+# table is a symbol ATLAS may size and buy -- a 5% circuit band stock it cannot
+# exit during a move, or a sub-Rs50 name where a Rs10,000 notional is 789
+# shares of a thin book. Both are what the exclusions are for.
+#
+# TWO LAYERS, BECAUSE ONE IS DELETABLE. _drop_excluded() filters and says what
+# it dropped. _refuse_if_excluded() is the assertion immediately before each
+# POST: if the filter above it is ever removed, reordered, or bypassed by a new
+# publish path, the push RAISES instead of succeeding quietly. A publish that
+# cannot prove the gate held is a publish that does not happen.
+def _excluded_symbols() -> set:
+    from engine.universe import EXCLUDED
+    return set(EXCLUDED)
+
+
+def _drop_excluded(df, label: str):
+    """Remove universe-excluded symbols from a publish frame."""
+    excl = _excluded_symbols()
+    if "symbol" not in df.columns:
+        return df
+    hit = df[df["symbol"].isin(excl)]
+    if len(hit):
+        names = ", ".join(sorted(set(hit["symbol"]))[:10])
+        log.info(f"{label}: dropped {len(hit)} row(s) for "
+                 f"{hit['symbol'].nunique()} universe-excluded symbol(s): "
+                 f"{names}{' ...' if hit['symbol'].nunique() > 10 else ''}")
+    return df[~df["symbol"].isin(excl)].copy()
+
+
+def _refuse_if_excluded(records: list, label: str):
+    """RAISE rather than publish an excluded symbol. The backstop, not the filter."""
+    excl = _excluded_symbols()
+    bad = sorted({str(r.get("symbol", "")) for r in records} & excl)
+    if bad:
+        log.error("=" * 66)
+        log.error(f"PUBLISH REFUSED — {label} payload contains "
+                  f"{len(bad)} universe-excluded symbol(s): {', '.join(bad)}")
+        log.error("EXCLUDED is the only gate between a scored row and both the "
+                  "screener and ATLAS. Nothing was sent.")
+        log.error("=" * 66)
+        raise RuntimeError(
+            f"{label}: refusing to publish universe-excluded symbols "
+            f"({', '.join(bad)}) — engine.universe.EXCLUDED is enforced in "
+            f"engine/06_push_supabase.py and the filter did not hold")
+    return len(records)
+
+
 def push_signals(target_date: str = None):
     if not SUPABASE_KEY:
         log.error("SUPABASE_SERVICE_KEY not set. Export it first:")
@@ -220,6 +278,14 @@ def push_signals(target_date: str = None):
     if day.empty:
         log.warning(f"No qualifying signals for {d.date()}")
         # Still push empty — website shows "no signals today"
+        return
+
+    # THE UNIVERSE EXCLUSION, ahead of every other publish gate so the counts
+    # logged below describe the publishable population and not a superset.
+    day = _drop_excluded(day, "signals")
+    if day.empty:
+        log.warning(f"No publishable signals for {d.date()} after the "
+                    f"universe exclusion")
         return
 
     log.info(f"Signals to push: {len(day)}")
@@ -361,6 +427,7 @@ def push_signals(target_date: str = None):
         log.warning(f"Could not list existing rows for {day_str}: {e}")
     log.info(f"Existing rows for {day_str}: {len(old_ids)}")
 
+    _refuse_if_excluded(records, "signals")
     ins_r = requests.post(base_url, headers=headers, json=records, timeout=60)
     if ins_r.status_code not in (200, 201):
         log.error(f"Push failed: {ins_r.status_code} — {ins_r.text[:300]}")
@@ -684,6 +751,14 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
         log.info(f"no candidates for {d.date()}")
         return 0
 
+    # The watchlist is published to the same table ATLAS reads, so it carries
+    # the same exclusion as the signal path.
+    day = _drop_excluded(day, "candidates")
+    if day.empty:
+        log.info(f"no publishable candidates for {d.date()} after the "
+                 f"universe exclusion")
+        return 0
+
     day_str = d.strftime("%Y-%m-%d")
     recs = []
     for _, row in day.iterrows():
@@ -734,6 +809,7 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
 
     # Insert BEFORE deleting, same order as the signal path: a failed insert must
     # leave the previous watchlist intact rather than emptying it.
+    _refuse_if_excluded(recs, "candidates")
     r = requests.post(base_url, headers=headers, json=recs, timeout=60)
     if r.status_code not in (200, 201):
         log.error(f"candidate push failed: {r.status_code} — {r.text[:300]}")

@@ -280,7 +280,10 @@ def run_btst_scan() -> list:
     log.info(f"Live prices loaded: {len(live_prices)} stocks")
 
     # Scan all SMC parquets
-    smc_files = sorted(DATA_DIR.glob("*.parquet"))
+    # THE UNIVERSE, NOT THE FOLDER -- same reason as 03b: a leftover SMC
+    # parquet for a symbol that has left the universe must not produce a setup.
+    from engine.paths import universe_symbol_files
+    smc_files = universe_symbol_files(DATA_DIR)
     log.info(f"Scanning {len(smc_files)} stocks for BTST setups...")
 
     candidates = []

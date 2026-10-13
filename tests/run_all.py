@@ -47,6 +47,8 @@ SUITES = [
     # The 2026-10-07 rebuild: order types, fallback independence, square-off
     # timing, the halt guards, and the two operator-facing strings.
     ("exit path rebuild", [sys.executable, "tests/test_exit_path_rebuild.py"]),
+    ("universe publish gate", [sys.executable,
+                               "tests/test_universe_publish_gate.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),

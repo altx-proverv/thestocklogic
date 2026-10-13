@@ -111,6 +111,8 @@ pq = ROOT / "data/processed/stocks" / f"{SYMBOL}.parquet"
 print(f"  {pq}")
 print(f"  exists: {pq.exists()}")
 if not pq.exists():
+    # A RAW FILE COUNT, on purpose -- a provenance line about the folder, not
+    # a symbol list feeding a computation.
     n = len(list((ROOT / 'data/processed/stocks').glob('*.parquet')))
     print(f"  universe on disk: {n} parquets")
     print("\n  >>> DIVERGES HERE: not a generator difference at all. The symbol")

@@ -91,7 +91,10 @@ def load_frames(symbols=None, stocks_dir: Path = None) -> dict:
     """{symbol: full-history OHLCV}. Sliced per date, never used whole."""
     stocks_dir = stocks_dir or ROOT / "data/processed/stocks"
     out = {}
-    for f in sorted(stocks_dir.glob("*.parquet")):
+    # THE UNIVERSE, NOT THE FOLDER -- the replay must see the population the
+    # live pipeline sees, orphan parquets included out.
+    from engine.paths import universe_symbol_files
+    for f in universe_symbol_files(stocks_dir):
         if symbols and f.stem not in symbols:
             continue
         df = pd.read_parquet(f)

@@ -158,6 +158,10 @@ def _classify(old: dict, path: Path) -> dict:
 
 
 def build(stocks_dir: Path = STOCKS_DIR) -> dict:
+    # GLOBS THE FOLDER ON PURPOSE. This is a disk-integrity fingerprint: it has
+    # to see every file to report `added` and `removed`, which is exactly how a
+    # parquet orphaned by a universe change becomes visible. Taking its list
+    # from the universe would make it blind to the difference it measures.
     files = sorted(stocks_dir.glob("*.parquet"))
     out = {}
     for f in files:

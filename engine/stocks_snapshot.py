@@ -63,6 +63,10 @@ def _size_mb(p: Path) -> float:
 def take(label: str = "", stocks_dir: Path = STOCKS_DIR,
          snap_dir: Path = SNAP_DIR, keep: int = KEEP) -> Path:
     """Archive the stocks directory. Returns the archive path, or None."""
+    # GLOBS THE FOLDER ON PURPOSE. A backup copies what is there, including
+    # parquets whose symbol has left the universe -- those are the files most
+    # likely to be lost, since nothing else reads them any more. Filtering this
+    # to SYMBOL_SECTOR_MAP would silently stop backing them up.
     files = sorted(stocks_dir.glob("*.parquet"))
     if not files:
         log.warning(f"nothing to snapshot — {stocks_dir} holds no parquets")

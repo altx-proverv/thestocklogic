@@ -76,8 +76,31 @@ DELAY         = 0.3   # seconds between requests
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from universe import ALL_SYMBOLS as _ALL_SYMS, SYMBOL_SECTOR_MAP
-NIFTY100_SYMBOLS = set(_ALL_SYMS)
+from universe import SYMBOL_SECTOR_MAP
+
+# INGEST THE WHOLE UNIVERSE. DATA FOR EVERY MEMBER; TRADING FOR A SUBSET.
+#
+# This read ALL_SYMBOLS, which is SYMBOL_SECTOR_MAP minus EXCLUDED -- so a
+# symbol added to EXCLUDED stopped being WRITTEN, not merely stopped being
+# traded. Commit fe169df (2026-09-13) added 40 mechanical exclusions, and from
+# the next run the loop below never opened those 40 parquets again. Thirty-seven
+# of them froze at their 2026-09-11 bar and sat there for a month.
+#
+# A FROZEN PARQUET IS NOT AN INERT ONE. 07_sector_momentum iterates the whole
+# map and takes close.iloc[-1] vs iloc[-2], so every one of those files kept
+# publishing its 11 September move into sector_heatmap as though it were
+# today's -- PINELABS at +16.75%, YESBANK at +5.29% -- and the published
+# stock_count of 746 asserted all 746 had been measured that session. 02b
+# logged the whole set as STALE nightly and deleted their SMC output, which is
+# the only reason they stayed off the screener.
+#
+# ENFORCING A TRADING EXCLUSION BY WITHHOLDING DATA IS THE DEFECT. The
+# exclusion is a statement about tradeability -- too thin, too cheap, wrong
+# series -- not about whether the stock exists. EXCLUDED is untouched and is
+# now enforced where it belongs, immediately before the publish in
+# engine/06_push_supabase.py, which is the one gate between a scored row and
+# both the screener and ATLAS.
+NIFTY100_SYMBOLS = set(SYMBOL_SECTOR_MAP)
 
 # Holiday calendar comes from engine/trading_calendar.py. This module used to
 # keep its own set, which stopped at 2025-05-01 and had drifted apart from that
@@ -541,11 +564,22 @@ def build_parquets(trading_days: list):
 
 def validate():
     """Quick spot check on the output."""
-    files = list(STOCKS_DIR.glob("*.parquet"))
+    # THE UNIVERSE, NOT THE FOLDER -- and the folder's extras named, not
+    # counted in. This said "Stock parquets: 765" for a 746-symbol universe
+    # and read as a healthy number.
+    from engine.paths import universe_symbol_files, orphan_symbol_files
+    files = universe_symbol_files(STOCKS_DIR)
+    orphans = orphan_symbol_files(STOCKS_DIR)
     log.info(f"\n{'='*50}")
     log.info(f"VALIDATION")
     log.info(f"{'='*50}")
-    log.info(f"Stock parquets: {len(files)}")
+    log.info(f"Stock parquets: {len(files)} of {len(SYMBOL_SECTOR_MAP)} "
+             f"universe symbols")
+    if orphans:
+        log.warning(f"{len(orphans)} parquet(s) on disk are NOT in the "
+                    f"universe and are read by nothing: "
+                    f"{', '.join(p.stem for p in orphans[:8])}"
+                    f"{' ...' if len(orphans) > 8 else ''}")
 
     for sym in ["RELIANCE", "TCS", "SBIN"]:
         p = STOCKS_DIR / f"{sym}.parquet"

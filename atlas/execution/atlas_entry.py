@@ -296,11 +296,18 @@ def allowed_side(ctx: dict) -> tuple:
     so a signal reaching this function has already passed a regime test on the
     full universe with the pipeline's own data.
 
-    AND THE COPY APPLIED HERE WAS THE BROKEN ONE. The entry-side regime gate
-    reads 361 symbols of 746, with breadth that has been inverted. A gate on
-    worse data, applied a second time to a population already filtered by the
-    better one, cannot add safety -- it can only subtract trades, which is what
-    it did: one tradeable state out of twenty.
+    AND THE COPY APPLIED HERE IS THE WEAKER ONE. A gate applied a second time
+    to a population the nightly stage has already filtered, on data this
+    function does not own, cannot add safety -- it can only subtract trades,
+    which is what it did: one tradeable state out of twenty.
+
+    A FIGURE THAT USED TO SIT HERE IS GONE. This said the entry-side gate
+    "reads 361 symbols of 746, with breadth that has been inverted". Measured
+    against the live data on 2026-10-13 it does not reproduce: market.parquet's
+    breadth denominator is 705, the contributing-symbol count has been 742-746
+    all quarter and 705-706 since, and no session in the whole history has a
+    count within 15 of 361. The double-counting argument above stands on its
+    own; an unreproducible number does not strengthen it.
 
     NOT THE SAME AS REMOVING THE REGIME TEST. The nightly filter is untouched
     and is still the regime authority. What is removed is the second, weaker

@@ -113,7 +113,10 @@ def load_closes() -> dict:
     """
     want = ["date", "open", "high", "low", "close"]
     out = {}
-    for f in STOCKS_DIR.glob("*.parquet"):
+    # THE UNIVERSE, NOT THE FOLDER -- an orphan parquet cannot be the series a
+    # published signal is marked against; its symbol no longer trades.
+    from engine.paths import universe_symbol_files
+    for f in universe_symbol_files(STOCKS_DIR):
         try:
             d = pd.read_parquet(f, columns=want)
         except Exception:
