@@ -77,8 +77,14 @@ def main() -> int:
 
         # the feed answers, but a leg is missing -- the subtler failure
         fut = LS.near_month_future()
-        fk = fut["key"].replace("|", ":")
-        LS._quote = lambda keys: {fk: {"last_price": 22860.0, "net_change": 473.5,
+        # KEYED THE WAY THE FEED KEYS IT, not the way the request was made:
+        # F&O rows come back under segment:TRADINGSYMBOL and carry the token in
+        # instrument_token. The first cut looked up segment:token, found
+        # nothing for the future, and reported the feed as silent.
+        fk = "NSE_FO:NIFTY26OCTFUT"
+        TOK = fut["key"]
+        LS._quote = lambda keys: {fk: {"instrument_token": TOK,
+                                       "last_price": 22860.0, "net_change": 473.5,
                                        "ohlc": {"open": 22400.1},
                                        "average_price": None,
                                        "timestamp": "2026-10-13T15:29:00+05:30"}}
@@ -88,7 +94,8 @@ def main() -> int:
               "average_price" in r["detail"], True)
 
         # a zero is a field the feed did not fill, not a price
-        LS._quote = lambda keys: {fk: {"last_price": 22860.0, "net_change": 473.5,
+        LS._quote = lambda keys: {fk: {"instrument_token": TOK,
+                                       "last_price": 22860.0, "net_change": 473.5,
                                        "ohlc": {"open": 0},
                                        "average_price": 22680.66,
                                        "timestamp": "2026-10-13T15:29:00+05:30"}}
@@ -97,7 +104,8 @@ def main() -> int:
         check("  and it is named", "ohlc.open" in r["detail"], True)
 
         # a stale quote is not a live read
-        LS._quote = lambda keys: {fk: {"last_price": 22860.0, "net_change": 473.5,
+        LS._quote = lambda keys: {fk: {"instrument_token": TOK,
+                                       "last_price": 22860.0, "net_change": 473.5,
                                        "ohlc": {"open": 22400.1},
                                        "average_price": 22680.66,
                                        "timestamp": "2020-01-01T09:20:00+05:30"}}
@@ -111,10 +119,11 @@ def main() -> int:
         import datetime as dt
         now = dt.datetime.now(LS.IST).isoformat(timespec="seconds")
         LS._quote = lambda keys: {
-            fk: {"last_price": 22860.0, "net_change": 473.5,
-                 "ohlc": {"open": 22400.1}, "average_price": 22680.66,
-                 "timestamp": now},
-            LS.NIFTY_INDEX_KEY.replace("|", ":"): {"last_price": 22721.95}}
+            fk: {"instrument_token": TOK, "last_price": 22860.0,
+                 "net_change": 473.5, "ohlc": {"open": 22400.1},
+                 "average_price": 22680.66, "timestamp": now},
+            "NSE_INDEX:Nifty 50": {"instrument_token": LS.NIFTY_INDEX_KEY,
+                                   "last_price": 22721.95}}
         r = LS.read()
         check("a complete, fresh quote reads ok", r["ok"], True)
         check("  previous close is last - net_change",
@@ -198,6 +207,12 @@ def main() -> int:
           "on expiry day the front month's VWAP is settlement-distorted")
     check("the index key is only used for reporting",
           ls.count("NIFTY_INDEX_KEY") >= 1, True)
+    # THE RESPONSE KEY IS NOT THE REQUEST KEY. F&O rows come back keyed by
+    # trading symbol; the index by its name. Matching on instrument_token is
+    # what makes one lookup work for both.
+    check("the row is matched on instrument_token",
+          "instrument_token" in ls, True,
+          "substituting the pipe found nothing for the future")
 
     print()
     print("=" * 78)

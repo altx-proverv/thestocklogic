@@ -157,6 +157,28 @@ def _quote(keys: list) -> dict:
     return get_market_quotes(keys) or {}
 
 
+def _row_for(quotes: dict, key: str) -> dict:
+    """The quote row for an instrument key, whatever the response is keyed by.
+
+    THE RESPONSE KEY IS NOT THE REQUEST KEY, and it differs by segment. Asking
+    for NSE_INDEX|Nifty 50 comes back under "NSE_INDEX:Nifty 50" -- the request
+    key with the pipe swapped -- but asking for NSE_FO|48704 comes back under
+    "NSE_FO:NIFTY26OCTFUT", keyed by TRADING SYMBOL rather than token. Building
+    the lookup by string substitution therefore worked for the index and
+    silently found nothing for the future, which is how this first ran on the
+    box reporting "the feed returned no row" for a contract the feed had
+    answered for.
+    #
+    So the row is matched on the instrument_token the response itself carries,
+    with the substituted key as a fallback.
+    """
+    want = str(key)
+    for row in (quotes or {}).values():
+        if str(row.get("instrument_token", "")) == want:
+            return row
+    return (quotes or {}).get(want.replace("|", ":")) or {}
+
+
 def read(max_age_seconds: float = None) -> dict:
     """The live sentiment read. NEVER RAISES.
 
@@ -188,14 +210,13 @@ def read(max_age_seconds: float = None) -> dict:
         out["detail"] = f"quote request failed: {type(e).__name__}: {e}"
         return out
 
-    fk = fut["key"].replace("|", ":")
-    row = q.get(fk) or {}
+    row = _row_for(q, fut["key"])
     if not row:
         out["detail"] = (f"the feed returned no row for {fut['symbol']} "
                          f"({fut['key']})")
         return out
 
-    idx = q.get(NIFTY_INDEX_KEY.replace("|", ":")) or {}
+    idx = _row_for(q, NIFTY_INDEX_KEY)
     out["index_spot"] = idx.get("last_price")
 
     last = row.get("last_price")
