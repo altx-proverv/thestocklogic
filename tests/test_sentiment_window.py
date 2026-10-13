@@ -334,6 +334,40 @@ def main() -> int:
 
     print()
     print("=" * 78)
+    print("9 — THE SUITE CANNOT WRITE THE LIVE WINDOW")
+    print("-" * 78)
+    # SECOND INSTANCE OF THE 2026-10-13 CLASS. verify_long_only could pause the
+    # live engine because halt() writes shared state; this window is the same
+    # shape -- tests/test_market_hours_loop calls the real cycle(), cycle()
+    # advances the window, and the window persists to /var/lib/atlas. Running
+    # the suite injected an observation into the LIVE window.
+    ra = (ROOT / "tests" / "run_all.py").read_text(encoding="utf-8")
+    check("run_all declares the drill for every suite",
+          'os.environ["ATLAS_DRILL"] = "1"' in ra, True,
+          "fencing each writer as it is found is a losing game")
+    check("  and redirects the window file",
+          "ATLAS_SENTIMENT_WINDOW_FILE" in ra, True)
+    check("the window refuses the canonical path while drilling",
+          "/var/lib/atlas/sentiment_window.json" in w_src
+          and "is_drill" in w_src, True,
+          "belt and braces, if a suite forgets to redirect")
+    # And prove the fence fires rather than just existing.
+    import atlas.execution.sentiment_window as _W
+    os.environ["ATLAS_DRILL"] = "1"
+    os.environ["ATLAS_SENTIMENT_WINDOW_FILE"] = \
+        "/var/lib/atlas/sentiment_window.json"
+    import atlas.config as _C
+    importlib.reload(_C)
+    importlib.reload(_W)
+    before = Path("/var/lib/atlas/sentiment_window.json")
+    existed = before.exists()
+    _W.observe_cycle("bullish", 1)
+    check("a drilling observe_cycle writes no live file",
+          before.exists(), existed,
+          "unchanged whether or not the real file was already there")
+
+    print()
+    print("=" * 78)
     print("PASS" if OK else "FAIL")
     print("=" * 78)
     return 0 if OK else 1

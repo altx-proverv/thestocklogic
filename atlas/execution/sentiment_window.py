@@ -122,6 +122,21 @@ def _load() -> dict:
 
 def _save(st: dict) -> None:
     _, _, _, _, path = _cfg()
+    # A DRILL MUST NOT WRITE THE LIVE WINDOW. Same fence as breaker.halt, and
+    # for the same reason: tests/test_market_hours_loop calls the real cycle(),
+    # cycle() advances this window, and on 2026-10-14 running the suite injected
+    # an observation into /var/lib/atlas/sentiment_window.json. tests/run_all
+    # declares the drill and redirects the path; this refuses the canonical file
+    # even if something forgets to.
+    try:
+        from atlas.risk.breaker import is_drill
+        drilling, why = is_drill()
+    except Exception:
+        drilling, why = False, ""
+    if drilling and str(path) == "/var/lib/atlas/sentiment_window.json":
+        log.warning(f"DRILL ({why}) — refusing to write the live sentiment "
+                    f"window at {path}")
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")

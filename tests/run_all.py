@@ -15,6 +15,7 @@ import os
 import sys
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +39,29 @@ ROOT = Path(__file__).resolve().parent.parent
 # asserting no pipeline module installs a blanket filter. Kept because it catches
 # deprecations in modules that have no filter of their own.
 os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
+
+# ── THE SUITE IS A DRILL, AND SAYS SO ─────────────────────────────
+#
+# WHY. On 2026-10-13 running this suite on the box set atlas_state.mode =
+# PAUSED mid-session, because tools/verify_long_only drives a real failure
+# through breaker.halt() and halt() also PATCHes shared state. 3d18fe7 fenced
+# that: breaker.is_drill() refuses to touch production while drilling.
+#
+# The fence only works if something declares the drill, and on 2026-10-14 the
+# same class of accident reappeared in a new place -- tests/test_market_hours_loop
+# calls the real cycle(), cycle() advances the sentiment window, and the window
+# persists to /var/lib/atlas/sentiment_window.json. Running the suite injected
+# an observation into the LIVE window. Harmless this time (one "unavailable",
+# which can permit nothing) and not harmless in principle: mid-session it would
+# dilute a real establishment.
+#
+# SO THE RUNNER DECLARES IT, ONCE, FOR EVERY SUITE. Fencing each writer as it is
+# discovered is a losing game -- this is the second one. A suite that wants real
+# state has to opt out deliberately, which is the right way round.
+os.environ["ATLAS_DRILL"] = "1"
+os.environ.setdefault(
+    "ATLAS_SENTIMENT_WINDOW_FILE",
+    str(Path(tempfile.gettempdir()) / "atlas_test_sentiment_window.json"))
 
 SUITES = [
     ("environment",     [sys.executable, "tests/test_environment.py"]),
