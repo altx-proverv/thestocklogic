@@ -47,6 +47,46 @@ def _halt_line() -> str:
                 + (f"\n{st['reason'][:160]}" if st["reason"] else "")
                 + "\nNo entries will be placed. /resume or delete the file.")
     return f"\u25b6\ufe0f Not halted \u00b7 <code>{st['path']}</code>"
+
+
+def _readiness_block() -> str:
+    """Every switch that can stop an entry, and a verdict.
+
+    WHY THE HALT LINE WAS NOT ENOUGH. On 2026-10-13 this message said
+    "Not halted · /var/lib/atlas/halt" at 08:30 and it was true -- the halt FILE
+    was clear. atlas_state.mode was PAUSED, so the session opened taking no
+    entries, and the one message the operator reads before the open did not
+    mention it. The halt file is one of a dozen switches; reporting it alone
+    reads as a clean bill of health.
+
+    NOT READY IS THE HEADLINE, not a footnote. If anything would refuse an
+    entry, that goes first and the blockers are named with what set them.
+
+    tools.atlas_switches never raises -- a probe that cannot read its state
+    reports UNKNOWN and counts as blocking. So this cannot stop the 08:30
+    message being sent, which is the message that would have to carry the news
+    that it failed.
+    """
+    try:
+        from tools.atlas_switches import inventory, readiness
+        rows = inventory(include_signal_gates=False)
+        ready, blockers = readiness(rows)
+    except Exception as e:
+        return (f"\u26a0\ufe0f <b>READINESS UNKNOWN</b> — the switch inventory "
+                f"would not run ({type(e).__name__}: {e}). Run "
+                f"<code>python3 -m tools.atlas_switches</code> on the box.")
+    if ready:
+        return ("\u2705 <b>READY</b> — no switch is blocking entries\n"
+                + "\n".join(f"\u00b7 {r['switch']}: {r['value']}" for r in rows
+                             if r["switch"] in ("atlas_state.mode",
+                                                "halt sentinel file",
+                                                "LIVE_TRADING_ENABLED")))
+    out = [f"\U0001f6d1 <b>NOT READY</b> — {len(blockers)} switch(es) would "
+           f"refuse every entry:"]
+    for b in blockers:
+        out.append(f"\u00b7 <code>{b[:220]}</code>")
+    out.append("Nothing will be entered until these clear.")
+    return "\n".join(out)
 from atlas.execution.zerodha_login import (
     get_stored_token, verify_token, complete_login, login
 )
@@ -154,6 +194,7 @@ def run():
             # cannot leave this behind.
             f"{_rules_line()}\n"
             f"{_halt_line()}\n"
+            f"{_readiness_block()}\n"
             f"Market opens in 45 minutes."
         )
         return True

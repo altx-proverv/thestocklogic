@@ -68,6 +68,52 @@ def normalise_mode(mode: str) -> str:
     return DEFAULT_AGENT_MODE
 
 
+# ── WHO SET THE MODE, AND WHEN ─────────────────────────────────────
+#
+# WHY THIS EXISTS. market_open.paused() returned the literal string
+# "operator PAUSED" for any atlas_state.mode == PAUSED, whatever wrote it.
+# Three things write that row: /pause here, breaker.halt() on a self-halt, and
+# breaker.clear() on a resume. On 2026-10-13 a self-halt set it mid-session and
+# the loop reported an operator action for 80 cycles, which cost the operator a
+# search through their own Telegram history for a /pause they never sent.
+#
+# The cause was always in `notes` -- nothing read it. Writers now tag the note
+# and this classifies on the tag. An UNTAGGED note is reported as unknown
+# rather than guessed at: a row written before this change, or by hand in the
+# Supabase console, is exactly the case where guessing "operator" would be
+# wrong again.
+MODE_SOURCE_TAGS = {
+    "OPERATOR:":  "operator directive",
+    "SELF-HALT:": "ATLAS self-halt",
+    "RESUMED:":   "operator resume",
+}
+
+
+def mode_source(state: dict) -> tuple:
+    """(source, detail) for whatever set atlas_state.mode."""
+    note = str((state or {}).get("notes") or "").strip()
+    for tag, label in MODE_SOURCE_TAGS.items():
+        if note.upper().startswith(tag):
+            return label, note[len(tag):].strip()
+    if not note:
+        return "unrecorded", "the row carries no note saying what set it"
+    # Pre-tag vocabulary, kept so history reads correctly rather than as unknown.
+    low = note.lower()
+    if low.startswith("atlas self-halt"):
+        return "ATLAS self-halt", note
+    if "by directive" in low:
+        return "operator directive", note
+    return "unknown", note
+
+
+def mode_line(state: dict) -> str:
+    """One line naming the mode, who set it and when. For operator surfaces."""
+    mode = normalise_mode((state or {}).get("mode"))
+    src, detail = mode_source(state)
+    when = str((state or {}).get("updated_at") or "")[:19].replace("T", " ") or "unknown time"
+    return f"{mode} — set by {src} at {when}" + (f" · {detail[:200]}" if detail else "")
+
+
 def get_agent_state():
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/atlas_state?limit=1&order=updated_at.desc",
@@ -136,7 +182,7 @@ def handle_directive(text: str) -> str:
         )
 
     elif text in ["/pause", "pause"]:
-        update_agent_mode("PAUSED", f"Paused by directive at {now}")
+        update_agent_mode("PAUSED", f"OPERATOR: /pause at {now}")
         return (
             "⏸ <b>AGENT PAUSED</b>\n"
             "No new entries will be taken.\n"

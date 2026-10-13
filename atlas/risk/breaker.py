@@ -137,12 +137,54 @@ def is_halted() -> tuple:
     return False, ""
 
 
+# ── A DRILL MUST NOT HALT THE LIVE ENGINE ─────────────────────────
+#
+# WHAT HAPPENED, 2026-10-13. tools/verify_long_only.py drives a real failure
+# through this module to prove the halt path works, and it carefully points
+# ATLAS_HALT_FILE at a temp file so /var/lib/atlas/halt is never touched. It is
+# also registered in tests/run_all.py. What nobody noticed is that halt() has
+# THREE effects, and the temp file only redirects one of them: the other two are
+# a PATCH of the shared atlas_state row and a real Telegram alert.
+#
+# So running the test suite on the box with production credentials set
+# atlas_state.mode = PAUSED at 11:21 IST, mid-session, with the market open. The
+# loop stopped taking entries from cycle 121 and reported it as "operator
+# PAUSED" -- sending the operator to look through their own Telegram history for
+# a /pause they never sent.
+#
+# THE REDIRECTED SENTINEL IS THE SIGNAL. If SENTINEL is not the canonical path
+# then this process is, by construction, not operating the real engine --
+# atlas/config.py says that env override exists for exactly this harness and
+# nothing else. Deriving the drill flag from it means there is ONE switch rather
+# than two that can be set half-way: a harness that redirects the file cannot
+# forget to also declare itself.
+#
+# ATLAS_DRILL is honoured too, for a caller that wants to be explicit without
+# moving the halt file.
+def is_drill() -> tuple:
+    """(drilling, why). True when this process must not touch shared state."""
+    if os.environ.get("ATLAS_DRILL", "").strip().lower() in ("1", "true", "yes"):
+        return True, "ATLAS_DRILL is set"
+    if str(SENTINEL) != str(HALT_FILE_CANONICAL):
+        return True, (f"halt sentinel is redirected to {SENTINEL} rather than "
+                      f"{HALT_FILE_CANONICAL}, so this is not the live engine")
+    return False, ""
+
+
 def halt(kind: str, detail: str) -> None:
     """Stop entering, durably, and say so. Safe to call more than once."""
     now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
-    note = f"ATLAS self-halt at {now} — {kind}: {detail}"
+    # THE NOTE SAYS WHAT SET THE PAUSE, in a form a reader can classify.
+    # paused() used to report every PAUSED mode as "operator PAUSED" whatever
+    # wrote it, because the cause lived only in this free-text field and nothing
+    # read it. The SELF-HALT: prefix is what mode_source() keys on.
+    note = f"SELF-HALT: {kind} at {now} — {detail}"
+    drilling, drill_why = is_drill()
     log.error("=" * 66)
     log.error(f"HALT — {note}")
+    if drilling:
+        log.error(f"DRILL — {drill_why}")
+        log.error("atlas_state and the operator alert are NOT touched.")
     log.error("=" * 66)
 
     # 1. The sentinel first: it is local, it cannot fail for the reason we are
@@ -156,19 +198,33 @@ def halt(kind: str, detail: str) -> None:
 
     # 2. atlas_state, so the kill switch, the dashboard and the operator all
     #    see it, and so it survives this box.
-    try:
-        r = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/atlas_state?id=eq.1",
-            headers=_headers(),
-            json={"mode": "PAUSED", "notes": note},
-            timeout=10)
-        if r.status_code not in (200, 204):
-            log.error(f"could not set PAUSED: HTTP {r.status_code} {r.text[:200]}")
-    except Exception as e:
-        log.error(f"could not set PAUSED: {e}")
+    #
+    #    updated_at IS STAMPED. It was not, and get_agent_state() orders by
+    #    updated_at desc -- so a self-halt left the row's timestamp reading
+    #    whenever an operator last used /pause. On 2026-10-13 the row said
+    #    2026-10-07 for a pause written that morning, which made the forensics
+    #    impossible from the row alone.
+    if drilling:
+        log.error(f"DRILL — atlas_state.mode left alone ({drill_why})")
+    else:
+        try:
+            r = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/atlas_state?id=eq.1",
+                headers=_headers(),
+                json={"mode": "PAUSED", "notes": note,
+                      "updated_at": datetime.now(IST).isoformat()},
+                timeout=10)
+            if r.status_code not in (200, 204):
+                log.error(f"could not set PAUSED: HTTP {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            log.error(f"could not set PAUSED: {e}")
 
     # 3. Tell the operator. A halt that nobody hears about is a stopped engine
-    #    with no explanation.
+    #    with no explanation -- but a DRILL that alerts is an operator woken up
+    #    for a test, which is how trust in the alert is lost.
+    if drilling:
+        log.error(f"DRILL — operator alert suppressed ({drill_why})")
+        return
     try:
         from atlas.reporting.telegram import send
         send("🛑 <b>ATLAS HALTED</b>\n"
@@ -207,13 +263,19 @@ def clear() -> bool:
         log.error(f"could not clear halt sentinel {SENTINEL}: {e}")
         ok = False
 
+    drilling, drill_why = is_drill()
+    if drilling:
+        log.warning(f"DRILL — atlas_state.mode left alone ({drill_why})")
+        return ok
     try:
         r = requests.patch(
             f"{SUPABASE_URL}/rest/v1/atlas_state?id=eq.1",
             headers=_headers(),
             json={"mode": "NORMAL",
-                  "notes": f"Resumed at {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')}"
-                           f" — halt sentinel cleared"},
+                  "notes": f"RESUMED: operator at "
+                           f"{datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')}"
+                           f" — halt sentinel cleared",
+                  "updated_at": datetime.now(IST).isoformat()},
             timeout=10)
         if r.status_code not in (200, 204):
             log.error(f"sentinel cleared but atlas_state still PAUSED: "

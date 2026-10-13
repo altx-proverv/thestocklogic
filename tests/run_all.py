@@ -49,6 +49,7 @@ SUITES = [
     ("exit path rebuild", [sys.executable, "tests/test_exit_path_rebuild.py"]),
     ("universe publish gate", [sys.executable,
                                "tests/test_universe_publish_gate.py"]),
+    ("switch inventory", [sys.executable, "tests/test_switch_inventory.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),

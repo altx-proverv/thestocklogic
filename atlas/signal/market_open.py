@@ -708,7 +708,15 @@ def paused() -> tuple:
         return True, f"agent state unreadable — treating as paused ({e})"
     mode = str(state.get("mode", "")).upper()
     if mode == "PAUSED":
-        return True, "operator PAUSED"
+        # NAME WHAT SET IT. This returned the literal "operator PAUSED" for any
+        # PAUSED mode, whatever wrote the row -- and three things write it. On
+        # 2026-10-13 a self-halt paused the loop mid-session and 80 cycles
+        # reported an operator action that never happened. Same defect class as
+        # the day-0 SL alert naming a GTT (ad947f7): the mechanism that acted
+        # must be the mechanism that is named.
+        from atlas.reporting.directives import mode_source
+        src, detail = mode_source(state)
+        return True, f"PAUSED by {src}" + (f" — {detail[:200]}" if detail else "")
     return False, mode
 
 

@@ -182,9 +182,21 @@ def section_no_short():
 def section_gtt_failure_halts():
     head("2 — A FAILED GTT EXITS THE POSITION AND HALTS")
 
-    # SCRATCH HALT FILE. The real /var/lib/atlas/halt is never touched.
+    # SCRATCH HALT FILE *AND* A DECLARED DRILL. The real /var/lib/atlas/halt is
+    # never touched -- but redirecting the file was only ever two thirds of the
+    # job. breaker.halt() also PATCHes the shared atlas_state row and sends a
+    # real operator alert, and neither followed the redirect. Run on the box
+    # with production credentials on 2026-10-13 this suite set
+    # atlas_state.mode = PAUSED at 11:21 IST with the market open, stopping
+    # entries for the rest of the session.
+    #
+    # ATLAS_DRILL is belt and braces: breaker.is_drill() already infers a drill
+    # from the redirected sentinel, so this cannot be forgotten, and setting it
+    # explicitly means the intent is readable here rather than only inferable
+    # there.
     tmp = Path(tempfile.mkdtemp()) / "halt"
     os.environ["ATLAS_HALT_FILE"] = str(tmp)
+    os.environ["ATLAS_DRILL"] = "1"
     import importlib
     import atlas.config as C
     importlib.reload(C)
@@ -267,6 +279,10 @@ def section_gtt_failure_halts():
     breaker.halt(_kind,
                  f"RELIANCE: the {_name} would not place (INJECTED). Position "
                  f"closed on a marketable LIMIT, mechanism is broken.")
+    drilling, drill_why = breaker.is_drill()
+    check("this run is recognised as a DRILL", drilling, True)
+    check("  so shared state is off limits",
+          ("redirected" in drill_why) or ("ATLAS_DRILL" in drill_why))
     exists = tmp.exists()
     check("the halt file was written", exists, str(tmp))
     if exists:
@@ -298,6 +314,7 @@ def section_gtt_failure_halts():
 
     tmp.unlink(missing_ok=True)
     os.environ.pop("ATLAS_HALT_FILE", None)
+    os.environ.pop("ATLAS_DRILL", None)
     print(f"\n  scratch halt file removed; {C.HALT_FILE_CANONICAL} never touched")
     return True
 

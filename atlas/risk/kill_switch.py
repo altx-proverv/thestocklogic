@@ -105,10 +105,18 @@ def check(signal: dict = None) -> KillSwitchResult:
     mode    = normalise_mode(state.get("mode", DEFAULT_AGENT_MODE))
     details = {"data_available": True, "mode": mode}
 
-    # CHECK 1 — Operator halt
+    # CHECK 1 — the agent is halted. NOT NECESSARILY BY AN OPERATOR: this said
+    # "by directive" unconditionally, and breaker.halt() writes the same mode.
     if mode in HALT_MODES:
-        log.warning(f"KILL SWITCH: Agent is {mode} — no trades allowed")
-        return KillSwitchResult(False, f"Agent {mode.lower()} by directive", details)
+        from atlas.reporting.directives import mode_source
+        src, detail = mode_source(state)
+        details["mode_source"] = src
+        details["mode_detail"] = detail[:300]
+        log.warning(f"KILL SWITCH: Agent is {mode} (set by {src}) — "
+                    f"no trades allowed")
+        return KillSwitchResult(False, f"Agent {mode.lower()} — set by {src}"
+                                       + (f": {detail[:160]}" if detail else ""),
+                                details)
 
     # CHECK 2 — Live broker funds. The only capital question that remains.
     #
@@ -158,7 +166,11 @@ def status() -> dict:
 
     from atlas.reporting.directives import normalise_mode
     mode = normalise_mode(state.get("mode", DEFAULT_AGENT_MODE))
-    out  = {"data_available": True, "mode": mode, "halted": mode in HALT_MODES}
+    from atlas.reporting.directives import mode_source
+    _src, _detail = mode_source(state)
+    out  = {"data_available": True, "mode": mode, "halted": mode in HALT_MODES,
+            "mode_source": _src, "mode_detail": _detail[:300],
+            "mode_set_at": str(state.get("updated_at") or "")[:19]}
 
     # Funds are advisory here, never fatal -- /status must not fail because the
     # broker is unreachable.
