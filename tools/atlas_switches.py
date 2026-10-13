@@ -44,6 +44,25 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # candidates pass and cannot by themselves mean "ATLAS is disarmed".
 SESSION, SIGNAL = "session", "signal"
 
+# THE ONLY SWITCHES ALLOWED TO REPORT UNKNOWN WITHOUT BLOCKING.
+#
+# The rule is that an unreadable probe blocks -- not knowing whether we are
+# disarmed is not permission to trade. These two are exempt, and the exemption
+# is a named constant so that adding a third is a deliberate act someone has to
+# justify rather than a default a new probe can quietly inherit:
+#
+#   atlas-market-hours.timer   only probeable on the box. Read from a dev
+#                              machine there is no systemd to ask, and that must
+#                              not render the whole inventory NOT READY.
+#   sentiment source           an OLD market.parquet means Gate 1 permits no
+#                              side, which is cash -- a legitimate outcome, not
+#                              a disarmed engine. A MISSING one still blocks.
+#
+# A row may also be advisory when a fast-mode run skipped its probe; those carry
+# the value "not probed" and are listed, never silently dropped.
+ADVISORY_SWITCHES = ("atlas-market-hours.timer",
+                     "sentiment source (market.parquet)")
+
 
 def _row(name, where, value, blocking, survives, detail="", scope=SESSION,
          advisory=False):

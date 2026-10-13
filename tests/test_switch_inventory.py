@@ -207,13 +207,18 @@ def main() -> int:
     # THE EXCEPTIONS MUST NAME THEMSELVES. advisory=True is the only way a row
     # may report UNKNOWN without blocking, so it is asserted rather than left
     # to whoever adds the next probe.
-    # The permanent advisory exceptions, separate from fast mode's not-probed
-    # rows. These two are the only switches allowed to report UNKNOWN without
-    # blocking, and they are listed here so adding a third is a deliberate act.
-    check("  and the advisory exceptions are explicit",
-          sorted(r["switch"] for r in rows
-                 if r["advisory"] and r["value"] != "not probed"),
-          ["atlas-market-hours.timer", "sentiment source (market.parquet)"])
+    # THE EXEMPTION IS A SUBSET OF A NAMED CONSTANT, not an exact match: the
+    # systemd timer is advisory only where there is no systemd to ask, so the
+    # box and a dev machine legitimately differ. What must never happen is a
+    # NEW switch quietly joining the exempt set.
+    from tools.atlas_switches import ADVISORY_SWITCHES
+    exempt = {r["switch"] for r in rows
+              if r["advisory"] and r["value"] != "not probed"}
+    check("  every advisory row is a declared exception",
+          sorted(exempt - set(ADVISORY_SWITCHES)), [],
+          f"declared: {len(ADVISORY_SWITCHES)}; here: {len(exempt)}")
+    check("  and the declared set is still just the two",
+          len(ADVISORY_SWITCHES), 2)
     check("fast mode still LISTS the broker switches",
           {"broker funds", "Zerodha access token", "kill switch (Gate 7)"}
           <= names, True, "skipped probes are rows, not omissions")
