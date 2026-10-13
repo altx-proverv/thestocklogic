@@ -353,6 +353,26 @@ ENTRY_LIMIT_FILL_SECONDS = 20
 # admit a far price, which is the thing being closed.
 ENTRY_PROXIMITY_PCT = 1.0
 
+# ── THE ENTRY-SIDE SENTIMENT GATE IS A LIVE READ ──────────────────
+#
+# Gate 1 used to read market.parquet: yesterday's closing breadth and a 20-day
+# average. A daily aggregate deciding an intraday action, and the file ran a
+# session behind as well, so the gate never once evaluated on current data.
+#
+# It now reads the NIFTY near-month future and requires its last price to be
+# above (or below) all three of its previous close, today's open and today's
+# session VWAP. See atlas/execution/live_sentiment.py for why the futures
+# contract rather than the index: the index has no traded VWAP in this feed at
+# all -- volume is None on the quote and 0 on every candle.
+#
+# THE STALENESS LIMIT IS NOT DAMPING. It decides when a quote is too old to be
+# called live, which is the difference between a quiet market and a feed that
+# has stopped. 120s against a 60s cycle allows one missed tick before the gate
+# refuses rather than guesses. No smoothing, hysteresis or confirmation delay is
+# applied to the verdict itself -- the operator asked to see the raw flip count
+# first and to choose any damping themselves.
+LIVE_SENTIMENT_MAX_AGE_SECONDS = 120.0
+
 # ══════════════════════════════════════════════════════════════════
 # PROTECTION: DAY 0 IS AN ORDER, DAY 1 ONWARDS IS A GTT
 # ══════════════════════════════════════════════════════════════════

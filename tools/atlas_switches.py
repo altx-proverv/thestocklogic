@@ -60,8 +60,12 @@ SESSION, SIGNAL = "session", "signal"
 #
 # A row may also be advisory when a fast-mode run skipped its probe; those carry
 # the value "not probed" and are listed, never silently dropped.
+#   live sentiment (Gate 1)    outside 09:20-15:20 there is no live quote to
+#                              have, so a failed read before the open is
+#                              expected. Inside the window it BLOCKS.
 ADVISORY_SWITCHES = ("atlas-market-hours.timer",
-                     "sentiment source (market.parquet)")
+                     "sentiment source (market.parquet)",
+                     "live sentiment (Gate 1)")
 
 
 def _row(name, where, value, blocking, survives, detail="", scope=SESSION,
@@ -238,13 +242,64 @@ def _regime_source():
         age = (datetime.now(IST).date() - last).days
         return _row("sentiment source (market.parquet)", str(p), str(last),
                     False, "yes (file)",
-                    f"{age} day(s) old; sentiment decides the permitted side "
-                    f"at Gate 1 and an old read means cash, not a block",
+                    f"{age} day(s) old; this is the NIGHTLY regime source "
+                    f"only -- Gate 1 is a live read as of 2026-10-14 and no "
+                    f"longer reads this file",
                     advisory=True)
     except Exception as e:
         return _row("sentiment source (market.parquet)",
                     "data/processed/market.parquet", "UNKNOWN", False,
                     "yes (file)", f"probe failed: {e}", advisory=True)
+
+
+def _live_sentiment():
+    """The entry-side gate itself: its verdict, its age, and each comparison.
+
+    THE INPUTS ARE SHOWN, NOT JUST THE VERDICT. Gate 1 used to read a daily
+    aggregate from market.parquet and nothing surfaced which leg had decided
+    the day. A gate whose inputs cannot be seen is how 2026-10-13 happened.
+
+    BLOCKING ONLY INSIDE THE SESSION. Before 09:20 and after 15:20 there is no
+    live quote to have, so a failed read is expected and is reported with its
+    reason rather than declaring the engine disarmed. Inside the window a
+    failed read refuses every entry, and says so.
+    """
+    try:
+        from atlas.execution import live_sentiment as LS
+        from atlas.signal.market_open import in_window
+        inside = False
+        try:
+            inside = in_window()
+        except Exception:
+            pass
+        r = LS.read()
+        legs = ""
+        if r["ok"]:
+            legs = (f"prev close {'Y' if r['above_prev_close'] else 'n'} / "
+                    f"open {'Y' if r['above_open'] else 'n'} / "
+                    f"VWAP {'Y' if r['above_vwap'] else 'n'}")
+            detail = (f"{r['trading_symbol']} {r['last']:.2f} vs prev "
+                      f"{r['prev_close']:.2f} / open {r['open']:.2f} / vwap "
+                      f"{r['vwap']:.2f} — {legs}; quote {r['age_seconds']}s old"
+                      + (f"; index {r['index_spot']:.2f} basis {r['basis']:+.2f}"
+                         if r.get("basis") is not None else ""))
+            value = r["verdict"]
+            # mixed/bearish are not failures -- they are the market, and they
+            # permit no LONG while shorts are off. Reported, never "blocking":
+            # a gate correctly saying "wait" is not a disarmed engine.
+            blocking = False
+        else:
+            value = r["reason_code"]
+            detail = r["detail"]
+            blocking = inside
+        return _row("live sentiment (Gate 1)",
+                    f"live Upstox quote, {r.get('instrument') or 'NIFTY future'}",
+                    value, blocking, "n/a (read per cycle)", detail,
+                    advisory=not inside)
+    except Exception as e:
+        return _row("live sentiment (Gate 1)", "live Upstox quote", "UNKNOWN",
+                    False, "n/a (read per cycle)",
+                    f"probe failed: {type(e).__name__}: {e}", advisory=True)
 
 
 def _kill_switch():
@@ -272,9 +327,12 @@ def _signal_gates():
         out.append(_row("structural stop (Gate 0)", "per signal: sl field",
                         "required > 0", False, "n/a",
                         "REJECTED_NO_STOP; no stop means no entry", SIGNAL))
-        out.append(_row("sentiment side (Gate 1)", "market.parquet breadth+20DMA",
+        out.append(_row("sentiment side (Gate 1)",
+                        "LIVE: NIFTY near-month future vs prev close/open/VWAP",
                         "bullish required for LONG", False, "n/a",
-                        "bearish/mixed/unknown all mean cash", SIGNAL))
+                        "all three must agree; bearish/mixed/unknown mean cash. "
+                        "A failed read is LIVE_SENTIMENT_UNAVAILABLE, not a "
+                        "fallback to market.parquet", SIGNAL))
         out.append(_row("already holding (Gate 3b)", "Supabase atlas_trades",
                         "one position per symbol", False, "n/a",
                         "blocks a second entry in a held symbol", SIGNAL))
@@ -333,6 +391,9 @@ def inventory(include_signal_gates: bool = True, fast: bool = False) -> list:
         _timer(),
         _regime_source(),
     ]
+    rows.append(_live_sentiment() if not fast else
+                _not_probed("live sentiment (Gate 1)", "live Upstox quote",
+                            "it calls the market-data feed"))
     rows += ([_broker_token(), _funds()] if not fast else
              [_not_probed("Zerodha access token", "stored token file",
                           "it verifies the token against the broker"),

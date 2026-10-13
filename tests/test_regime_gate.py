@@ -47,11 +47,39 @@ logging.basicConfig(level=logging.CRITICAL)
 from atlas.execution.atlas_entry import regime_allows_side, sentiment_ok  # noqa: E402
 
 
-def ctx(regime="bull", adv=1200, dec=800, close=25000, ma20=24500,
-        source="market.parquet", extreme=False):
-    return {"regime": regime, "advance_count": adv, "decline_count": dec,
-            "nifty_close": close, "nifty_20dma": ma20, "source": source,
-            "extreme_bearish": extreme, "allow_accumulation": regime in ("bull", "sideways")}
+# SENTIMENT IS NO LONGER IN ctx, 2026-10-14. The entry-side gate reads the
+# NIFTY near-month future live -- last price against previous close, today's
+# open and today's session VWAP -- so the breadth counts and 20DMA that used to
+# encode sentiment in this helper are not inputs to it any more. ctx still
+# carries the nightly REGIME, which allowed_side reports and does not apply.
+#
+# Sentiment is driven here by patching the live read, which is also the only
+# honest way to test the matrix: these cases are about what the gate DOES with
+# a verdict, not about how the verdict is computed. tests/test_live_sentiment.py
+# owns the computation.
+from atlas.execution import live_sentiment as LS                 # noqa: E402
+
+_SENTIMENT = {"verdict": "bullish"}
+
+
+def _fake_read(*a, **k):
+    v = _SENTIMENT["verdict"]
+    if v is None:
+        return {"ok": False, "verdict": None,
+                "reason_code": LS.REASON_UNAVAILABLE,
+                "detail": "injected: the feed would not answer"}
+    return {"ok": True, "verdict": v, "reason_code": None,
+            "detail": f"injected {v}"}
+
+
+LS.read = _fake_read
+
+
+def ctx(regime="bull", sentiment="bullish", source="live", extreme=False):
+    """The regime half, plus the sentiment the patched live read will return."""
+    _SENTIMENT["verdict"] = sentiment
+    return {"regime": regime, "source": source, "extreme_bearish": extreme,
+            "allow_accumulation": regime in ("bull", "sideways")}
 
 
 def main() -> int:
@@ -68,16 +96,16 @@ def main() -> int:
     print("BOTH CONDITIONS REQUIRED")
     print("-" * 92)
     case("bull + breadth + above 20DMA", ctx(), "LONG", True, None)
-    case("bull, breadth NEGATIVE", ctx(adv=700, dec=1300), "LONG", False, "SENTIMENT")
-    case("bull, Nifty BELOW 20DMA", ctx(close=24000, ma20=24500), "LONG", False, "SENTIMENT")
+    case("bull, live read MIXED", ctx(sentiment="mixed"), "LONG", False, "SENTIMENT")
+    case("bull, live read UNAVAILABLE", ctx(sentiment=None), "LONG", False,
+         "LIVE_SENTIMENT_UNAVAILABLE")
     # CONFLICT IS GONE AS A LABEL, and that follows from the change rather than
     # being a loss. "Structure and participation disagree" was only meaningful
     # while BOTH were applied here. With regime reported and not applied, a
     # bull regime with bearish breadth is simply bearish sentiment -- and the
     # side that names is a short, so the label is LONG_ONLY.
-    case("bull structure vs bearish participation -> LONG_ONLY",
-         ctx(adv=700, dec=1300, close=24000, ma20=24500),
-         "LONG", False, "LONG_ONLY")
+    case("bull structure vs BEARISH live read -> LONG_ONLY",
+         ctx(sentiment="bearish"), "LONG", False, "LONG_ONLY")
     # SENTIMENT ALONE PERMITS A LONG, 2026-10-13. Regime is no longer applied
     # at entry: the nightly scoring stage already filters on it over the full
     # universe (bear_regime_no_reversal), and the entry-side copy was the
@@ -101,7 +129,7 @@ def main() -> int:
     # is a SHORT and shorts are disabled.
     for reg in ("bull", "bear", "sideways"):
         case(f"{reg.upper()} + bearish -> cash (LONG_ONLY)",
-             ctx(regime=reg, adv=700, dec=1300, close=24000),
+             ctx(regime=reg, sentiment="bearish"),
              "SHORT", False, "LONG_ONLY")
     # AN UNKNOWN REGIME NO LONGER BLOCKS A LONG. It cannot: regime is not read
     # at entry. The nightly filter is what sees the regime, and it sees it on
@@ -126,15 +154,18 @@ def main() -> int:
     # Regime is deliberately NOT in this list any more. An unknown regime
     # permitting a long is the intended behaviour, and asserting otherwise
     # would be asserting the double-counting that was removed.
-    for label, c in (
-            ("bull regime, mixed sentiment", ctx(adv=700, dec=1300)),
-            ("bull regime, bearish sentiment", ctx(adv=700, dec=1300, close=24000)),
-            ("breadth up but index down = mixed",
-             ctx(adv=1200, dec=800, close=24000, ma20=24500)),
-            ("bull regime, sentiment unreadable",
-             ctx(adv=None, dec=None, close=None, ma20=None)),
-            ("sideways, sentiment unreadable",
-             ctx(regime="sideways", adv=None, dec=None, close=None, ma20=None))):
+    # BUILT INSIDE THE LOOP, not in the tuple: ctx() sets the verdict the
+    # patched live read will return, so constructing all five up front made the
+    # last one's sentiment apply to every case.
+    for label, kw in (
+            ("bull regime, mixed live read", {"sentiment": "mixed"}),
+            ("bull regime, bearish live read", {"sentiment": "bearish"}),
+            ("sideways, mixed live read",
+             {"regime": "sideways", "sentiment": "mixed"}),
+            ("bull regime, live read unavailable", {"sentiment": None}),
+            ("sideways, live read unavailable",
+             {"regime": "sideways", "sentiment": None})):
+        c = ctx(**kw)
         got, why, blk = regime_allows_side(c, "LONG")
         ok &= not got
         print(f"  {label:<40}{'ENTER' if got else 'cash':<7}"
@@ -143,54 +174,69 @@ def main() -> int:
     print()
     print("MISSING INPUT IS A NO, NEVER A PASS")
     print("-" * 92)
-    for label, kw in (("nifty_20dma is NaN (series warm-up)", {"ma20": None}),
-                      ("advance_count absent", {"adv": None}),
-                      ("decline_count absent", {"dec": None}),
-                      ("nifty_close absent", {"close": None})):
+    # THE MISSING INPUTS ARE DIFFERENT INPUTS NOW. This used to withhold
+    # nifty_20dma, advance_count, decline_count and nifty_close one at a time,
+    # because those were the gate's inputs. They are not read at entry any
+    # more; the live read's legs are, and withholding one of those is
+    # tests/test_live_sentiment.py section 2. What this section still owns is
+    # the property that matters whatever the inputs are: an unreadable
+    # sentiment is never carried by anything else in ctx.
+    for label, kw in (("live read unavailable, bull regime",
+                       {"regime": "bull", "sentiment": None}),
+                      ("live read unavailable, sideways",
+                       {"regime": "sideways", "sentiment": None}),
+                      ("live read unavailable, bear regime",
+                       {"regime": "bear", "sentiment": None}),
+                      ("live read unavailable, regime unknown",
+                       {"regime": "unknown", "sentiment": None})):
         c = ctx(**kw)
         got_ok, reason, blocked = regime_allows_side(c, "LONG")
-        good = (not got_ok) and blocked == "SENTIMENT"
+        # THE BUCKET IS THE FAILURE CODE, not SENTIMENT. "the feed would not
+        # answer" needs investigating; "the market permits no side" needs
+        # waiting, and they were the same row in any count over blocked_by.
+        good = (not got_ok) and blocked == "LIVE_SENTIMENT_UNAVAILABLE"
         ok &= good
         print(f"  {label:<40}{'cash' if not got_ok else 'ENTER':<7}"
               f"{'ok' if good else '** PERMITTED ON UNKNOWN **':<30}{reason[:30]}")
 
-    # The fallback source carries a direction string and nothing else.
-    c = {"regime": "bull", "source": "sector_heatmap (fallback)",
-         "advance_count": None, "decline_count": None,
-         "nifty_close": None, "nifty_20dma": None, "extreme_bearish": False}
-    got_ok, reason, blocked = regime_allows_side(c, "LONG")
-    good = (not got_ok) and blocked == "SENTIMENT"
+    # A ctx CARRYING NOTHING AT ALL still cannot permit an entry. ctx is no
+    # longer the sentiment source, so the worst case is no longer "the file was
+    # empty" -- it is "something passed an empty dict and the gate read it as
+    # permission".
+    _SENTIMENT["verdict"] = None
+    got_ok, reason, blocked = regime_allows_side({}, "LONG")
+    good = (not got_ok) and blocked == "LIVE_SENTIMENT_UNAVAILABLE"
     ok &= good
-    print(f"  {'sector_heatmap fallback, regime bull':<40}"
+    print(f"  {'an empty ctx permits nothing':<40}"
           f"{'cash' if not got_ok else 'ENTER':<7}"
-          f"{'ok' if good else '** FALLBACK PERMITTED AN ENTRY **':<30}{reason[:30]}")
+          f"{'ok' if good else '** EMPTY CTX PERMITTED AN ENTRY **':<30}{reason[:30]}")
 
     print()
     print("THE SPLIT IS COUNTABLE, NOT JUST READABLE")
     print("-" * 92)
-    # TWO reasons to sit out now, down from three, and they must stay
-    # distinguishable in atlas_entry_log.status: the sentiment reading is
-    # unusable, or it is usable and bearish. CONFLICT is gone because it was
-    # only meaningful while regime and sentiment were both applied here -- see
-    # the note on the bull-vs-bearish case above.
+    # THREE reasons to sit out, and they must stay distinguishable in
+    # atlas_entry_log.blocked_by. The third is new as of 2026-10-14 and is the
+    # point of giving the live read its own code:
     #
-    # The split still matters over a long flat stretch: "we could not read the
-    # market" and "we read it and stood aside" are different facts, and only
-    # the second is the strategy working.
-    _, _, b_sent = regime_allows_side(
-        ctx(adv=None, dec=None, close=None, ma20=None), "LONG")
-    _, _, b_mixed = regime_allows_side(
-        ctx(adv=1200, dec=800, close=24000, ma20=24500), "LONG")
-    _, _, b_bear = regime_allows_side(ctx(adv=700, dec=1300, close=24000), "LONG")
-    got = (b_sent, b_mixed, b_bear)
-    distinct = got == ("SENTIMENT", "SENTIMENT", "LONG_ONLY")
+    #   LIVE_SENTIMENT_UNAVAILABLE  the feed would not answer -> investigate
+    #   SENTIMENT                   it answered, no side permitted -> wait
+    #   LONG_ONLY                   it answered bearish, and shorts are off
+    #
+    # Over a long flat stretch "we could not read the market" and "we read it
+    # and stood aside" are different facts, and only the second is the strategy
+    # working. They used to be the same bucket.
+    _, _, b_unavail = regime_allows_side(ctx(sentiment=None), "LONG")
+    _, _, b_mixed = regime_allows_side(ctx(sentiment="mixed"), "LONG")
+    _, _, b_bear = regime_allows_side(ctx(sentiment="bearish"), "LONG")
+    got = (b_unavail, b_mixed, b_bear)
+    distinct = got == ("LIVE_SENTIMENT_UNAVAILABLE", "SENTIMENT", "LONG_ONLY")
     ok &= distinct
-    for lbl, b in (("sentiment unreadable", b_sent),
-                   ("sentiment mixed", b_mixed),
-                   ("sentiment bearish (a short)", b_bear)):
+    for lbl, b in (("live read unavailable", b_unavail),
+                   ("live read mixed", b_mixed),
+                   ("live read bearish (a short)", b_bear)):
         print(f"  {lbl:<34}-> SKIPPED_{b}")
-    print(f"  {'statuses are (SENTIMENT, SENTIMENT, LONG_ONLY):':<44}"
-          f"{'ok' if distinct else '** COLLAPSED **'}")
+    print(f"  {'three distinct buckets, not two:':<44}"
+          f"{'ok' if distinct else '** COLLAPSED ** ' + str(got)}")
 
     # build_market owns `bull`; the gate trusts it. Pin them together so a
     # drift in _classify cannot silently change what the gate means.
@@ -243,13 +289,15 @@ def main() -> int:
     from atlas.execution.atlas_entry import allowed_side
 
     def mctx(regime, sent):
-        if sent == "bullish":   a_, d_, c_, m_ = 1200, 800, 25000, 24500
-        elif sent == "bearish": a_, d_, c_, m_ = 800, 1200, 24000, 24500
-        elif sent == "mixed":   a_, d_, c_, m_ = 1200, 800, 24000, 24500
-        else:                   a_, d_, c_, m_ = None, None, None, None
-        return {"regime": regime, "advance_count": a_, "decline_count": d_,
-                "nifty_close": c_, "nifty_20dma": m_,
-                "source": "market.parquet", "extreme_bearish": False}
+        """ctx for the regime column; the sentiment column drives the live read.
+
+        This used to encode each sentiment as a breadth/20DMA pair, because the
+        gate derived sentiment from ctx. It reads the NIFTY future live now, so
+        the sweep sets what that read returns -- and it must be set per cell at
+        call time, not once per tuple.
+        """
+        _SENTIMENT["verdict"] = None if sent == "unknown" else sent
+        return {"regime": regime, "source": "live", "extreme_bearish": False}
 
     # ONE TRADEABLE CELL OUT OF SIXTEEN. That is what "strict, both must hold"
     # means, and seeing it as a table is the clearest statement of the rule

@@ -63,30 +63,36 @@ def section_no_short():
 
     # ── LAYER 1: the matrix cannot NAME a short ──────────────────
     print("\n  LAYER 1 — allowed_side() over every market state it can see.")
-    def ctx(reg, sent):
-        """A context that genuinely produces the named sentiment.
+    # SENTIMENT COMES FROM THE LIVE READ, 2026-10-14. It used to be derived
+    # from breadth and the 20DMA carried in ctx, and this helper built those
+    # numbers. Gate 1 now reads the NIFTY near-month future live, so the sweep
+    # injects the verdict instead -- and injects it rather than calling the
+    # feed, because this harness must run with no network and must never touch
+    # production (see the drill fence below).
+    from atlas.execution import live_sentiment as _LS
+    _injected = {"verdict": "bullish"}
 
-        THE FIRST VERSION OF THIS DID NOT. It supplied all four keys for every
-        case, so "unknown" resolved to bearish and the table's blocked_by
-        column named CONFLICT and LONG_ONLY for rows labelled unknown. The
-        verdict was unaffected -- no row produced a SHORT either way -- but a
-        proof whose own labels are wrong is not worth much.
-        sentiment_state(): bullish = advances>declines AND close>20DMA,
-        bearish = the mirror, mixed = the two halves disagree, unknown = a
-        missing input.
+    def _injected_read(*a, **k):
+        v = _injected["verdict"]
+        if v == "unknown":
+            return {"ok": False, "verdict": None,
+                    "reason_code": _LS.REASON_UNAVAILABLE,
+                    "detail": "injected: the live read is unavailable"}
+        return {"ok": True, "verdict": v, "reason_code": None,
+                "detail": f"injected {v}"}
+
+    _LS.read = _injected_read
+
+    def ctx(reg, sent):
+        """ctx for the regime column; `sent` sets what the live read returns.
+
+        Set at call time, per cell. Building every ctx up front would leave the
+        last cell's sentiment applying to all of them -- which is a bug this
+        file's own predecessor had in a different form, when it supplied all
+        four keys for every case and "unknown" silently resolved to bearish.
         """
-        if sent == "unknown":
-            return {"regime": reg, "source": "verify"}      # no inputs at all
-        base = {"regime": reg, "source": "verify", "nifty_20dma": 100.0}
-        if sent == "bullish":
-            return {**base, "advance_count": 1200, "decline_count": 800,
-                    "nifty_close": 101.0}
-        if sent == "bearish":
-            return {**base, "advance_count": 800, "decline_count": 1200,
-                    "nifty_close": 99.0}
-        # mixed: breadth says up, the index says down
-        return {**base, "advance_count": 1200, "decline_count": 800,
-                "nifty_close": 99.0}
+        _injected["verdict"] = sent
+        return {"regime": reg, "source": "verify"}
     states = [(r, s) for r in ("bull", "bear", "sideways", "unknown", "garbage")
               for s in ("bullish", "bearish", "mixed", "unknown")]
     shorts, longs = [], []

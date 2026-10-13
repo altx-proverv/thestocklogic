@@ -50,6 +50,7 @@ SUITES = [
     ("universe publish gate", [sys.executable,
                                "tests/test_universe_publish_gate.py"]),
     ("switch inventory", [sys.executable, "tests/test_switch_inventory.py"]),
+    ("live sentiment", [sys.executable, "tests/test_live_sentiment.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),

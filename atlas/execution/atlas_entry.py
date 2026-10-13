@@ -222,19 +222,15 @@ def sentiment_ok(ctx: dict) -> tuple:
     """
     The SENTIMENT half of the entry gate. -> (ok, reason)
 
-        advancing > declining on the day   AND   Nifty above its 20DMA
+    Now a LIVE read of the NIFTY near-month future against its previous close,
+    today's open and today's session VWAP -- see sentiment_state. This used to
+    be "advancing > declining AND Nifty above its 20DMA" from market.parquet,
+    which was a daily aggregate deciding an intraday action.
 
-    Both are same-day facts about participation, which is what separates a
-    market that is merely ABOVE its long averages from one that is being bought
-    today. The regime half is structural and slow; this half is not, and a bull
-    structure on a day of negative breadth is the case this exists to stop.
-
-    Missing inputs are NOT a pass. build_market writes nifty_20dma as NaN for
-    the first 20 rows of any series, and the sector_heatmap fallback cannot
-    supply these at all, so "unknown" has to mean no -- otherwise the gate opens
-    precisely when it knows least.
+    Missing inputs are NOT a pass, unchanged and for the same reason: unknown
+    has to mean no, or the gate opens precisely when it knows least.
     """
-    state, reason = sentiment_state(ctx)
+    state, reason, _code = sentiment_state(ctx)
     return state == "bullish", reason
 
 
@@ -242,40 +238,51 @@ def sentiment_state(ctx: dict) -> tuple:
     """
     (state, reason) where state is bullish / bearish / mixed / unknown.
 
-    THREE-VALUED, because the direction matrix now needs a bearish reading and
-    not merely the absence of a bullish one. Both legs must agree:
+    A LIVE READ AS OF 2026-10-14, operator-approved. This read market.parquet
+    -- yesterday's closing advance/decline counts and a 20-day moving average
+    -- to decide whether today's entries were permitted. A daily aggregate
+    deciding an intraday action; and because build_market has been running a
+    session behind (the file held 2026-10-09 while the 2026-10-13 session
+    traded) the gate never once evaluated on current data.
 
-        bullish   advances > declines  AND  Nifty above its 20DMA
-        bearish   declines > advances  AND  Nifty below its 20DMA
-        mixed     the two legs disagree -- breadth says one thing and the
-                  index the other. Not a direction; ATLAS stays in cash.
-        unknown   an input is missing. Never a direction either.
+    THE RULE NOW. At the moment a candidate is evaluated, the NIFTY near-month
+    future is read live and its last price compared against three references:
 
-    "mixed" is deliberately NOT folded into bearish. Under the old boolean,
-    anything that was not bullish read as "no long", which was safe because the
-    only consequence was inaction. Now the same reading would be a licence to
-    SHORT, and "breadth is positive but the index is below its 20DMA" is not a
-    bearish market -- it is an unclear one.
+        bullish   above previous close AND above today's open AND above VWAP
+        bearish   below all three
+        mixed     anything else -- not a direction; ATLAS stays in cash
+        unknown   the read failed or was incomplete. Never a direction.
+
+    All three must agree, deliberately: one number crossing zero would flip the
+    gate all day.
+
+    WHY THE FUTURE AND NOT THE INDEX, and what the VWAP leg measures, is in
+    atlas/execution/live_sentiment.py. The short version: this feed has no
+    traded VWAP for the index -- volume is None on the quote and 0 on every one
+    of the 375 daily candles -- and the near-month future has a real
+    exchange-computed one. All three legs are taken on that one instrument so
+    the futures basis cancels instead of sitting inside a single leg.
+
+    THERE IS NO FALLBACK TO market.parquet. A failed read returns "unknown"
+    carrying LIVE_SENTIMENT_UNAVAILABLE, and unknown has never been a side. The
+    defect being fixed is a gate that failed quietly, so this one says so: the
+    reason code is distinct from SENTIMENT, which means "the market is readable
+    and permits no side" and calls for waiting rather than investigating.
+
+    ctx IS NO LONGER THE SENTIMENT SOURCE. It is still passed and still carries
+    the nightly regime, which allowed_side reports (and does not apply). The
+    nightly regime filter in engine/03b_score is untouched and remains the
+    regime authority.
     """
-    adv, dec = ctx.get("advance_count"), ctx.get("decline_count")
-    close, ma20 = ctx.get("nifty_close"), ctx.get("nifty_20dma")
-
-    missing = [n for n, v in (("advance_count", adv), ("decline_count", dec),
-                              ("nifty_close", close), ("nifty_20dma", ma20))
-               if v is None]
-    if missing:
-        return "unknown", (f"sentiment unevaluable from {ctx.get('source', '?')} "
-                           f"-- missing {', '.join(missing)}")
-
-    breadth_up = adv > dec
-    above_20   = close > ma20
-    legs = (f"breadth {adv:.0f}/{dec:.0f}, Nifty {close:.0f} "
-            f"{'above' if above_20 else 'below'} 20DMA {ma20:.0f}")
-    if breadth_up and above_20:
-        return "bullish", legs
-    if (not breadth_up) and (not above_20):
-        return "bearish", legs
-    return "mixed", (f"{legs} -- breadth and index disagree")
+    from atlas.execution import live_sentiment as LS
+    s = LS.read()
+    if not s["ok"]:
+        # THE CODE TRAVELS AS A VALUE, not as a prefix on a sentence. It lands
+        # in atlas_entry_log.blocked_by, so a session spent sitting out because
+        # the feed was down is countable separately from one spent waiting for
+        # a direction -- which is the whole point of giving it its own code.
+        return "unknown", s["detail"], s["reason_code"]
+    return s["verdict"], s["detail"], None
 
 
 def allowed_side(ctx: dict) -> tuple:
@@ -324,12 +331,17 @@ def allowed_side(ctx: dict) -> tuple:
     Positions already held are NOT affected by a change here -- see the note in
     enter_trade. This decides only what may be OPENED.
     """
-    sent, sreason = sentiment_state(ctx)
+    sent, sreason, scode = sentiment_state(ctx)
 
     if sent == "unknown":
         # AN UNREADABLE INPUT IS NEVER A SIDE. Unchanged, and the one place
         # this function still fails closed on data quality.
-        return None, sreason, "SENTIMENT"
+        #
+        # THE BUCKET IS THE REASON CODE, not a generic SENTIMENT. "the live
+        # feed would not answer" and "the market permits no side" need
+        # different actions -- investigate versus wait -- and were previously
+        # the same row in any count over blocked_by.
+        return (None, f"{scode}: {sreason}", scode or "SENTIMENT")
     if sent == "mixed":
         return None, f"sentiment mixed: {sreason}", "SENTIMENT"
 

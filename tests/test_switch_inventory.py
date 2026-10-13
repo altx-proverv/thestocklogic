@@ -217,14 +217,28 @@ def main() -> int:
     check("  every advisory row is a declared exception",
           sorted(exempt - set(ADVISORY_SWITCHES)), [],
           f"declared: {len(ADVISORY_SWITCHES)}; here: {len(exempt)}")
-    check("  and the declared set is still just the two",
-          len(ADVISORY_SWITCHES), 2)
+    # EVERY DECLARED EXEMPTION MUST BE A REAL SWITCH. A count would need
+    # editing every time a probe is added; what matters is that the exempt list
+    # cannot name something that does not exist (a typo would silently exempt
+    # nothing) and that it stays a small, deliberate set.
+    check("  every declared exemption is a real switch",
+          sorted(set(ADVISORY_SWITCHES) - names), [])
+    check("  and the exempt set stays small", len(ADVISORY_SWITCHES) <= 4, True,
+          f"{len(ADVISORY_SWITCHES)}: {', '.join(ADVISORY_SWITCHES)}")
     check("fast mode still LISTS the broker switches",
           {"broker funds", "Zerodha access token", "kill switch (Gate 7)"}
           <= names, True, "skipped probes are rows, not omissions")
+    # The skipped set is derived, not counted: whatever fast mode skips must
+    # appear as a not-probed row rather than vanishing.
+    skipped = {r["switch"] for r in rows if r["value"] == "not probed"}
     check("  and marks them not-probed rather than passing",
-          sorted(r["value"] for r in rows if r["value"] == "not probed"),
-          ["not probed"] * 3)
+          {"broker funds", "Zerodha access token", "kill switch (Gate 7)",
+           "live sentiment (Gate 1)"} <= skipped, True,
+          f"{len(skipped)} skipped, all listed")
+    check("  no skipped row is reported as blocking",
+          [r["switch"] for r in rows
+           if r["value"] == "not probed" and r["blocking"]], [],
+          "an unprobed switch must not fake a verdict either way")
 
     print()
     print("=" * 78)
