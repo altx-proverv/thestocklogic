@@ -373,6 +373,61 @@ ENTRY_PROXIMITY_PCT = 1.0
 # first and to choose any damping themselves.
 LIVE_SENTIMENT_MAX_AGE_SECONDS = 120.0
 
+# ── STABILITY AND THE REVERSAL BREAKER ────────────────────────────
+#
+# THE PER-CYCLE READ IS AN OBSERVATION, NOT A PERMISSION. 8172f33 made Gate 1
+# live, and the replay of six sessions showed why that is not sufficient on its
+# own: a median of 4 raw flips a session, 24 on 2026-10-07, and 14 of them on
+# 2026-10-05 crossing in and out of bullish. A gate that authorises on the raw
+# read authorises on a number that crossed zero.
+#
+# So a side must be ESTABLISHED over a window before it can permit anything,
+# and a side that reverses hard stands the session down.
+#
+#   ESTABLISH    at least 24 of the last 30 cycles read the same state.
+#                At 60s a cycle that is 30 minutes of agreement, so no entry is
+#                possible before about 09:50. That is a declared state, not an
+#                error -- see SENTIMENT_WINDOW_FORMING.
+#
+#   REVERSAL     once a side is established, at least 36 of the last 45 cycles
+#                reading the OPPOSITE side stands ATLAS down for the rest of
+#                the session, both sides, one-way. A day that reverses is a day
+#                whose nightly zones were built on a premise that broke, which
+#                is true whether or not a position is open.
+#
+# MIXED NEVER REVERSES ANYTHING. Only a confirmed opposite SIDE does; drifting
+# into mixed means the gate stops permitting entries, which it would do anyway.
+#
+# THESE FOUR NUMBERS ARE THE WHOLE POLICY. There is no other smoothing,
+# hysteresis, confirmation delay or cooldown anywhere in the gate -- deliberately,
+# so that changing the policy means changing these and nothing else. The
+# staleness limit above is not part of it: that decides whether a quote is live
+# at all, not what the gate concludes from it.
+SENTIMENT_ESTABLISH_WINDOW = 30
+SENTIMENT_ESTABLISH_MIN    = 24
+SENTIMENT_REVERSAL_WINDOW  = 45
+SENTIMENT_REVERSAL_MIN     = 36
+
+# WHERE THE WINDOW LIVES, AND WHY IT IS ON DISK.
+#
+# The market-hours process holds the window in memory for the session, which is
+# all the arithmetic needs. Two things make a file necessary anyway:
+#
+#   A FIRED BREAKER MUST NOT BE FORGOTTEN. The stand-down lasts the rest of the
+#   session. A process restart mid-session -- the deploy watchdog does exactly
+#   that when the SHA moves -- would otherwise re-arm trading, which is a
+#   fail-OPEN on the one control whose job is to stop it.
+#
+#   THE WINDOW HAS TO BE VISIBLE FROM OUTSIDE. tools/atlas_switches.py and the
+#   08:30 report run in their own processes and must show the counts, which they
+#   cannot do from another process's memory.
+#
+# Rebuilding the window after a restart fails SAFE on its own -- an empty window
+# permits nothing for 30 cycles -- so the file is about the stand-down and about
+# being able to see the state, not about the counts surviving.
+SENTIMENT_WINDOW_FILE = Path(os.environ.get("ATLAS_SENTIMENT_WINDOW_FILE")
+                             or "/var/lib/atlas/sentiment_window.json")
+
 # ══════════════════════════════════════════════════════════════════
 # PROTECTION: DAY 0 IS AN ORDER, DAY 1 ONWARDS IS A GTT
 # ══════════════════════════════════════════════════════════════════

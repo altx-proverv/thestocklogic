@@ -274,15 +274,33 @@ def sentiment_state(ctx: dict) -> tuple:
     nightly regime filter in engine/03b_score is untouched and remains the
     regime authority.
     """
-    from atlas.execution import live_sentiment as LS
-    s = LS.read()
-    if not s["ok"]:
-        # THE CODE TRAVELS AS A VALUE, not as a prefix on a sentence. It lands
-        # in atlas_entry_log.blocked_by, so a session spent sitting out because
-        # the feed was down is countable separately from one spent waiting for
-        # a direction -- which is the whole point of giving it its own code.
-        return "unknown", s["detail"], s["reason_code"]
-    return s["verdict"], s["detail"], None
+    # THE CONFIRMED STATE, NOT THE RAW READ. 2026-10-14, operator-approved.
+    #
+    # The per-cycle read stays the raw observation and no longer authorises
+    # anything by itself: replaying six sessions gave a median of 4 raw state
+    # changes a session and 24 on 2026-10-07, so a gate keyed to it is a gate
+    # keyed to a number that crossed zero. A side must hold 24 of the last 30
+    # cycles before it permits an entry, and 36 of 45 reading the opposite side
+    # stands the session down. See atlas/execution/sentiment_window.py.
+    #
+    # THIS FUNCTION DOES NOT ADVANCE THE WINDOW. It is called once per
+    # candidate; the window is advanced once per cycle at the top of
+    # market_open.cycle(). Observing here would make "30 cycles" mean three.
+    from atlas.execution import sentiment_window as SW
+    w = SW.state()
+    if w["permits"] in ("bullish", "bearish"):
+        return w["permits"], SW.line(w), None
+    # THE CODE TRAVELS AS A VALUE, not as a prefix on a sentence. It lands in
+    # atlas_entry_log.blocked_by, so a session spent sitting out because the
+    # feed was down, or because the window has not formed, or because the
+    # reversal breaker fired, is countable separately from one spent waiting
+    # for a direction.
+    code = w["reason_code"]
+    if code == "SENTIMENT":
+        # A CONFIRMED MIXED is a readable market that permits no side. It is
+        # the ordinary "wait", and keeps the bucket it has always had.
+        return "mixed", SW.line(w), None
+    return "unknown", SW.line(w), code
 
 
 def allowed_side(ctx: dict) -> tuple:

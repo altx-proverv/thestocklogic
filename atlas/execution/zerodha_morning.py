@@ -82,10 +82,18 @@ def _readiness_block() -> str:
     # that decides every entry.
     sent = next((r for r in rows if r["switch"] == "live sentiment (Gate 1)"),
                 None)
+    win = next((r for r in rows
+                if r["switch"] == "sentiment window (Gate 1 confirm)"), None)
     sent_lines = []
     if sent:
         sent_lines = [f"\U0001f4c8 <b>Gate 1 (live)</b>: {sent['value']}",
                       f"<code>{sent['detail'][:260]}</code>"]
+    # THE WINDOW IS WHAT PERMITS, so it is on the 08:30 line too. At 08:30 it
+    # reads as forming with zero cycles, which is the honest statement of where
+    # the session starts: nothing can be entered until about 09:50.
+    if win:
+        sent_lines += [f"\U0001f501 <b>Confirm window</b>: {win['value']}",
+                       f"<code>{win['detail'][:300]}</code>"]
 
     if ready:
         head = ["\u2705 <b>READY</b> — no switch is blocking entries"]

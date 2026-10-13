@@ -142,35 +142,45 @@ def main() -> int:
     print("=" * 78)
     print("3 — GATE 1 CARRIES THE CODE INTO blocked_by")
     print("-" * 78)
-    saved_read = LS.read
+    # THE GATE READS THE CONFIRM WINDOW, not this module's read() -- the raw
+    # read is an observation the window consumes once per cycle. So the gate's
+    # behaviour is driven through the window here; section 2 above owns read().
+    from atlas.execution import sentiment_window as SW
+    saved = (SW.state, SW.line)
     try:
-        LS.read = lambda *a, **k: {"ok": False, "verdict": None,
-                                   "reason_code": LS.REASON_UNAVAILABLE,
-                                   "detail": "the feed is down"}
+        def inject(permits, code):
+            SW.state = lambda *a, **k: {"permits": permits, "reason_code": code}
+            SW.line = lambda w=None: f"injected permits={permits} code={code}"
+
+        inject(None, LS.REASON_UNAVAILABLE)
         state, reason, code = AE.sentiment_state({})
         check("an unavailable read is 'unknown'", state, "unknown")
-        check("  and carries the code as a value", code, "LIVE_SENTIMENT_UNAVAILABLE")
+        check("  and carries the code as a value", code,
+              "LIVE_SENTIMENT_UNAVAILABLE")
         side, sreason, blocked = AE.allowed_side({})
         check("allowed_side permits no side", side, None)
         check("  and buckets it under the code, not SENTIMENT",
               blocked, "LIVE_SENTIMENT_UNAVAILABLE",
               "'feed down' and 'no direction' need different actions")
 
-        LS.read = lambda *a, **k: {"ok": True, "verdict": "bullish",
-                                   "reason_code": None, "detail": "legs"}
+        inject(None, SW.REASON_STAND_DOWN)
+        side, sreason, blocked = AE.allowed_side({})
+        check("a fired reversal breaker permits no side", side, None)
+        check("  under its own code", blocked, "SENTIMENT_REVERSAL_STAND_DOWN")
+
+        inject("bullish", None)
         side, sreason, blocked = AE.allowed_side({"regime": "bear"})
-        check("a bullish live read permits LONG", side, "LONG")
+        check("a CONFIRMED bullish permits LONG", side, "LONG")
         check("  even in a bear nightly regime", "regime bear" in sreason, True,
               "regime is reported, not applied — the nightly filter owns it")
 
-        LS.read = lambda *a, **k: {"ok": True, "verdict": "mixed",
-                                   "reason_code": None, "detail": "legs disagree"}
+        inject(None, "SENTIMENT")
         side, _, blocked = AE.allowed_side({})
-        check("a mixed read permits nothing", side, None)
-        check("  under SENTIMENT, not the failure code", blocked, "SENTIMENT",
+        check("a confirmed mixed permits nothing", side, None)
+        check("  under SENTIMENT, not a failure code", blocked, "SENTIMENT",
               "the market is readable and says wait")
     finally:
-        LS.read = saved_read
+        SW.state, SW.line = saved
 
     print()
     print("=" * 78)
@@ -178,8 +188,16 @@ def main() -> int:
     print("-" * 78)
     ae = executable_source(ROOT / "atlas" / "execution" / "atlas_entry.py")
     ls = executable_source(ROOT / "atlas" / "execution" / "live_sentiment.py")
-    check("sentiment_state reads the live module",
-          "live_sentiment" in ae, True)
+    # THE CHAIN IS loop -> live_sentiment -> sentiment_window -> gate.
+    # The gate reads the WINDOW; the window consumes the live read once per
+    # cycle. The gate importing live_sentiment directly would be the bug the
+    # window exists to prevent -- a per-candidate read permitting entries.
+    mo = executable_source(ROOT / "atlas" / "signal" / "market_open.py")
+    check("the loop reads the live module", "live_sentiment" in mo, True)
+    check("  and feeds it to the window", "observe_cycle" in mo, True)
+    check("the gate reads the window", "sentiment_window" in ae, True)
+    check("  and NOT the live read directly", "live_sentiment" in ae, False,
+          "a per-candidate live read is what the window prevents")
     check("  and no longer reads breadth counts",
           "advance_count" in ae and "decline_count" in ae
           and "breadth_up" in ae, False,

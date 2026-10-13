@@ -57,27 +57,35 @@ from atlas.execution.atlas_entry import regime_allows_side, sentiment_ok  # noqa
 # honest way to test the matrix: these cases are about what the gate DOES with
 # a verdict, not about how the verdict is computed. tests/test_live_sentiment.py
 # owns the computation.
-from atlas.execution import live_sentiment as LS                 # noqa: E402
-
-_SENTIMENT = {"verdict": "bullish"}
-
-
-def _fake_read(*a, **k):
-    v = _SENTIMENT["verdict"]
-    if v is None:
-        return {"ok": False, "verdict": None,
-                "reason_code": LS.REASON_UNAVAILABLE,
-                "detail": "injected: the feed would not answer"}
-    return {"ok": True, "verdict": v, "reason_code": None,
-            "detail": f"injected {v}"}
+# THE GATE READS THE CONFIRM WINDOW, NOT THE RAW LIVE READ (2026-10-14).
+# Patching live_sentiment.read no longer reaches it: the window observes once
+# per cycle and the gate asks the window what has been CONFIRMED. So the
+# injection point moves here, which is also the honest one -- these cases are
+# about what the gate does with a confirmed state, and
+# tests/test_sentiment_window.py owns how that state is reached.
+from atlas.execution import sentiment_window as _SW                  # noqa: E402
 
 
-LS.read = _fake_read
+def _inject_window(permits=None, code=None):
+    """Make the gate see a given confirmed state."""
+    _SW.state = lambda *a, **k: {"permits": permits, "reason_code": code}
+    _SW.line = lambda w=None: f"injected: permits={permits} code={code}"
 
 
 def ctx(regime="bull", sentiment="bullish", source="live", extreme=False):
-    """The regime half, plus the sentiment the patched live read will return."""
-    _SENTIMENT["verdict"] = sentiment
+    """The regime half, plus the CONFIRMED state the gate will see.
+
+    `sentiment` names the confirmed state, not a raw read:
+        bullish / bearish   a confirmed side -> permits that side
+        mixed               confirmed mixed  -> permits nothing, bucket SENTIMENT
+        None                the window cannot answer -> its own reason code
+    """
+    if sentiment in ("bullish", "bearish"):
+        _inject_window(permits=sentiment, code=None)
+    elif sentiment == "mixed":
+        _inject_window(permits=None, code="SENTIMENT")
+    else:
+        _inject_window(permits=None, code=_SW.REASON_NOT_ESTABLISHED)
     return {"regime": regime, "source": source, "extreme_bearish": extreme,
             "allow_accumulation": regime in ("bull", "sideways")}
 
@@ -97,8 +105,8 @@ def main() -> int:
     print("-" * 92)
     case("bull + breadth + above 20DMA", ctx(), "LONG", True, None)
     case("bull, live read MIXED", ctx(sentiment="mixed"), "LONG", False, "SENTIMENT")
-    case("bull, live read UNAVAILABLE", ctx(sentiment=None), "LONG", False,
-         "LIVE_SENTIMENT_UNAVAILABLE")
+    case("bull, window NOT ESTABLISHED", ctx(sentiment=None), "LONG", False,
+         "SENTIMENT_NOT_ESTABLISHED")
     # CONFLICT IS GONE AS A LABEL, and that follows from the change rather than
     # being a loss. "Structure and participation disagree" was only meaningful
     # while BOTH were applied here. With regime reported and not applied, a
@@ -182,7 +190,7 @@ def main() -> int:
     # the property that matters whatever the inputs are: an unreadable
     # sentiment is never carried by anything else in ctx.
     for label, kw in (("live read unavailable, bull regime",
-                       {"regime": "bull", "sentiment": None}),
+                       {"regime": "bull", "sentiment": None}),  # noqa
                       ("live read unavailable, sideways",
                        {"regime": "sideways", "sentiment": None}),
                       ("live read unavailable, bear regime",
@@ -194,7 +202,7 @@ def main() -> int:
         # THE BUCKET IS THE FAILURE CODE, not SENTIMENT. "the feed would not
         # answer" needs investigating; "the market permits no side" needs
         # waiting, and they were the same row in any count over blocked_by.
-        good = (not got_ok) and blocked == "LIVE_SENTIMENT_UNAVAILABLE"
+        good = (not got_ok) and blocked == "SENTIMENT_NOT_ESTABLISHED"
         ok &= good
         print(f"  {label:<40}{'cash' if not got_ok else 'ENTER':<7}"
               f"{'ok' if good else '** PERMITTED ON UNKNOWN **':<30}{reason[:30]}")
@@ -203,9 +211,9 @@ def main() -> int:
     # longer the sentiment source, so the worst case is no longer "the file was
     # empty" -- it is "something passed an empty dict and the gate read it as
     # permission".
-    _SENTIMENT["verdict"] = None
+    _inject_window(permits=None, code=_SW.REASON_NOT_ESTABLISHED)
     got_ok, reason, blocked = regime_allows_side({}, "LONG")
-    good = (not got_ok) and blocked == "LIVE_SENTIMENT_UNAVAILABLE"
+    good = (not got_ok) and blocked == "SENTIMENT_NOT_ESTABLISHED"
     ok &= good
     print(f"  {'an empty ctx permits nothing':<40}"
           f"{'cash' if not got_ok else 'ENTER':<7}"
@@ -225,13 +233,13 @@ def main() -> int:
     # Over a long flat stretch "we could not read the market" and "we read it
     # and stood aside" are different facts, and only the second is the strategy
     # working. They used to be the same bucket.
-    _, _, b_unavail = regime_allows_side(ctx(sentiment=None), "LONG")
+    _, _, b_unavail = regime_allows_side(ctx(sentiment=None), "LONG")  # noqa
     _, _, b_mixed = regime_allows_side(ctx(sentiment="mixed"), "LONG")
     _, _, b_bear = regime_allows_side(ctx(sentiment="bearish"), "LONG")
     got = (b_unavail, b_mixed, b_bear)
-    distinct = got == ("LIVE_SENTIMENT_UNAVAILABLE", "SENTIMENT", "LONG_ONLY")
+    distinct = got == ("SENTIMENT_NOT_ESTABLISHED", "SENTIMENT", "LONG_ONLY")
     ok &= distinct
-    for lbl, b in (("live read unavailable", b_unavail),
+    for lbl, b in (("window not established", b_unavail),
                    ("live read mixed", b_mixed),
                    ("live read bearish (a short)", b_bear)):
         print(f"  {lbl:<34}-> SKIPPED_{b}")
@@ -289,15 +297,13 @@ def main() -> int:
     from atlas.execution.atlas_entry import allowed_side
 
     def mctx(regime, sent):
-        """ctx for the regime column; the sentiment column drives the live read.
+        """ctx for the regime column; the sentiment column is the CONFIRMED state.
 
-        This used to encode each sentiment as a breadth/20DMA pair, because the
-        gate derived sentiment from ctx. It reads the NIFTY future live now, so
-        the sweep sets what that read returns -- and it must be set per cell at
-        call time, not once per tuple.
+        Set at call time, per cell. Building every ctx up front would leave the
+        last cell's sentiment applying to all of them.
         """
-        _SENTIMENT["verdict"] = None if sent == "unknown" else sent
-        return {"regime": regime, "source": "live", "extreme_bearish": False}
+        return ctx(regime=regime,
+                   sentiment=None if sent == "unknown" else sent)
 
     # ONE TRADEABLE CELL OUT OF SIXTEEN. That is what "strict, both must hold"
     # means, and seeing it as a table is the clearest statement of the rule

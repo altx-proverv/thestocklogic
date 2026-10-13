@@ -63,35 +63,30 @@ def section_no_short():
 
     # ── LAYER 1: the matrix cannot NAME a short ──────────────────
     print("\n  LAYER 1 — allowed_side() over every market state it can see.")
-    # SENTIMENT COMES FROM THE LIVE READ, 2026-10-14. It used to be derived
-    # from breadth and the 20DMA carried in ctx, and this helper built those
-    # numbers. Gate 1 now reads the NIFTY near-month future live, so the sweep
-    # injects the verdict instead -- and injects it rather than calling the
-    # feed, because this harness must run with no network and must never touch
-    # production (see the drill fence below).
-    from atlas.execution import live_sentiment as _LS
-    _injected = {"verdict": "bullish"}
-
-    def _injected_read(*a, **k):
-        v = _injected["verdict"]
-        if v == "unknown":
-            return {"ok": False, "verdict": None,
-                    "reason_code": _LS.REASON_UNAVAILABLE,
-                    "detail": "injected: the live read is unavailable"}
-        return {"ok": True, "verdict": v, "reason_code": None,
-                "detail": f"injected {v}"}
-
-    _LS.read = _injected_read
+    # SENTIMENT IS THE CONFIRM WINDOW'S VERDICT, 2026-10-14. It was derived
+    # from breadth and the 20DMA in ctx, then briefly from the raw live read;
+    # Gate 1 now reads what the rolling window has CONFIRMED (24 of 30 cycles),
+    # so that is the injection point. Injected rather than fetched, because
+    # this harness must run with no network and must never touch production --
+    # see the drill fence below.
+    from atlas.execution import sentiment_window as _SW
 
     def ctx(reg, sent):
-        """ctx for the regime column; `sent` sets what the live read returns.
+        """ctx for the regime column; `sent` is the CONFIRMED state.
 
         Set at call time, per cell. Building every ctx up front would leave the
-        last cell's sentiment applying to all of them -- which is a bug this
-        file's own predecessor had in a different form, when it supplied all
-        four keys for every case and "unknown" silently resolved to bearish.
+        last cell's sentiment applying to all of them -- a bug this file's own
+        predecessor had in a different form, when it supplied all four keys for
+        every case and "unknown" silently resolved to bearish.
         """
-        _injected["verdict"] = sent
+        if sent in ("bullish", "bearish"):
+            permits, code = sent, None
+        elif sent == "mixed":
+            permits, code = None, "SENTIMENT"
+        else:
+            permits, code = None, _SW.REASON_NOT_ESTABLISHED
+        _SW.state = lambda *a, **k: {"permits": permits, "reason_code": code}
+        _SW.line = lambda w=None: f"injected confirmed={sent}"
         return {"regime": reg, "source": "verify"}
     states = [(r, s) for r in ("bull", "bear", "sideways", "unknown", "garbage")
               for s in ("bullish", "bearish", "mixed", "unknown")]

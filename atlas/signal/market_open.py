@@ -769,6 +769,37 @@ def cycle(state: Session) -> dict:
     state.cycle_n += 1
     out = {"cycle": state.cycle_n, "candidates": 0, "entered": 0, "skipped": 0}
 
+    # ── THE SENTIMENT WINDOW ADVANCES ONCE PER CYCLE ────────────────────
+    #
+    # HERE, AND NOT INSIDE THE GATE. Gate 1 is evaluated once per CANDIDATE --
+    # nine or ten times a cycle -- so observing inside it would fill a 30-cycle
+    # window in three cycles and "30 cycles of agreement" would mean three
+    # minutes. The window counts cycles; the gate reads what the window has
+    # concluded and never advances it.
+    #
+    # BEFORE EVERY OTHER GATE, including the pause check below, because the
+    # observation is a measurement and must be taken whether or not ATLAS is
+    # permitted to act on it. A paused session that stops recording the market
+    # is the 2026-10-08 failure in a new place -- and a reversal that fires
+    # during a pause is still a reversal.
+    try:
+        from atlas.execution import live_sentiment as _LS
+        from atlas.execution import sentiment_window as _SW
+        _raw = _LS.read()
+        _sw = _SW.observe_cycle(_raw["verdict"] if _raw["ok"] else "unavailable",
+                                cycle_n=state.cycle_n)
+        out["sentiment"] = (_sw["permits"] or _sw["reason_code"])
+        log.info(f"cycle {state.cycle_n}: sentiment — {_SW.line(_sw)}")
+        if not _raw["ok"]:
+            log.warning(f"cycle {state.cycle_n}: live read unavailable — "
+                        f"{_raw['detail'][:160]}")
+    except Exception as e:
+        # A FAILURE HERE MUST NOT SKIP THE CYCLE. The window's own state is
+        # already fail-safe: no observation means no establishment means no
+        # entry, and the gate reads the window rather than this call.
+        log.error(f"cycle {state.cycle_n}: sentiment window did not advance "
+                  f"({type(e).__name__}: {e}) — entries stay refused")
+
     # ── WATCH-ONLY: A HALTED ATLAS STILL OBSERVES ───────────────────────
     #
     # This check used to RETURN here, and the cost of that was invisible until it
