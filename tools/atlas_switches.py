@@ -63,9 +63,13 @@ SESSION, SIGNAL = "session", "signal"
 #   live sentiment (Gate 1)    outside 09:20-15:20 there is no live quote to
 #                              have, so a failed read before the open is
 #                              expected. Inside the window it BLOCKS.
+#   range breaker (market)     dormant, not-armed and cannot-evaluate are all
+#                              reported without disarming the engine;
+#                              cannot-evaluate is fail-open on purpose.
 ADVISORY_SWITCHES = ("atlas-market-hours.timer",
                      "sentiment source (market.parquet)",
-                     "live sentiment (Gate 1)")
+                     "live sentiment (Gate 1)",
+                     "range breaker (market)")
 
 
 def _row(name, where, value, blocking, survives, detail="", scope=SESSION,
@@ -302,6 +306,95 @@ def _live_sentiment():
                     f"probe failed: {type(e).__name__}: {e}", advisory=True)
 
 
+def _range_breaker():
+    """The market box, how far the price is from the edge that matters, and
+    how many symbols a stock-level break has blocked.
+
+    THE POINT IS TO WATCH A BOX TIGHTENING, not to be told after it broke. So
+    the row carries the box's high and low, the current price, and the distance
+    to the edge the held side cares about.
+
+    BLOCKING only when it has actually fired. Dormant (nothing open),
+    not-armed (before 09:50) and cannot-evaluate are all reported and none of
+    them disarms the engine -- cannot-evaluate is fail-open on purpose, see
+    range_breaker's docstring.
+    """
+    try:
+        from atlas.execution import range_breaker as RB
+        # READ-ONLY: this builds the box and judges it, and never calls
+        # market_check -- a tool must not be able to stand the day down.
+        ok_armed, why_armed = RB.armed()
+        side, side_detail = RB.held_side()
+        nblocked = len(RB.blocked_symbols())
+        from atlas.execution import sentiment_window as SD
+        sd = SD.state()
+        if sd["stood_down"]:
+            return _row("range breaker (market)", sd["file"], "FIRED", True,
+                        "yes (per session)",
+                        f"{sd['kind']}: {str(sd['detail'])[:170]}"
+                        + (f" | {nblocked} symbol(s) blocked" if nblocked else ""))
+        if not ok_armed:
+            return _row("range breaker (market)", "live 1-minute candles",
+                        RB.REASON_NOT_ARMED, False, "n/a (per cycle)",
+                        why_armed + (f" | {nblocked} symbol(s) blocked"
+                                     if nblocked else ""), advisory=True)
+        b = RB.market_box()
+        if not b.get("ok"):
+            return _row("range breaker (market)", "live 1-minute candles",
+                        RB.REASON_CANNOT_EVALUATE, False, "n/a (per cycle)",
+                        f"{b['detail'][:170]} — FAIL OPEN by design; the "
+                        f"stop-loss is the protection"
+                        + (f" | {nblocked} symbol(s) blocked" if nblocked else ""),
+                        advisory=True)
+        lp = b.get("last_price") or b.get("probe_high") or b.get("probe_low")
+        if side is None:
+            det = (f"box {b['low']:.2f}-{b['high']:.2f} from "
+                   f"{b['candles_used']} candles {b['first']}-{b['last']}; "
+                   f"{side_detail}")
+            return _row("range breaker (market)", "live 1-minute candles",
+                        RB.REASON_DORMANT, False, "n/a (per cycle)",
+                        det + (f" | {nblocked} symbol(s) blocked"
+                               if nblocked else ""), advisory=True)
+        edge = b["low"] if side == "LONG" else b["high"]
+        probe = b.get("probe_low") if side == "LONG" else b.get("probe_high")
+        dist = None if probe is None else (
+            probe - edge if side == "LONG" else edge - probe)
+        det = (f"box {b['low']:.2f}-{b['high']:.2f} ({b['candles_used']} "
+               f"candles {b['first']}-{b['last']}); holding {side}, watching "
+               f"the {'floor' if side == 'LONG' else 'ceiling'} {edge:.2f}"
+               + (f"; price {probe:.2f} is {dist:+.2f} from it"
+                  if dist is not None else "; no current price yet")
+               + (f" | {nblocked} symbol(s) blocked" if nblocked else ""))
+        return _row("range breaker (market)", "live 1-minute candles", "clear",
+                    False, "n/a (per cycle)", det)
+    except Exception as e:
+        return _row("range breaker (market)", "live 1-minute candles",
+                    "UNKNOWN", False, "n/a (per cycle)",
+                    f"probe failed: {type(e).__name__}: {e}", advisory=True)
+
+
+def _symbol_blocks():
+    """Symbols a stock-level range break has blocked for the session."""
+    try:
+        from atlas.execution import range_breaker as RB
+        d = RB.blocked_symbols()
+        if not d:
+            return _row("range breaker (per symbol)",
+                        "/var/lib/atlas/breaker_blocked.json", "none blocked",
+                        False, "yes (per session)",
+                        "a stock break blocks new entries in that symbol only "
+                        "and never stands the day down")
+        names = ", ".join(sorted(d))
+        return _row("range breaker (per symbol)",
+                    "/var/lib/atlas/breaker_blocked.json",
+                    f"{len(d)} blocked", False, "yes (per session)",
+                    f"{names[:180]} — new entries only; exits unaffected")
+    except Exception as e:
+        return _row("range breaker (per symbol)", "blocked-symbol file",
+                    "UNKNOWN", False, "yes (per session)",
+                    f"probe failed: {type(e).__name__}: {e}", advisory=True)
+
+
 def _stand_down():
     """Is the session stood down for entries.
 
@@ -422,6 +515,12 @@ def inventory(include_signal_gates: bool = True, fast: bool = False) -> list:
                             "it calls the market-data feed"))
     # Reads a local file, so it costs nothing and is probed even in fast mode.
     rows.append(_stand_down())
+    rows.append(_symbol_blocks())
+    # The market box needs a candle fetch, so fast mode lists it unprobed.
+    rows.append(_range_breaker() if not fast else
+                _not_probed("range breaker (market)",
+                            "live 1-minute candles",
+                            "it fetches the NIFTY future's candles"))
     rows += ([_broker_token(), _funds()] if not fast else
              [_not_probed("Zerodha access token", "stored token file",
                           "it verifies the token against the broker"),

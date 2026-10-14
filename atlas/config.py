@@ -404,6 +404,43 @@ LIVE_SENTIMENT_MAX_AGE_SECONDS = 120.0
 SENTIMENT_STANDDOWN_FILE = Path(os.environ.get("ATLAS_SENTIMENT_STANDDOWN_FILE")
                                 or "/var/lib/atlas/sentiment_standdown.json")
 
+# ── THE RANGE-BREAK BREAKERS ──────────────────────────────────────
+#
+# THE MECHANIC, BOTH LEVELS. A box is drawn around the previous 45 minutes of
+# price. Price printing outside that box, on the side that goes AGAINST the
+# position, is a confirmed change of character. One print is enough.
+#
+# THIS IS A STRUCTURAL FACT, NOT A VOTE. There is no threshold to tune and none
+# is to be added: a level either printed through or it did not. The 24-of-30
+# sentiment vote that was deleted on 2026-10-15 was a vote over a continuous
+# reading, which is what made it tunable and therefore arbitrary. A range break
+# is a yes or a no.
+#
+# THE WINDOW EXCLUDES THE CURRENT READING, and that is the part most likely to
+# be silently wrong. A box containing the current price can never be broken --
+# its high is always at least the current price and its low at most. So the box
+# is built from the 45 candles STRICTLY BEFORE the current minute, and the
+# current minute is the thing tested against it.
+#
+# FROM 1-MINUTE CANDLE HIGHS AND LOWS, not a price sampled once a cycle. A wick
+# through the level is a break, and a once-a-minute sample of the last traded
+# price misses what happened inside the minute.
+#
+# ARMED FROM 09:50. Note what the two constants together imply: the NSE session
+# opens at 09:15, so at 09:50 only 35 candles exist and a 45-candle box cannot
+# be built yet. The arming time is a floor, not a promise -- the first evaluable
+# cycle on an ordinary session is about 10:00, and 09:50-10:00 reports
+# "cannot evaluate: 35 of 45 candles", which is its own distinct state and is
+# NOT an all-clear.
+BREAKER_WINDOW_CYCLES = 45
+BREAKER_ARMS_AT = "09:50"
+
+# Symbols blocked by a stock-level break, for the rest of the session. One
+# file, written only when a break actually fires, same shape and the same
+# restart reasoning as the stand-down above.
+BREAKER_BLOCKED_FILE = Path(os.environ.get("ATLAS_BREAKER_BLOCKED_FILE")
+                            or "/var/lib/atlas/breaker_blocked.json")
+
 # ══════════════════════════════════════════════════════════════════
 # PROTECTION: DAY 0 IS AN ORDER, DAY 1 ONWARDS IS A GTT
 # ══════════════════════════════════════════════════════════════════

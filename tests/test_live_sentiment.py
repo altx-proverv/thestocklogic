@@ -190,7 +190,8 @@ def main() -> int:
         side, _, blocked = AE.allowed_side({})
         check("a stood-down session permits no side", side, None)
         check("  under the stand-down code", blocked,
-              "SENTIMENT_REVERSAL_STAND_DOWN")
+              "RANGE_BREAK_STAND_DOWN",
+              "renamed 2026-10-15 when the range-break trigger was wired")
         check("  and the feed is not read at all", True, True,
               "read() raises if called; a stood-down session must not spend "
               "a quote call per candidate")

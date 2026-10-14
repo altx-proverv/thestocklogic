@@ -77,7 +77,8 @@ def main() -> int:
                  "establish", "reversal_counts", "shortfall"):
         check(f"  no trace of {gone!r} in the module", gone in w_src, False)
     check("the reason code that survives", SW.REASON_STAND_DOWN,
-          "SENTIMENT_REVERSAL_STAND_DOWN")
+          "RANGE_BREAK_STAND_DOWN",
+          "renamed from SENTIMENT_REVERSAL_* when the trigger arrived")
     sw = executable_source(ROOT / "tools" / "atlas_switches.py")
     zm = executable_source(ROOT / "atlas" / "execution" / "zerodha_morning.py")
     check("the inventory has no confirm-window row",
@@ -117,24 +118,27 @@ def main() -> int:
 
     print()
     print("=" * 82)
-    print("3 — NOTHING FIRES IT TODAY")
+    print("3 — EXACTLY ONE THING FIRES IT")
     print("-" * 82)
-    # THE POINT OF THIS SECTION. The mechanism is kept whole and deliberately
-    # unreachable. If a future change wires a trigger, this check is where it
-    # must be updated on purpose rather than discovered later.
+    # INVERTED 2026-10-15, not deleted. This section asserted that NOTHING
+    # called stand_down(), which was the correct invariant for the day the
+    # mechanism shipped without a trigger. The trigger arrived, so the
+    # invariant becomes the one that matters now: exactly one caller, and it is
+    # the market range breaker. A second caller appearing is something to find
+    # here rather than in a session.
     callers = []
     for d in ("atlas", "engine", "radar", "tools"):
-        for p in (ROOT / d).rglob("*.py"):
-            if p.name == "sentiment_window.py":
+        for q in (ROOT / d).rglob("*.py"):
+            if q.name == "sentiment_window.py":
                 continue
-            t = p.read_text(encoding="utf-8", errors="ignore")
-            if "stand_down(" in t and "state(" not in t.split("stand_down(")[0][-40:]:
-                if ".stand_down(" in t or "stand_down(kind" in t:
-                    callers.append(p.relative_to(ROOT).as_posix())
-    check("no module calls stand_down()", sorted(set(callers)), [],
-          "tomorrow's range-break check is the intended trigger")
-    check("the module says so in as many words",
-          "range-break" in w_src.lower() or "range break" in w_src.lower(),
+            t = q.read_text(encoding="utf-8", errors="ignore")
+            if ".stand_down(" in t:
+                callers.append(q.relative_to(ROOT).as_posix())
+    check("exactly one module calls stand_down()", sorted(set(callers)),
+          ["atlas/execution/range_breaker.py"],
+          "the market range breaker, and nothing else")
+    check("the module names its trigger",
+          "range_breaker.market_check" in w_src or "range break" in w_src.lower(),
           True)
     SW = fresh()
     check("a fresh session is not stood down", SW.state()["stood_down"], False)
@@ -150,7 +154,7 @@ def main() -> int:
     s = SW.stand_down("RANGE_BREAK", "injected: the day's range broke")
     check("stand_down() sets it", s["stood_down"], True)
     check("  with the kind recorded", s["kind"], "RANGE_BREAK")
-    check("  and the reason code", s["reason_code"], "SENTIMENT_REVERSAL_STAND_DOWN")
+    check("  and the reason code", s["reason_code"], "RANGE_BREAK_STAND_DOWN")
     check("  it is written to disk", path.exists(), True)
     check("calling it twice does not re-stamp",
           SW.stand_down("OTHER", "again")["kind"], "RANGE_BREAK",
@@ -163,10 +167,10 @@ def main() -> int:
     saved = (AE.__dict__.get("sentiment_state"),)
     st, reason, code = AE.sentiment_state({})
     check("the entry gate refuses", st, "unknown")
-    check("  under the stand-down code", code, "SENTIMENT_REVERSAL_STAND_DOWN")
+    check("  under the stand-down code", code, "RANGE_BREAK_STAND_DOWN")
     side, _, blocked = AE.allowed_side({})
     check("  allowed_side permits no side", side, None)
-    check("  and buckets it there", blocked, "SENTIMENT_REVERSAL_STAND_DOWN")
+    check("  and buckets it there", blocked, "RANGE_BREAK_STAND_DOWN")
 
     # A FILE FROM ANOTHER DAY IS HISTORY, NOT STATE.
     d = json.loads(path.read_text())

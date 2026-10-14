@@ -734,6 +734,22 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     #
     # The Tier 2 metrics were never a veto and are unaffected.
 
+    # GATE 0b -- THIS SYMBOL BROKE ITS OWN RANGE TODAY.
+    #
+    # A local file read, so it sits up here with the cheap gates: a symbol
+    # blocked by the stock breaker cannot be entered again today whatever the
+    # rest of the stack says, and there is no sense spending a quote or a funds
+    # call to rediscover that.
+    #
+    # IT DOES NOT AFFECT AN OPEN POSITION IN THAT SYMBOL. The stock breaker
+    # blocks NEW entries; the stop-loss order owns the exit.
+    from atlas.execution import range_breaker as RB
+    _blocked, _bwhy = RB.is_blocked(symbol)
+    if _blocked:
+        return {"status": f"SKIPPED_{RB.REASON_SYMBOL_BREAK}",
+                "reason": f"{symbol} broke its range today — {_bwhy}",
+                "blocked_by": RB.REASON_SYMBOL_BREAK}
+
     # GATE 1 -- regime AND sentiment. Both must hold or ATLAS stays in cash.
     #
     # The status carries the split so it is countable in atlas_entry_log
@@ -843,6 +859,32 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
                                               entry_ref=entry_ref)
     if not in_range:
         return {"status": "SKIPPED_RANGE", "reason": range_reason}
+
+    # GATE 4b -- THE STOCK BREAKER, on this candidate, now.
+    #
+    # AFTER THE BAND AND PROXIMITY GATE, DELIBERATELY. This costs one candle
+    # fetch per candidate and there is no batch endpoint, so it is spent only
+    # on candidates that have already passed the 1% proximity test and could
+    # actually be entered this cycle. A candidate sitting 4% from its zone
+    # cannot be entered whatever its box says, and fetching its candles to
+    # learn that would be ~6x the API traffic for no decision.
+    #
+    # ON A BREAK: this symbol is blocked for the rest of the session and the
+    # operator is alerted. It NEVER exits anything -- the stop-loss order owns
+    # that, and two systems racing to close one position is how that goes wrong.
+    _sb = RB.stock_check(symbol, direction, last_price=ltp)
+    if _sb["broke"]:
+        return {"status": f"SKIPPED_{RB.REASON_SYMBOL_BREAK}",
+                "reason": f"{symbol} {_sb['detail']}",
+                "blocked_by": RB.REASON_SYMBOL_BREAK}
+    if _sb["state"] == RB.REASON_CANNOT_EVALUATE:
+        # FAIL OPEN, AND SAY SO. See the reasoning in range_breaker's
+        # docstring: this breaker is one-way and the stop-loss is the real
+        # protection, so a feed hiccup must not refuse the entry. Logged, not
+        # silent, and surfaced in the inventory.
+        log.warning(f"{symbol}: stock breaker could not evaluate — "
+                    f"{_sb['detail'][:160]}; proceeding, the stop-loss is the "
+                    f"protection")
 
     # GATE 5 -- sizing. Rs3,000 risk / Rs1,00,000 notional, qty a multiple of 5,
     # AND capped by what the account can actually pay for.

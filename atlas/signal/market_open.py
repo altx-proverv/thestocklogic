@@ -769,6 +769,51 @@ def cycle(state: Session) -> dict:
     state.cycle_n += 1
     out = {"cycle": state.cycle_n, "candidates": 0, "entered": 0, "skipped": 0}
 
+    # ── ONE QUOTE FETCH PER CYCLE FOR GATE 1 ────────────────────────────
+    # Gate 1 is evaluated per candidate and was fetching the same quote six
+    # times a minute. This is a cache, not a confirmation window: every
+    # candidate in this cycle sees the SAME instantaneous read.
+    try:
+        from atlas.execution import live_sentiment as _LS
+        _LS.set_cycle(state.cycle_n)
+    except Exception as e:
+        log.error(f"cycle {state.cycle_n}: could not set the quote cycle "
+                  f"({e}) — reads fall back to per-candidate fetches")
+
+    # ── THE RANGE BREAKERS ──────────────────────────────────────────────
+    #
+    # BEFORE THE PAUSE CHECK, because a range break is a fact about the market
+    # and must be recorded whether or not ATLAS is permitted to act on it --
+    # and because a break that happens during a pause is still a break.
+    #
+    # THE MARKET BREAKER runs once per cycle on the NIFTY future and can stand
+    # the day down. THE STOCK BREAKER runs here on every OPEN POSITION, and in
+    # atlas_entry at Gate 4b for candidates. Neither ever exits a position.
+    try:
+        from atlas.execution import range_breaker as _RB
+        _mb = _RB.market_check()
+        out["breaker"] = _mb["state"]
+        log.info(f"cycle {state.cycle_n}: {_RB.line(_mb)}")
+        if _mb["fired"]:
+            log.error(f"cycle {state.cycle_n}: RANGE BREAK — the day is stood "
+                      f"down. {_mb['detail']}")
+        for _pos in open_positions_for_reconcile() or []:
+            _sym = _pos.get("symbol")
+            _dir = str(_pos.get("direction", "LONG")).upper()
+            if not _sym:
+                continue
+            _sc = _RB.stock_check(_sym, _dir)
+            if _sc["broke"]:
+                log.error(f"cycle {state.cycle_n}: {_sym} RANGE BREAK — "
+                          f"{_sc['detail']}")
+    except Exception as e:
+        # A FAILURE HERE MUST NOT SKIP THE CYCLE, and must not fire anything.
+        # Fail open: the breakers are a refinement on top of the stop-loss, not
+        # a replacement for it.
+        log.error(f"cycle {state.cycle_n}: range breakers did not run "
+                  f"({type(e).__name__}: {e}) — nothing fired; the stop-loss "
+                  f"remains the protection")
+
 
     # ── WATCH-ONLY: A HALTED ATLAS STILL OBSERVES ───────────────────────
     #

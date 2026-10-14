@@ -60,11 +60,21 @@ from pathlib import Path
 log = logging.getLogger("ATLAS-SENTIMENT-STANDDOWN")
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# THE REASON CODE. Kept, and distinct from SENTIMENT (a readable market that
-# permits no side) and from LIVE_SENTIMENT_UNAVAILABLE (the feed would not
-# answer): those two call for waiting and for investigating. This one means the
-# day is over for entries whatever the market does next.
-REASON_STAND_DOWN = "SENTIMENT_REVERSAL_STAND_DOWN"
+# THE REASON CODE, RENAMED 2026-10-15 WHEN THE TRIGGER ARRIVED.
+#
+# It was SENTIMENT_REVERSAL_STAND_DOWN, from the 24-of-30 sentiment vote it was
+# built for. That vote was deleted and the thing that fires this is now a RANGE
+# BREAK -- price printing outside the previous 45 minutes' box, against the side
+# ATLAS holds. A code naming sentiment would have been the fourth time this
+# project shipped a message naming the wrong mechanism, after the GTT alert that
+# fired on an SL failure, "operator PAUSED" for a self-halt, and the 361-of-746
+# figure that did not reproduce.
+#
+# Distinct from SENTIMENT (a readable market permitting no side) and
+# LIVE_SENTIMENT_UNAVAILABLE (the feed would not answer): those two mean wait
+# and investigate. This one means the day is over for entries whatever the
+# market does next.
+REASON_STAND_DOWN = "RANGE_BREAK_STAND_DOWN"
 
 CANONICAL_FILE = "/var/lib/atlas/sentiment_standdown.json"
 
@@ -185,8 +195,8 @@ def line(s: dict = None) -> str:
     if s["stood_down"]:
         return (f"STOOD DOWN at {str(s['at'])[11:19]} — {s['kind']}: "
                 f"{str(s['detail'])[:160]}")
-    return ("armed, nothing has fired it — no trigger is wired yet; "
-            "tomorrow's range-break check is the intended one")
+    return ("armed, nothing has fired it — the market range breaker "
+            "(range_breaker.market_check) is what fires this")
 
 
 def reset_for_tests(path: Path = None) -> None:

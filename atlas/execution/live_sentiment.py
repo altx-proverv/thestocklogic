@@ -179,11 +179,49 @@ def _row_for(quotes: dict, key: str) -> dict:
     return (quotes or {}).get(want.replace("|", ":")) or {}
 
 
+# ── ONE FETCH PER CYCLE ───────────────────────────────────────────
+#
+# Gate 1 is evaluated once per CANDIDATE, so read() was called about 6.2 times
+# a cycle -- 2,233 quote calls on 2026-10-14 where 360 would have done.
+#
+# THIS IS A CACHE, NOT A CONFIRMATION WINDOW. It returns the SAME
+# instantaneous read to every candidate in one cycle instead of fetching it six
+# times in the same minute. It does not average, vote, delay or smooth
+# anything, and it does not reintroduce the 24-of-30 window deleted on
+# 2026-10-15: within a cycle the answer was always meant to be one answer.
+#
+# INVALIDATED BY CYCLE NUMBER, NOT BY A TTL. A time-based expiry would be a
+# tunable guess about how long a quote stays good; the cycle boundary is a fact
+# the loop already knows. market_open.cycle() calls set_cycle(n) at the top,
+# and a caller that sets no cycle -- a tool, a test, the 08:30 report -- is
+# never served from the cache and always fetches.
+_CYCLE = {"n": None, "read": None}
+
+
+def set_cycle(n) -> None:
+    """Start a new cycle: the next read() fetches, later ones reuse it."""
+    if _CYCLE["n"] != n:
+        _CYCLE.update({"n": n, "read": None})
+
+
+def cache_state() -> dict:
+    return {"cycle": _CYCLE["n"], "cached": _CYCLE["read"] is not None}
+
+
 def read(max_age_seconds: float = None) -> dict:
     """The live sentiment read. NEVER RAISES.
 
     -> dict with ok / verdict / reason_code / the three legs / age / detail.
     """
+    if _CYCLE["n"] is not None and _CYCLE["read"] is not None:
+        return dict(_CYCLE["read"])
+    out = _read_uncached(max_age_seconds)
+    if _CYCLE["n"] is not None:
+        _CYCLE["read"] = dict(out)
+    return out
+
+
+def _read_uncached(max_age_seconds: float = None) -> dict:
     from atlas.config import LIVE_SENTIMENT_MAX_AGE_SECONDS
     max_age = (LIVE_SENTIMENT_MAX_AGE_SECONDS if max_age_seconds is None
                else max_age_seconds)

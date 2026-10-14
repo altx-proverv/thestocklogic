@@ -86,6 +86,19 @@ def _readiness_block() -> str:
     if sent:
         sent_lines = [f"\U0001f4c8 <b>Gate 1 (live)</b>: {sent['value']}",
                       f"<code>{sent['detail'][:260]}</code>"]
+    # THE RANGE BREAKER'S BOX, so a tightening box is visible before the open
+    # rather than only after it breaks. At 08:30 it reads not-armed with no
+    # box, which is the honest statement of where the session starts.
+    rb = next((r for r in rows if r["switch"] == "range breaker (market)"), None)
+    if rb:
+        sent_lines += [f"\U0001f4e6 <b>Range breaker</b>: {rb['value']}",
+                       f"<code>{rb['detail'][:300]}</code>"]
+    blk = next((r for r in rows
+                if r["switch"] == "range breaker (per symbol)"), None)
+    if blk and blk["value"] != "none blocked":
+        sent_lines += [f"\u26d4 <b>Symbols blocked</b>: {blk['value']} — "
+                       f"<code>{blk['detail'][:200]}</code>"]
+
     # NO CONFIRM-WINDOW LINE. A 24-of-30 vote reported its tallies here for one
     # session; the vote was deleted on 2026-10-15 and the operator does not want
     # to read a number every morning that governs nothing. The stand-down is
