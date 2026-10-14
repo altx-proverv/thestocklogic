@@ -270,6 +270,14 @@ def opening_range(instrument_key: str, now=None, candles: list = None,
     SAME SHAPE AS index_state.get_first15_range: pull the intraday series once,
     filter by minute-of-day in IST, take max(high) and min(low). That window is
     fixed at 09:15-09:30 and index-keyed, so it is not called directly.
+
+    use_cache=False MEANS NEITHER READ NOR WRITE. The replay harness passes it
+    to evaluate a past session without consulting today's stored range -- and
+    the first version still PERSISTED what it computed, so running the replay
+    wrote a bogus "replay" key into /var/lib/atlas/breaker_range.json. Harmless
+    (the engine never asks for that key) and exactly the class of accident
+    already fenced twice: a tool writing production state. One flag, both
+    directions.
     """
     start, end, _, _, _ = _cfg()
     now = now or _now_ist()
@@ -327,13 +335,14 @@ def opening_range(instrument_key: str, now=None, candles: list = None,
                     "first": str(win[0][0])[11:16],
                     "last": str(win[-1][0])[11:16],
                     "ok": True, "reason_code": None})
-        d = _range_load()
-        d.setdefault("ranges", {})[instrument_key] = {
-            "high": out["high"], "low": out["low"],
-            "candles_used": out["candles_used"],
-            "first": out["first"], "last": out["last"],
-            "computed_at": now.isoformat(timespec="seconds")}
-        _range_save(d)
+        if use_cache:
+            d = _range_load()
+            d.setdefault("ranges", {})[instrument_key] = {
+                "high": out["high"], "low": out["low"],
+                "candles_used": out["candles_used"],
+                "first": out["first"], "last": out["last"],
+                "computed_at": now.isoformat(timespec="seconds")}
+            _range_save(d)
 
     # THE PROBE IS THE LAST COMPLETED MINUTE'S CLOSE. The current minute is
     # still forming, so its "close" is just the last trade -- using it would be

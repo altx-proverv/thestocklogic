@@ -321,6 +321,16 @@ def main() -> int:
     check("yesterday's block does not carry into today",
           RB.is_blocked("TESTSYM")[0], False)
 
+    # use_cache=False MEANS NEITHER READ NOR WRITE. The replay passes it, and
+    # the first version still persisted what it computed -- so running the
+    # replay wrote a bogus key into the live range file.
+    RB, SD = fresh(observe_only=False)
+    rp0 = Path(os.environ["ATLAS_BREAKER_RANGE_FILE"])
+    rp0.unlink(missing_ok=True)
+    RB.opening_range("replay", now=now, candles=broke, use_cache=False)
+    check("use_cache=False writes nothing", rp0.exists(), False,
+          "a tool must not persist into the engine's state")
+
     # THE RANGE PERSISTS TOO -- it cannot be rebuilt this afternoon.
     RB, SD = fresh(observe_only=False)
     rp = Path(os.environ["ATLAS_BREAKER_RANGE_FILE"])
