@@ -25,6 +25,7 @@ would do, because the only cheap moment to notice a bad plan is before it runs.
 
 import sys
 import argparse
+import datetime as dt
 import importlib.util
 import logging
 from pathlib import Path
@@ -120,18 +121,39 @@ def main() -> int:
 
     session = pd.Series(list(last_bar.values())).mode().iloc[0]
     stale = sorted(s for s, d in last_bar.items() if d < session)
+
+    # ── A UNIVERSE MEMBER WITH NO PARQUET AT ALL ──────────────────
+    #
+    # A NEW SYMBOL IS NOT A STALE ONE, and the loop above cannot see it: it
+    # keys off files that exist. HEGAM arrived on 2026-10-15 with ~14 sessions
+    # and no file, and 01b_download_bhavcopy will not create one either --
+    # build_parquets skips any symbol with fewer than 50 rows, so a young
+    # listing stays absent until it has 50 sessions.
+    #
+    # So this builds it from whatever source rows exist, which is the same job
+    # as a replay with an empty starting point: same parser, same snapshot,
+    # same refusal to touch a settled bar.
+    missing = sorted(s for s in SYMBOL_SECTOR_MAP
+                     if not (STOCKS_DIR / f"{s}.parquet").exists())
+
     if args.symbols:
         want = {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
         stale = [s for s in stale if s in want]
+        missing = [s for s in missing if s in want]
 
     log.info(f"session (modal last bar) : {session}")
     log.info(f"universe symbols         : {len(SYMBOL_SECTOR_MAP)}")
     log.info(f"stale symbols to replay  : {len(stale)}")
+    log.info(f"members with NO parquet  : {len(missing)}"
+             + (f" — {', '.join(missing)}" if missing else ""))
     log.info(f"mode                     : {'APPLY' if args.apply else 'DRY RUN'}")
     log.info("")
 
     # ── PARSE ONCE, NOT ONCE PER SYMBOL ───────────────────────────
     oldest = min(last_bar[s] for s in stale) if stale else session
+    if missing:
+        # reach back far enough to catch a new listing's whole history
+        oldest = min(oldest, session - dt.timedelta(days=120))
     files = sessions_available(dl, after=oldest)
     log.info(f"replaying {len(files)} session file(s) after {oldest}")
 
@@ -185,6 +207,27 @@ def main() -> int:
     log.info(f"{'SYMBOL':<14}{'WAS':<13}{'NOW':<13}{'+BARS':>6}  NOTE")
     log.info("-" * 74)
     added_total, written, nosource = 0, [], []
+
+    for sym in missing:
+        new_rows = src[src["symbol"] == sym].copy()
+        new_rows = (new_rows.sort_values("date")
+                            .drop_duplicates("date")
+                            .reset_index(drop=True))
+        if new_rows.empty:
+            nosource.append(sym)
+            log.info(f"{sym:<14}{'—':<13}{'—':<13}{0:>6}  NO SOURCE ROWS — "
+                     f"a map member with no data at all")
+            continue
+        out = STOCKS_DIR / f"{sym}.parquet"
+        note = "CREATED" if args.apply else "(dry run, would CREATE)"
+        if args.apply:
+            new_rows.to_parquet(out, index=False)
+            written.append(sym)
+        added_total += len(new_rows)
+        log.info(f"{sym:<14}{'(new)':<13}"
+                 f"{str(new_rows['date'].max().date()):<13}"
+                 f"{len(new_rows):>6}  {note}")
+
     for sym in stale:
         out = STOCKS_DIR / f"{sym}.parquet"
         cur = pd.read_parquet(out)
@@ -219,8 +262,9 @@ def main() -> int:
                  f"{str(merged['date'].max().date()):<13}{len(new):>6}  {note}")
 
     log.info("-" * 74)
-    log.info(f"{len(stale)} stale symbol(s): {len(stale) - len(nosource)} "
-             f"replayable, {len(nosource)} with no EQ source rows")
+    log.info(f"{len(stale)} stale + {len(missing)} missing symbol(s): "
+             f"{len(stale) + len(missing) - len(nosource)} with source rows, "
+             f"{len(nosource)} without")
     log.info(f"bars {'written' if args.apply else 'that would be written'}: "
              f"{added_total}")
     if nosource:
