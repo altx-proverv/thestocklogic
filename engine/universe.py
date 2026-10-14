@@ -1608,6 +1608,21 @@ EXCLUDED = {
     "CPPLUS",
     # median value < Rs5cr (1)
     "SPLPETRO",
+    # BE series since 2026-10-13 — trade-for-trade, 5% band (1)
+    #
+    # A STOPGAP, NOT THE POLICY. The parser began accepting BE on 2026-10-15,
+    # which is right -- data for every universe member, tradability decided
+    # separately -- and it surfaced MOREPENLAB: in BE since 2026-10-13, in the
+    # map, and NOT excluded, so it would have started publishing and become
+    # ATLAS-tradeable. A 5% circuit band is a stock you cannot exit during a
+    # move, which is the same reason HFCL is excluded.
+    #
+    # THE REAL FIX IS TO DERIVE THIS FROM THE SERIES IN THE DATA rather than
+    # from a hand-written line, and it is a separate pass. Until it lands, this
+    # list is a snapshot of one session's series assignment and will be wrong
+    # the next time NSE moves a stock either way. Nobody should mistake this
+    # line for the policy.
+    "MOREPENLAB",
 }
 
 ALL_SYMBOLS = sorted(set(SYMBOL_SECTOR_MAP.keys()) - EXCLUDED)

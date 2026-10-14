@@ -63,16 +63,21 @@ def main() -> int:
     # too, and changing the universe means changing them here on purpose.
     #
     #   2026-09-13 (fe169df)  map 746  EXCLUDED 40  ALL_SYMBOLS 706
-    #   2026-10-15 (this)     map 745  EXCLUDED 39  ALL_SYMBOLS 706
+    #   2026-10-15 (a)        map 745  EXCLUDED 39  ALL_SYMBOLS 706
     #     -HEG        demerged; HEGAM added as a NEW symbol, no history carried
     #     -JBCHEPHARM amalgamated; ISIN absent for 63 consecutive sessions
     #     +HEGAM      post-demerger entity, ~14 sessions, excluded on history
-    #   ALL_SYMBOLS is unchanged at 706 because the one symbol added is
-    #   excluded and both removed were.
+    #   2026-10-15 (b)        map 745  EXCLUDED 40  ALL_SYMBOLS 705
+    #     +MOREPENLAB BE series since 2026-10-13. A STOPGAP: accepting BE rows
+    #                 surfaced a non-excluded symbol on a 5% band, and the real
+    #                 fix is to derive this from the series in the data rather
+    #                 than from a hand-written list. Separate pass.
     check("SYMBOL_SECTOR_MAP size", len(SYMBOL_SECTOR_MAP), 745)
-    check("EXCLUDED size", len(EXCLUDED), 39)
-    check("ALL_SYMBOLS size", len(ALL_SYMBOLS), 706,
-          "unchanged by the 2026-10-15 edits, deliberately")
+    check("EXCLUDED size", len(EXCLUDED), 40)
+    check("ALL_SYMBOLS size", len(ALL_SYMBOLS), 705)
+    check("the BE-series symbol is excluded",
+          "MOREPENLAB" in EXCLUDED, True,
+          "5% band — a stock you cannot exit during a move")
     check("the demerged symbol is gone from the map",
           "HEG" in SYMBOL_SECTOR_MAP, False)
     check("  and its successor is present and excluded",
