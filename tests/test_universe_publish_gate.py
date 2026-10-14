@@ -58,6 +58,35 @@ def main() -> int:
           set(EXCLUDED) <= set(SYMBOL_SECTOR_MAP), True)
     check("ALL_SYMBOLS == map - EXCLUDED",
           set(ALL_SYMBOLS) == set(SYMBOL_SECTOR_MAP) - set(EXCLUDED), True)
+    # THE COUNTS, PINNED. The identity above holds for any consistent triple,
+    # including one an accidental edit produced -- so the sizes are asserted
+    # too, and changing the universe means changing them here on purpose.
+    #
+    #   2026-09-13 (fe169df)  map 746  EXCLUDED 40  ALL_SYMBOLS 706
+    #   2026-10-15 (this)     map 745  EXCLUDED 39  ALL_SYMBOLS 706
+    #     -HEG        demerged; HEGAM added as a NEW symbol, no history carried
+    #     -JBCHEPHARM amalgamated; ISIN absent for 63 consecutive sessions
+    #     +HEGAM      post-demerger entity, ~14 sessions, excluded on history
+    #   ALL_SYMBOLS is unchanged at 706 because the one symbol added is
+    #   excluded and both removed were.
+    check("SYMBOL_SECTOR_MAP size", len(SYMBOL_SECTOR_MAP), 745)
+    check("EXCLUDED size", len(EXCLUDED), 39)
+    check("ALL_SYMBOLS size", len(ALL_SYMBOLS), 706,
+          "unchanged by the 2026-10-15 edits, deliberately")
+    check("the demerged symbol is gone from the map",
+          "HEG" in SYMBOL_SECTOR_MAP, False)
+    check("  and its successor is present and excluded",
+          ("HEGAM" in SYMBOL_SECTOR_MAP, "HEGAM" in EXCLUDED), (True, True))
+    check("the amalgamated symbol is gone",
+          "JBCHEPHARM" in SYMBOL_SECTOR_MAP, False)
+    check("HFCL stays in the map AND excluded",
+          ("HFCL" in SYMBOL_SECTOR_MAP, "HFCL" in EXCLUDED), (True, True),
+          "a 5% surveillance band is why it was excluded")
+    from engine.universe import INSTRUMENT_KEYS
+    check("every map member has an instrument key",
+          sorted(set(SYMBOL_SECTOR_MAP) - set(INSTRUMENT_KEYS)), [])
+    check("  and no key is left behind for a removed symbol",
+          sorted(set(INSTRUMENT_KEYS) - set(SYMBOL_SECTOR_MAP)), [])
     check("EXCLUDED is not empty", len(EXCLUDED) > 0, True,
           f"{len(EXCLUDED)} symbols — an empty set would make every check "
           f"below pass vacuously")

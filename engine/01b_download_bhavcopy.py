@@ -151,11 +151,42 @@ def csv_filename(d: date) -> str:
     return f"cm{d.strftime('%d%b%Y')}bhav.csv"
 
 
+# SERIES WE INGEST. EQ and BE, as of 2026-10-15.
+#
+# WHY BE WAS ADDED. HFCL moved to series BE on 2026-09-03 and has traded
+# normally every day since, so an EQ-only parser was publishing "no data" for a
+# stock with a real live price -- and 02b logged it in the nightly STALE warning
+# every night, which is how that warning gets ignored.
+#
+# GENERALLY, NOT AN ALLOWLIST. Same principle as ingesting the whole universe
+# rather than ALL_SYMBOLS: collect data for every universe member and decide
+# tradability separately. An allowlist would need maintaining every time NSE
+# moves a stock, and the one thing worse than missing data is missing data that
+# looks deliberate.
+#
+# BE IS A SURVEILLANCE SERIES -- trade-for-trade, typically a 5% circuit band.
+# That is a TRADABILITY question, answered by engine/universe.EXCLUDED and
+# enforced at the publish stage in 06_push_supabase, not by refusing to look at
+# the price. HFCL stays excluded for exactly that reason.
+#
+# VERIFIED BEFORE THE CHANGE, over the 31 sessions from 2026-09-01:
+#   no symbol appears under BOTH EQ and BE on the same date -- 0 sessions
+#   no ISIN resolves to two symbols in one session         -- 0 sessions
+#   universe symbols in BE on 2026-10-14                   -- 2 (HFCL, MOREPENLAB)
+#   the per-session row delta is exactly the BE rows and nothing else
+# So the concat in build_parquets cannot produce two rows for one symbol-date,
+# and drop_duplicates("date") has nothing ambiguous to resolve.
+INGEST_SERIES = ("EQ", "BE")
+
+
 def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
     """
     Parses Bhavcopy CSV — handles both old and new NSE formats.
     Old format (pre-2026): SYMBOL, SERIES, OPEN_PRICE, CLOSE_PRICE, DELIV_PER etc.
     New format (2026+):    TckrSymb, SctySrs, OpnPric, ClsPric (no delivery %)
+
+    Keeps the series in INGEST_SERIES; see the note above for why that is EQ
+    and BE rather than EQ alone.
     """
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
@@ -167,7 +198,7 @@ def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
         # New 2026+ NSE format
         series_col = "SctySrs"
         if series_col in df.columns:
-            df = df[df[series_col].str.strip() == "EQ"].copy()
+            df = df[df[series_col].str.strip().isin(INGEST_SERIES)].copy()
         if len(df) == 0:
             return pd.DataFrame()
         col_map = {
@@ -188,7 +219,7 @@ def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
     else:
         # Old format (pre-2026)
         if "SERIES" in df.columns:
-            df = df[df["SERIES"].str.strip() == "EQ"].copy()
+            df = df[df["SERIES"].str.strip().isin(INGEST_SERIES)].copy()
         if len(df) == 0:
             return pd.DataFrame()
         col_map = {
