@@ -60,8 +60,8 @@ os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
 # state has to opt out deliberately, which is the right way round.
 os.environ["ATLAS_DRILL"] = "1"
 os.environ.setdefault(
-    "ATLAS_SENTIMENT_WINDOW_FILE",
-    str(Path(tempfile.gettempdir()) / "atlas_test_sentiment_window.json"))
+    "ATLAS_SENTIMENT_STANDDOWN_FILE",
+    str(Path(tempfile.gettempdir()) / "atlas_test_sentiment_standdown.json"))
 
 SUITES = [
     ("environment",     [sys.executable, "tests/test_environment.py"]),
@@ -75,7 +75,8 @@ SUITES = [
                                "tests/test_universe_publish_gate.py"]),
     ("switch inventory", [sys.executable, "tests/test_switch_inventory.py"]),
     ("live sentiment", [sys.executable, "tests/test_live_sentiment.py"]),
-    ("sentiment window", [sys.executable, "tests/test_sentiment_window.py"]),
+    ("sentiment stand-down", [sys.executable,
+                              "tests/test_sentiment_standdown.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),

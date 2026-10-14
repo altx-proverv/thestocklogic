@@ -52,7 +52,6 @@ import requests
 import pandas as pd
 
 from atlas.execution.live_sentiment import verdict_from, near_month_future
-from atlas.execution.sentiment_window import fold
 from engine.upstox_ws import BASE_URL, get_headers
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
@@ -148,36 +147,12 @@ def replay_day(day: str, prev_day: str) -> dict:
     # how close the VWAP leg ran: a flip on a 0.5-point margin is weaker
     # evidence than one on 30 points, and the reconstruction's error lives here
     near_vwap = int((df["d_vwap"].abs() < 5.0).sum())
-    # ── THE CONFIRMED STATE AND THE BREAKER, over this session ────
-    # The SAME fold the engine runs, over the same constants. Not a
-    # reimplementation: tools cannot drift from a policy they import.
-    f = fold(list(df["verdict"]))
-    times = list(df["t"])
-    est_at = (times[f["session_side_index"]]
-              if f["session_side_index"] is not None else None)
-    down_at = (times[f["stand_down_index"]]
-               if f["stand_down_index"] is not None else None)
-    permitted = sum(1 for t in f["trace"] if t["permits"])
-    # WITH SHORTS OFF, ONLY A CONFIRMED BULLISH PRODUCES A TRADE. A confirmed
-    # bearish names a side the config refuses, so counting it as "permitted"
-    # would overstate what ATLAS would actually have done.
-    permitted_long = sum(1 for t in f["trace"] if t["permits"] == "bullish")
-    first_permit = next((times[t["i"]] for t in f["trace"] if t["permits"]), None)
-    # confirmed-state changes, as against raw flips
-    conf = [t["established"] for t in f["trace"]]
-    conf_flips = sum(1 for i in range(1, len(conf)) if conf[i] != conf[i - 1])
-
     return {
         "day": day, "cycles": len(df), "flips": flips,
-        "session_side": f["session_side"], "established_at": est_at,
-        "stood_down": f["stood_down"], "stand_down_at": down_at,
-        "reversal_from": f["reversal_from"], "reversal_to": f["reversal_to"],
-        "permitted_cycles": permitted, "permitted_long": permitted_long,
-        "first_permit_at": first_permit,
-        "worst_opposite": f["worst_opposite"],
-        "worst_opposite_at": (times[f["worst_opposite_index"]]
-                              if f["worst_opposite_index"] is not None else None),
-        "confirmed_flips": conf_flips,
+        # BULLISH CYCLES ARE THE TRADEABLE ONES. With shorts off a bearish
+        # read names a side the config refuses, so counting it as "permitted"
+        # would overstate what ATLAS would have done.
+        "bullish_cycles": int((df["verdict"] == "bullish").sum()),
         "flips_open": max(flips_open, 0), "flips_rest": max(flips_rest, 0),
         "flips_actionable": max(flips_actionable, 0),
         "bullish": counts.get("bullish", 0), "bearish": counts.get("bearish", 0),
@@ -297,60 +272,12 @@ def main() -> int:
         print(f"cycles within 5 points of the VWAP leg: {nv}/{tc} "
               f"({100.0*nv/tc:.1f}%) — where the reconstruction is least "
               f"certain")
+        bl = sum(r["bullish_cycles"] for r in results)
+        print(f"cycles whose read was BULLISH -- the only ones that permit a "
+              f"LONG with shorts off: {bl} of {tc} ({100.0*bl/tc:.1f}%)")
+        print(f"  per session: " + ", ".join(
+            f"{r['day'][5:]} {r['bullish_cycles']}" for r in results))
     print()
-    print("=" * 118)
-    print("THE CONFIRMED STATE AND THE REVERSAL BREAKER")
-    print("=" * 118)
-    from atlas.config import (SENTIMENT_ESTABLISH_MIN as EM,
-                              SENTIMENT_ESTABLISH_WINDOW as EW,
-                              SENTIMENT_REVERSAL_MIN as RM,
-                              SENTIMENT_REVERSAL_WINDOW as RW)
-    print(f"establish {EM}/{EW} cycles   reversal {RM}/{RW} opposite   "
-          f"(atlas/config.py — the whole policy)")
-    print("-" * 118)
-    print(f"{'SESSION':<12}{'SIDE':>9}{'ESTABLISHED':>13}{'REVERSAL':>10}"
-          f"{'FIRED AT':>10}{'PERMITS':>9}{'OF WHICH LONG':>15}{'FIRST':>8}{'CONF':>6}"
-          f"{'RAW':>5}{'CLOSEST TO REVERSAL':>22}")
-    print("-" * 118)
-    for r in results:
-        closest = (f"{r['worst_opposite']}/{RW} at {r['worst_opposite_at']}"
-                   if r["worst_opposite_at"] else "—")
-        print(f"{r['day']:<12}{str(r['session_side'] or '—'):>9}"
-              f"{str(r['established_at'] or '—'):>13}"
-              f"{('YES' if r['stood_down'] else 'no'):>10}"
-              f"{str(r['stand_down_at'] or '—'):>10}"
-              f"{r['permitted_cycles']:>9}{r['permitted_long']:>15}"
-              f"{str(r['first_permit_at'] or '—'):>8}"
-              f"{r['confirmed_flips']:>6}{r['flips']:>5}{closest:>22}")
-    print("-" * 118)
-    if results:
-        tot = sum(r["permitted_cycles"] for r in results)
-        allc = sum(r["cycles"] for r in results)
-        tl = sum(r["permitted_long"] for r in results)
-        print(f"cycles naming a confirmed SIDE: {tot} of {allc} "
-              f"({100.0*tot/allc:.1f}%)")
-        print(f"cycles that would have permitted a LONG -- the only trade "
-              f"ATLAS can take with shorts off: {tl} of {allc} "
-              f"({100.0*tl/allc:.1f}%)")
-        fired = [r for r in results if r["stood_down"]]
-        print(f"sessions the breaker fired in: {len(fired)} of {len(results)}"
-              + (f" — {', '.join(r['day'] for r in fired)}" if fired else ""))
-        nm = [r for r in results if not r["stood_down"] and r["worst_opposite"]]
-        if nm:
-            worst = max(nm, key=lambda r: r["worst_opposite"])
-            print(f"NEAR MISS — closest a session came to reversing without "
-                  f"firing: {worst['worst_opposite']}/{RW} opposite on "
-                  f"{worst['day']} at {worst['worst_opposite_at']} "
-                  f"({RM - worst['worst_opposite']} short of the "
-                  f"{RM}/{RW} threshold)")
-            print(f"  per session: " + ", ".join(
-                f"{r['day'][5:]} {r['worst_opposite']}" for r in sorted(
-                    nm, key=lambda r: -r["worst_opposite"])))
-        print(f"confirmed-state changes vs raw flips: "
-              f"{sum(r['confirmed_flips'] for r in results)} vs "
-              f"{sum(r['flips'] for r in results)} — the window is what the "
-              f"gate reads")
-
     print()
     print("STATE RUNS PER SESSION (consecutive cycles in one state)")
     print("-" * 118)

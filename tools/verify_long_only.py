@@ -70,23 +70,31 @@ def section_no_short():
     # this harness must run with no network and must never touch production --
     # see the drill fence below.
     from atlas.execution import sentiment_window as _SW
+    from atlas.execution import live_sentiment as _LS
+    # Never stood down in this sweep; the stand-down has its own suite.
+    _SW.state = lambda *a, **k: {"stood_down": False, "reason_code": None}
 
     def ctx(reg, sent):
-        """ctx for the regime column; `sent` is the CONFIRMED state.
+        """ctx for the regime column; `sent` is the instantaneous read.
+
+        REPOINTED 2026-10-15: this injected a CONFIRMED state from the 24-of-30
+        window, which was vetoed. Gate 1 reads live_sentiment.read() directly
+        again, so that is the injection point. Injected rather than fetched --
+        this harness runs with no network and must never touch production.
 
         Set at call time, per cell. Building every ctx up front would leave the
         last cell's sentiment applying to all of them -- a bug this file's own
         predecessor had in a different form, when it supplied all four keys for
         every case and "unknown" silently resolved to bearish.
         """
-        if sent in ("bullish", "bearish"):
-            permits, code = sent, None
-        elif sent == "mixed":
-            permits, code = None, "SENTIMENT"
+        if sent in ("bullish", "bearish", "mixed"):
+            _LS.read = lambda *a, **k: {"ok": True, "verdict": sent,
+                                        "reason_code": None,
+                                        "detail": f"injected {sent}"}
         else:
-            permits, code = None, _SW.REASON_NOT_ESTABLISHED
-        _SW.state = lambda *a, **k: {"permits": permits, "reason_code": code}
-        _SW.line = lambda w=None: f"injected confirmed={sent}"
+            _LS.read = lambda *a, **k: {"ok": False, "verdict": None,
+                                        "reason_code": _LS.REASON_UNAVAILABLE,
+                                        "detail": "injected: feed down"}
         return {"regime": reg, "source": "verify"}
     states = [(r, s) for r in ("bull", "bear", "sideways", "unknown", "garbage")
               for s in ("bullish", "bearish", "mixed", "unknown")]

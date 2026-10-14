@@ -63,13 +63,9 @@ SESSION, SIGNAL = "session", "signal"
 #   live sentiment (Gate 1)    outside 09:20-15:20 there is no live quote to
 #                              have, so a failed read before the open is
 #                              expected. Inside the window it BLOCKS.
-#   sentiment window           a window still forming is every session before
-#                              about 09:50. A FIRED reversal breaker is not
-#                              advisory and blocks.
 ADVISORY_SWITCHES = ("atlas-market-hours.timer",
                      "sentiment source (market.parquet)",
-                     "live sentiment (Gate 1)",
-                     "sentiment window (Gate 1 confirm)")
+                     "live sentiment (Gate 1)")
 
 
 def _row(name, where, value, blocking, survives, detail="", scope=SESSION,
@@ -306,30 +302,28 @@ def _live_sentiment():
                     f"probe failed: {type(e).__name__}: {e}", advisory=True)
 
 
-def _sentiment_window():
-    """The confirmed state, both window counts, and the distance to each
-    threshold -- so a reversal can be watched building rather than only
-    reported once it has fired.
+def _stand_down():
+    """Is the session stood down for entries.
 
-    READS THE STORED WINDOW, which is why it is on disk: this runs in its own
-    process and cannot see the market-hours loop's memory.
+    NO COUNTS HERE, DELIBERATELY. A 24-of-30 confirm window used to report its
+    tallies on this row and in the 08:30 message; the vote was deleted on
+    2026-10-15 and reading a number every morning that governs nothing is worse
+    than not having the row.
 
-    BLOCKING. A fired reversal breaker blocks, full stop -- it is a decision
-    that stands for the session. A window still forming is reported and does
-    not block: before about 09:50 that is the expected state of every session,
-    and inside the session the engine is not disarmed, it is waiting.
+    NOTHING FIRES THIS TODAY -- tomorrow's range-break check is the intended
+    trigger -- so it reads "armed" every session for now. It stays in the
+    inventory because the inventory is the complete list of what can stop an
+    entry, and this can.
     """
     try:
         from atlas.execution import sentiment_window as SW
-        w = SW.state()
-        return _row("sentiment window (Gate 1 confirm)", w["file"],
-                    ("STOOD DOWN" if w["stood_down"]
-                     else (w["permits"] or w["reason_code"])),
-                    bool(w["stood_down"]), "stand-down yes; counts rebuild",
-                    SW.line(w), advisory=not w["stood_down"])
+        s = SW.state()
+        return _row("session stand-down", s["file"],
+                    "STOOD DOWN" if s["stood_down"] else "armed",
+                    bool(s["stood_down"]), "yes (per session)", SW.line(s))
     except Exception as e:
-        return _row("sentiment window (Gate 1 confirm)", "sentiment window file",
-                    "UNKNOWN", False, "stand-down yes; counts rebuild",
+        return _row("session stand-down", "stand-down file", "UNKNOWN", False,
+                    "yes (per session)",
                     f"probe failed: {type(e).__name__}: {e}", advisory=True)
 
 
@@ -358,17 +352,13 @@ def _signal_gates():
         out.append(_row("structural stop (Gate 0)", "per signal: sl field",
                         "required > 0", False, "n/a",
                         "REJECTED_NO_STOP; no stop means no entry", SIGNAL))
-        from atlas.config import (SENTIMENT_ESTABLISH_MIN as _EM,
-                                  SENTIMENT_ESTABLISH_WINDOW as _EW,
-                                  SENTIMENT_REVERSAL_MIN as _RM,
-                                  SENTIMENT_REVERSAL_WINDOW as _RW)
         out.append(_row("sentiment side (Gate 1)",
                         "LIVE: NIFTY near-month future vs prev close/open/VWAP",
-                        f"CONFIRMED side required ({_EM}/{_EW})", False,
-                        "n/a",
-                        f"the raw read never permits on its own; a side must "
-                        f"hold {_EM} of {_EW} cycles, and {_RM} of {_RW} "
-                        f"opposite stands the session down", SIGNAL))
+                        "bullish required for LONG", False, "n/a",
+                        "evaluated per candidate, at that moment. All three "
+                        "must agree; bearish/mixed mean cash. No warm-up and "
+                        "no minimum cycle count — entries possible from 09:20",
+                        SIGNAL))
         out.append(_row("already holding (Gate 3b)", "Supabase atlas_trades",
                         "one position per symbol", False, "n/a",
                         "blocks a second entry in a held symbol", SIGNAL))
@@ -430,9 +420,8 @@ def inventory(include_signal_gates: bool = True, fast: bool = False) -> list:
     rows.append(_live_sentiment() if not fast else
                 _not_probed("live sentiment (Gate 1)", "live Upstox quote",
                             "it calls the market-data feed"))
-    # The window reads a local file, so it costs nothing and is probed even in
-    # fast mode -- and it is the switch that actually gates an entry now.
-    rows.append(_sentiment_window())
+    # Reads a local file, so it costs nothing and is probed even in fast mode.
+    rows.append(_stand_down())
     rows += ([_broker_token(), _funds()] if not fast else
              [_not_probed("Zerodha access token", "stored token file",
                           "it verifies the token against the broker"),

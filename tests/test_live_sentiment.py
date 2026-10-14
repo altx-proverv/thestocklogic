@@ -142,17 +142,18 @@ def main() -> int:
     print("=" * 78)
     print("3 — GATE 1 CARRIES THE CODE INTO blocked_by")
     print("-" * 78)
-    # THE GATE READS THE CONFIRM WINDOW, not this module's read() -- the raw
-    # read is an observation the window consumes once per cycle. So the gate's
-    # behaviour is driven through the window here; section 2 above owns read().
+    # THE GATE READS read() DIRECTLY AGAIN (2026-10-15). A 24-of-30 confirm
+    # window sat between them for one session and was vetoed; the gate is back
+    # to permitting or refusing on the instantaneous read, so that is the
+    # injection point. The stand-down is still checked ahead of it.
     from atlas.execution import sentiment_window as SW
-    saved = (SW.state, SW.line)
+    saved = (LS.read, SW.state, SW.line)
     try:
-        def inject(permits, code):
-            SW.state = lambda *a, **k: {"permits": permits, "reason_code": code}
-            SW.line = lambda w=None: f"injected permits={permits} code={code}"
+        SW.state = lambda *a, **k: {"stood_down": False, "reason_code": None}
 
-        inject(None, LS.REASON_UNAVAILABLE)
+        LS.read = lambda *a, **k: {"ok": False, "verdict": None,
+                                   "reason_code": LS.REASON_UNAVAILABLE,
+                                   "detail": "injected: the feed is down"}
         state, reason, code = AE.sentiment_state({})
         check("an unavailable read is 'unknown'", state, "unknown")
         check("  and carries the code as a value", code,
@@ -163,24 +164,38 @@ def main() -> int:
               blocked, "LIVE_SENTIMENT_UNAVAILABLE",
               "'feed down' and 'no direction' need different actions")
 
-        inject(None, SW.REASON_STAND_DOWN)
-        side, sreason, blocked = AE.allowed_side({})
-        check("a fired reversal breaker permits no side", side, None)
-        check("  under its own code", blocked, "SENTIMENT_REVERSAL_STAND_DOWN")
-
-        inject("bullish", None)
+        LS.read = lambda *a, **k: {"ok": True, "verdict": "bullish",
+                                   "reason_code": None, "detail": "legs"}
         side, sreason, blocked = AE.allowed_side({"regime": "bear"})
-        check("a CONFIRMED bullish permits LONG", side, "LONG")
+        check("a bullish read permits LONG immediately", side, "LONG",
+              "no warm-up: this is the first read of the session")
         check("  even in a bear nightly regime", "regime bear" in sreason, True,
               "regime is reported, not applied — the nightly filter owns it")
 
-        inject(None, "SENTIMENT")
+        LS.read = lambda *a, **k: {"ok": True, "verdict": "mixed",
+                                   "reason_code": None, "detail": "legs disagree"}
         side, _, blocked = AE.allowed_side({})
-        check("a confirmed mixed permits nothing", side, None)
+        check("a mixed read permits nothing", side, None)
         check("  under SENTIMENT, not a failure code", blocked, "SENTIMENT",
               "the market is readable and says wait")
+
+        # THE STAND-DOWN STILL WINS, and is checked before the feed is read.
+        SW.state = lambda *a, **k: {"stood_down": True,
+                                    "reason_code": SW.REASON_STAND_DOWN,
+                                    "at": None, "kind": "RANGE_BREAK",
+                                    "detail": "injected"}
+        SW.line = lambda w=None: "injected stand-down"
+        LS.read = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("the feed must not be read while stood down"))
+        side, _, blocked = AE.allowed_side({})
+        check("a stood-down session permits no side", side, None)
+        check("  under the stand-down code", blocked,
+              "SENTIMENT_REVERSAL_STAND_DOWN")
+        check("  and the feed is not read at all", True, True,
+              "read() raises if called; a stood-down session must not spend "
+              "a quote call per candidate")
     finally:
-        SW.state, SW.line = saved
+        LS.read, SW.state, SW.line = saved
 
     print()
     print("=" * 78)
@@ -192,12 +207,12 @@ def main() -> int:
     # The gate reads the WINDOW; the window consumes the live read once per
     # cycle. The gate importing live_sentiment directly would be the bug the
     # window exists to prevent -- a per-candidate read permitting entries.
+    check("the gate reads the live module directly", "live_sentiment" in ae,
+          True, "per candidate, at the moment it is evaluated")
+    check("  and the stand-down ahead of it", "sentiment_window" in ae, True)
     mo = executable_source(ROOT / "atlas" / "signal" / "market_open.py")
-    check("the loop reads the live module", "live_sentiment" in mo, True)
-    check("  and feeds it to the window", "observe_cycle" in mo, True)
-    check("the gate reads the window", "sentiment_window" in ae, True)
-    check("  and NOT the live read directly", "live_sentiment" in ae, False,
-          "a per-candidate live read is what the window prevents")
+    check("the loop advances no per-cycle window",
+          "observe_cycle" in mo, False)
     check("  and no longer reads breadth counts",
           "advance_count" in ae and "decline_count" in ae
           and "breadth_up" in ae, False,
@@ -260,6 +275,9 @@ def main() -> int:
     print("-" * 78)
     rp = executable_source(ROOT / "tools" / "replay_live_sentiment.py")
     check("the replay imports verdict_from", "verdict_from" in rp, True)
+    check("  and no longer imports the deleted fold()",
+          "sentiment_window" in rp, False,
+          "the 24-of-30 vote was vetoed on 2026-10-15")
     check("  rather than reimplementing the rule",
           "bullish" in rp.replace("verdict_from", ""), True,
           "labels appear for display; the decision comes from the module")
