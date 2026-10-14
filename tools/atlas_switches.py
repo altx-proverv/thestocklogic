@@ -307,64 +307,69 @@ def _live_sentiment():
 
 
 def _range_breaker():
-    """The market box, how far the price is from the edge that matters, and
-    how many symbols a stock-level break has blocked.
+    """The opening range, how far the last close is from the edge that matters,
+    and whether anything has fired or would have.
 
-    THE POINT IS TO WATCH A BOX TIGHTENING, not to be told after it broke. So
-    the row carries the box's high and low, the current price, and the distance
-    to the edge the held side cares about.
+    IT MUST NOT READ AS AN ALL-CLEAR WHILE OBSERVING. "nothing fired" and
+    "something fired and was ignored" are different facts, so a recorded
+    would-be fire shows as OBSERVED_WOULD_FIRE with what it would have done.
 
-    BLOCKING only when it has actually fired. Dormant (nothing open),
-    not-armed (before 09:50) and cannot-evaluate are all reported and none of
-    them disarms the engine -- cannot-evaluate is fail-open on purpose, see
-    range_breaker's docstring.
+    BLOCKING only when it has actually fired and acted. Observing, dormant,
+    not-armed and cannot-evaluate are all reported and none disarms the engine.
     """
     try:
         from atlas.execution import range_breaker as RB
-        # READ-ONLY: this builds the box and judges it, and never calls
-        # market_check -- a tool must not be able to stand the day down.
-        ok_armed, why_armed = RB.armed()
-        side, side_detail = RB.held_side()
-        nblocked = len(RB.blocked_symbols())
         from atlas.execution import sentiment_window as SD
+        obs = RB.observed()
+        nblocked = len(RB.blocked_symbols())
+        suffix = ""
+        if RB.observe_only():
+            suffix += " | OBSERVE-ONLY: blocks nothing"
+        if nblocked:
+            suffix += f" | {nblocked} symbol(s) blocked"
+
         sd = SD.state()
         if sd["stood_down"]:
             return _row("range breaker (market)", sd["file"], "FIRED", True,
                         "yes (per session)",
-                        f"{sd['kind']}: {str(sd['detail'])[:170]}"
-                        + (f" | {nblocked} symbol(s) blocked" if nblocked else ""))
+                        f"{sd['kind']}: {str(sd['detail'])[:180]}{suffix}")
+        # A WOULD-BE FIRE OUTRANKS EVERY CLEAR STATE BELOW.
+        mkt = [o for o in obs if o.get("scope") == "market"]
+        if mkt:
+            o = mkt[0]
+            return _row("range breaker (market)", "live 1-minute candles",
+                        "OBSERVED_WOULD_FIRE", False, "yes (per session)",
+                        f"would have stood the day down at "
+                        f"{str(o['at'])[11:19]} — {str(o['detail'])[:170]}"
+                        f"{suffix}", advisory=True)
+
+        ok_armed, why_armed = RB.armed()
         if not ok_armed:
             return _row("range breaker (market)", "live 1-minute candles",
                         RB.REASON_NOT_ARMED, False, "n/a (per cycle)",
-                        why_armed + (f" | {nblocked} symbol(s) blocked"
-                                     if nblocked else ""), advisory=True)
+                        why_armed + suffix, advisory=True)
+        side, side_detail = RB.held_side()
         b = RB.market_box()
         if not b.get("ok"):
             return _row("range breaker (market)", "live 1-minute candles",
                         RB.REASON_CANNOT_EVALUATE, False, "n/a (per cycle)",
                         f"{b['detail'][:170]} — FAIL OPEN by design; the "
-                        f"stop-loss is the protection"
-                        + (f" | {nblocked} symbol(s) blocked" if nblocked else ""),
-                        advisory=True)
-        lp = b.get("last_price") or b.get("probe_high") or b.get("probe_low")
+                        f"stop-loss is the protection{suffix}", advisory=True)
+        rng = (f"range {b['low']:.2f}-{b['high']:.2f} ({b['candles_used']} "
+               f"candles {b['first']}-{b['last']})")
         if side is None:
-            det = (f"box {b['low']:.2f}-{b['high']:.2f} from "
-                   f"{b['candles_used']} candles {b['first']}-{b['last']}; "
-                   f"{side_detail}")
             return _row("range breaker (market)", "live 1-minute candles",
                         RB.REASON_DORMANT, False, "n/a (per cycle)",
-                        det + (f" | {nblocked} symbol(s) blocked"
-                               if nblocked else ""), advisory=True)
+                        f"{rng}; {side_detail}{suffix}", advisory=True)
         edge = b["low"] if side == "LONG" else b["high"]
-        probe = b.get("probe_low") if side == "LONG" else b.get("probe_high")
+        probe = b.get("probe_close")
         dist = None if probe is None else (
             probe - edge if side == "LONG" else edge - probe)
-        det = (f"box {b['low']:.2f}-{b['high']:.2f} ({b['candles_used']} "
-               f"candles {b['first']}-{b['last']}); holding {side}, watching "
-               f"the {'floor' if side == 'LONG' else 'ceiling'} {edge:.2f}"
-               + (f"; price {probe:.2f} is {dist:+.2f} from it"
-                  if dist is not None else "; no current price yet")
-               + (f" | {nblocked} symbol(s) blocked" if nblocked else ""))
+        det = (f"{rng}; holding {side}, watching the "
+               f"{'floor' if side == 'LONG' else 'ceiling'} {edge:.2f}"
+               + (f"; last close {probe:.2f} is {dist:+.2f} from it"
+                  if dist is not None else "; no completed minute yet")
+               + suffix)
         return _row("range breaker (market)", "live 1-minute candles", "clear",
                     False, "n/a (per cycle)", det)
     except Exception as e:
@@ -378,12 +383,24 @@ def _symbol_blocks():
     try:
         from atlas.execution import range_breaker as RB
         d = RB.blocked_symbols()
+        obs = [o for o in RB.observed()
+               if str(o.get("scope", "")).startswith("symbol:")]
+        if not d and obs:
+            names = ", ".join(sorted(
+                str(o["scope"]).split(":", 1)[1] for o in obs))
+            return _row("range breaker (per symbol)",
+                        "/var/lib/atlas/breaker_range.json",
+                        f"{len(obs)} OBSERVED, 0 blocked", False,
+                        "yes (per session)",
+                        f"would have blocked: {names[:170]} — OBSERVE-ONLY, "
+                        f"so nothing was blocked", advisory=True)
         if not d:
             return _row("range breaker (per symbol)",
                         "/var/lib/atlas/breaker_blocked.json", "none blocked",
                         False, "yes (per session)",
                         "a stock break blocks new entries in that symbol only "
-                        "and never stands the day down")
+                        "and never stands the day down"
+                        + (" | OBSERVE-ONLY" if RB.observe_only() else ""))
         names = ", ".join(sorted(d))
         return _row("range breaker (per symbol)",
                     "/var/lib/atlas/breaker_blocked.json",

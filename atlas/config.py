@@ -406,38 +406,61 @@ SENTIMENT_STANDDOWN_FILE = Path(os.environ.get("ATLAS_SENTIMENT_STANDDOWN_FILE")
 
 # ── THE RANGE-BREAK BREAKERS ──────────────────────────────────────
 #
-# THE MECHANIC, BOTH LEVELS. A box is drawn around the previous 45 minutes of
-# price. Price printing outside that box, on the side that goes AGAINST the
-# position, is a confirmed change of character. One print is enough.
+# THE BOX IS THE OPENING RANGE: the high and low of 09:15 to 10:00, computed
+# ONCE when that range completes and held unchanged for the rest of the
+# session. It does not roll, it does not recompute, and the morning's extremes
+# never age out.
 #
-# THIS IS A STRUCTURAL FACT, NOT A VOTE. There is no threshold to tune and none
-# is to be added: a level either printed through or it did not. The 24-of-30
-# sentiment vote that was deleted on 2026-10-15 was a vote over a continuous
-# reading, which is what made it tunable and therefore arbitrary. A range break
-# is a yes or a no.
+# WHY, SO NOBODY REVERTS IT TO A ROLLING BOX. A rolling 45-minute box descends
+# with the price, so it does both wrong things at once: it misses a slow grind
+# (the box follows the decline and is never broken) and it fires on an ordinary
+# pullback (the box has risen, so a normal retrace prints below it). Replayed
+# over eight sessions it fired on 8 of 8. A fixed level is a far higher bar --
+# a move has to undo the whole morning to break it -- and it is how a trader
+# actually reads a day.
 #
-# THE WINDOW EXCLUDES THE CURRENT READING, and that is the part most likely to
-# be silently wrong. A box containing the current price can never be broken --
-# its high is always at least the current price and its low at most. So the box
-# is built from the 45 candles STRICTLY BEFORE the current minute, and the
-# current minute is the thing tested against it.
+# A BREAK REQUIRES A ONE-MINUTE CLOSE OUTSIDE THE RANGE. Price touching outside
+# and closing back inside is not a break:
 #
-# FROM 1-MINUTE CANDLE HIGHS AND LOWS, not a price sampled once a cycle. A wick
-# through the level is a break, and a once-a-minute sample of the last traded
-# price misses what happened inside the minute.
+#     floor 25,090:  low 25,085 close 25,096  ->  no break
+#                    low 25,085 close 25,087  ->  break
 #
-# ARMED FROM 09:50. Note what the two constants together imply: the NSE session
-# opens at 09:15, so at 09:50 only 35 candles exist and a 45-candle box cannot
-# be built yet. The arming time is a floor, not a promise -- the first evaluable
-# cycle on an ordinary session is about 10:00, and 09:50-10:00 reports
-# "cannot evaluate: 35 of 45 candles", which is its own distinct state and is
-# NOT an all-clear.
-BREAKER_WINDOW_CYCLES = 45
-BREAKER_ARMS_AT = "09:50"
+# WHY: a wick below an obvious low is usually stops being swept, and this
+# codebase's own SMC logic reads exactly that as BULLISH (bull_liq_sweep, a
+# scoring input in engine/03b_score.py). The breaker was treating the same
+# event as a reason to stop the day. Close-basis costs up to a minute of
+# latency, which is accepted: the stop-loss protects the position, the breaker
+# only stops new entries.
+#
+# STILL ONE OCCURRENCE. No counting, no vote, no threshold. What changed is
+# what counts as an occurrence, not how many are needed.
+OPENING_RANGE_START = "09:15"
+OPENING_RANGE_END   = "10:00"
 
-# Symbols blocked by a stock-level break, for the rest of the session. One
-# file, written only when a break actually fires, same shape and the same
-# restart reasoning as the stand-down above.
+# ── OBSERVE-ONLY ──────────────────────────────────────────────────
+#
+# True: both breakers compute, log, alert and appear in the inventory, and
+# BLOCK NOTHING. Every would-be fire is recorded with its full detail so the
+# operator can read a real session's evidence before this stops a trade.
+#
+# The inventory must not read as an all-clear while this is on -- a reader has
+# to be able to tell "nothing fired" from "something fired and was ignored" --
+# so an observed fire is persisted and surfaced as OBSERVING with what it
+# would have done.
+BREAKER_OBSERVE_ONLY = True
+
+# The day's opening range, and any observed would-be fires, keyed to the
+# session date. A file carrying another date is discarded, same as the
+# stand-down file. Persisted so a restart does not lose the morning's levels:
+# they cannot be recomputed after 10:00 from a live feed that only serves
+# today, and losing them would silently disarm the breaker for the rest of the
+# session.
+BREAKER_RANGE_FILE = Path(os.environ.get("ATLAS_BREAKER_RANGE_FILE")
+                          or "/var/lib/atlas/breaker_range.json")
+
+# Symbols blocked by a stock-level break, for the rest of the session. Written
+# only when a break actually fires -- and while BREAKER_OBSERVE_ONLY is True,
+# never.
 BREAKER_BLOCKED_FILE = Path(os.environ.get("ATLAS_BREAKER_BLOCKED_FILE")
                             or "/var/lib/atlas/breaker_blocked.json")
 

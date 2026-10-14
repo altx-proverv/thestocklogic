@@ -60,6 +60,9 @@ os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
 # state has to opt out deliberately, which is the right way round.
 os.environ["ATLAS_DRILL"] = "1"
 os.environ.setdefault(
+    "ATLAS_BREAKER_RANGE_FILE",
+    str(Path(tempfile.gettempdir()) / "atlas_test_breaker_range.json"))
+os.environ.setdefault(
     "ATLAS_BREAKER_BLOCKED_FILE",
     str(Path(tempfile.gettempdir()) / "atlas_test_breaker_blocked.json"))
 os.environ.setdefault(

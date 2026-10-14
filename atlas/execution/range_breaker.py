@@ -2,9 +2,10 @@
 THE RANGE-BREAK BREAKERS — MARKET LEVEL AND STOCK LEVEL
 =======================================================
 
-THE MECHANIC, BOTH LEVELS. A box is drawn around the previous 45 minutes of
-price. Price printing outside that box, on the side that goes AGAINST the
-position, is a confirmed change of character. One print is enough.
+THE MECHANIC, BOTH LEVELS. The box is the OPENING RANGE -- the high and low of
+09:15 to 10:00, computed once when that range completes and held unchanged for
+the rest of the session. A one-minute CLOSE outside it, on the side that goes
+AGAINST the position, is a confirmed change of character. One close is enough.
 
 A STRUCTURAL FACT, NOT A VOTE. A level either printed through or it did not.
 There is no threshold here and none is to be added -- the 24-of-30 sentiment
@@ -12,17 +13,71 @@ vote deleted on 2026-10-15 was a vote over a continuous reading, which is what
 made it tunable and therefore arbitrary.
 
 ────────────────────────────────────────────────────────────────────
-THE WINDOW EXCLUDES THE CURRENT READING
+A FIXED RANGE, NOT A ROLLING BOX  (changed 2026-10-15)
 ────────────────────────────────────────────────────────────────────
-This is the part most likely to be silently wrong, so it is worth stating
-twice. A box that CONTAINS the current price can never be broken: its high is
-by construction at least the current price and its low at most. Such a breaker
-would read "all clear" forever and nobody would notice.
+This shipped as a rolling 45-cycle box and was wrong in both directions at
+once. A rolling box descends with the price, so it MISSES A SLOW GRIND -- the
+box follows the decline down and is never broken -- and it FIRES ON AN ORDINARY
+PULLBACK, because by mid-morning the box has risen and a normal retrace prints
+below it. Replayed over eight sessions it fired on 8 of 8, which is a
+description of normal intraday movement rather than of a change of character.
 
-So `box()` takes the 45 candles STRICTLY BEFORE the current minute, and the
-current minute is the thing tested against them. candles_used and the box's
-own time span are reported so the exclusion can be checked from the outside
-rather than trusted.
+The opening range is a far higher bar: a move has to undo the whole morning to
+break it. It is also how a trader actually reads a day, and it does not need a
+"does the box contain the current price" caveat, because the range closed at
+10:00 and everything tested against it happened afterwards.
+
+COMPUTED ONCE AND PERSISTED. The levels cannot be recomputed after the fact
+from a live feed that only serves today, so losing them to a process restart
+would silently disarm the breaker for the rest of the session. They are written
+to BREAKER_RANGE_FILE keyed to the session date; a file from another date is
+discarded.
+
+────────────────────────────────────────────────────────────────────
+CLOSE-BASIS, NOT A WICK  (changed 2026-10-15)
+────────────────────────────────────────────────────────────────────
+A break requires the one-minute CLOSE to be outside the range. Touching
+outside and closing back inside is not a break:
+
+    floor 25,090:  low 25,085 close 25,096  ->  no break
+                   low 25,085 close 25,087  ->  break
+
+WHY: a wick below an obvious low is usually stops being swept, and THIS
+CODEBASE'S OWN SMC LOGIC READS THAT AS BULLISH -- bull_liq_sweep is a scoring
+input in engine/03b_score.py and one of the conditions that rescues a long from
+bear_regime_no_reversal. The breaker was treating the same event as a reason to
+stop the day.
+
+The probe is the close of the most recent COMPLETED minute, so the breaker is
+up to a minute slower than a wick test. Accepted: the stop-loss order protects
+the position, the breaker only stops new entries. The live last price is read
+for DISPLAY -- how far price is from the edge -- and deliberately not for the
+break test, because folding it in would reintroduce wick behaviour.
+
+STILL ONE OCCURRENCE. No counting, no vote, no threshold. What changed is what
+counts as an occurrence, not how many are needed.
+
+────────────────────────────────────────────────────────────────────
+THE ORB MACHINERY THAT WAS ALREADY HERE
+────────────────────────────────────────────────────────────────────
+Asked to look before building: index_state.get_first15_range() computes a
+09:15-09:30 high/low from the same intraday endpoint, and
+data/orb_levels_today.json holds an empty {}.
+
+THE EMPTY FILE MEANS UNUSED, NOT BROKEN. Nothing in the tree writes it --
+it was committed once (6c7dbfc) as {} and no code path has ever touched it.
+get_first15_range() and classify_index() have no callers at all, and
+index_state is not in any cron line or unit; the only live import from that
+module is get_market_direction(), the sector_heatmap fallback. So it is
+never-run code rather than a mechanism that fails.
+
+WHAT WAS REUSED: the approach, which is sound -- pull the intraday 1-minute
+series once, filter by minute-of-day in IST, take max(high) and min(low).
+opening_range() below is that same shape over 09:15-10:00 instead of
+09:15-09:30. It is not called directly because its window is fixed at 15
+minutes and it is index-keyed, while this needs the future and individual
+stocks. The dead ORB code and the empty artifact are left alone in this pass
+and are worth deleting in their own.
 
 ────────────────────────────────────────────────────────────────────
 THE DATA, AS IT ACTUALLY IS
@@ -115,9 +170,21 @@ REASON_NOT_ARMED = "BREAKER_NOT_ARMED"
 
 
 def _cfg():
-    from atlas.config import (BREAKER_WINDOW_CYCLES, BREAKER_ARMS_AT,
+    from atlas.config import (OPENING_RANGE_START, OPENING_RANGE_END,
+                              BREAKER_OBSERVE_ONLY, BREAKER_RANGE_FILE,
                               BREAKER_BLOCKED_FILE)
-    return int(BREAKER_WINDOW_CYCLES), str(BREAKER_ARMS_AT), Path(BREAKER_BLOCKED_FILE)
+    return (str(OPENING_RANGE_START), str(OPENING_RANGE_END),
+            bool(BREAKER_OBSERVE_ONLY), Path(BREAKER_RANGE_FILE),
+            Path(BREAKER_BLOCKED_FILE))
+
+
+def _hm(s: str) -> tuple:
+    h, m = (int(x) for x in str(s).split(":"))
+    return h, m
+
+
+def observe_only() -> bool:
+    return _cfg()[2]
 
 
 def _now_ist():
@@ -125,13 +192,19 @@ def _now_ist():
 
 
 def armed(now=None) -> tuple:
-    """(is_armed, why). Nothing can fire before BREAKER_ARMS_AT."""
-    _, arms_at, _ = _cfg()
+    """(is_armed, why). The breaker arms when the opening range COMPLETES.
+
+    Not before: until 10:00 the range is still being set and there is no level
+    to break. This is the honest arming time -- the previous version armed at
+    09:50 and then reported "cannot evaluate" for ten minutes because its box
+    was not full yet.
+    """
+    start, end, _, _, _ = _cfg()
     now = now or _now_ist()
-    hh, mm = (int(x) for x in arms_at.split(":"))
-    if (now.hour, now.minute) < (hh, mm):
-        return False, f"not armed until {arms_at} IST (now {now:%H:%M})"
-    return True, f"armed since {arms_at} IST"
+    if (now.hour, now.minute) < _hm(end):
+        return False, (f"not armed until {end} IST — the {start}-{end} opening "
+                       f"range is still forming (now {now:%H:%M})")
+    return True, f"armed: the {start}-{end} opening range is complete"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -151,117 +224,190 @@ def _candles(instrument_key: str) -> list:
     return sorted(c, key=lambda x: x[0])
 
 
-def box(instrument_key: str, now=None, candles: list = None) -> dict:
-    """The prior-N-candle box, EXCLUDING the current minute.
+def _range_load() -> dict:
+    day = _now_ist().date().isoformat()
+    _, _, _, path, _ = _cfg()
+    blank = {"session_date": day, "ranges": {}, "observed": []}
+    try:
+        if path.exists():
+            d = json.loads(path.read_text())
+            if d.get("session_date") == day:
+                return {**blank, **d}
+            log.info(f"range file is from {d.get('session_date')}, today is "
+                     f"{day} — starting fresh")
+    except Exception as e:
+        log.error(f"could not read {path} ({e}) — the range will be recomputed")
+    return blank
 
-    -> {ok, high, low, candles_used, first, last, probe_high, probe_low, ...}
 
-    `candles` is injectable so the replay harness and the tests run the same
-    arithmetic the engine runs, against a session's real history.
+def _range_save(d: dict) -> None:
+    _, _, _, path, _ = _cfg()
+    try:
+        from atlas.risk.breaker import is_drill
+        drilling, why = is_drill()
+    except Exception:
+        drilling, why = False, ""
+    if drilling and str(path) == "/var/lib/atlas/breaker_range.json":
+        log.warning(f"DRILL ({why}) — refusing to write the live range file")
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d))
+        tmp.replace(path)
+    except Exception as e:
+        log.error(f"could not persist the opening range to {path} ({e}) — a "
+                  f"restart would lose the morning's levels and silently "
+                  f"disarm the breaker")
+
+
+def opening_range(instrument_key: str, now=None, candles: list = None,
+                  use_cache: bool = True) -> dict:
+    """The 09:15-10:00 high/low, computed once and held for the session.
+
+    -> {ok, high, low, candles_used, first, last, probe_close, reason_code, ...}
+
+    SAME SHAPE AS index_state.get_first15_range: pull the intraday series once,
+    filter by minute-of-day in IST, take max(high) and min(low). That window is
+    fixed at 09:15-09:30 and index-keyed, so it is not called directly.
     """
-    n, arms_at, _ = _cfg()
+    start, end, _, _, _ = _cfg()
     now = now or _now_ist()
     out = {"ok": False, "reason_code": REASON_CANNOT_EVALUATE, "detail": "",
-           "high": None, "low": None, "candles_used": 0, "window": n,
-           "first": None, "last": None, "probe_high": None, "probe_low": None,
-           "current_minute": now.strftime("%H:%M"),
-           "instrument": instrument_key}
-    try:
-        cs = candles if candles is not None else _candles(instrument_key)
-    except Exception as e:
-        out["detail"] = f"candles unavailable: {type(e).__name__}: {e}"
-        return out
-    if not cs:
-        out["detail"] = ("the intraday endpoint returned no candles — nothing "
-                         "to build a box from")
+           "high": None, "low": None, "candles_used": 0,
+           "range_start": start, "range_end": end,
+           "first": None, "last": None, "probe_close": None,
+           "probe_minute": None, "current_minute": now.strftime("%H:%M"),
+           "instrument": instrument_key, "from_cache": False}
+
+    if (now.hour, now.minute) < _hm(end):
+        out["reason_code"] = REASON_NOT_ARMED
+        out["detail"] = (f"the {start}-{end} opening range is still forming "
+                         f"(now {now:%H:%M})")
         return out
 
-    cur_key = now.strftime("%Y-%m-%dT%H:%M")
+    # THE RANGE IS COMPUTED ONCE. After 10:00 it never changes, so a cached
+    # value is not an optimisation, it is the definition -- and it is what
+    # survives a restart, since a live feed cannot rebuild this afternoon.
+    cached = None
+    if use_cache:
+        cached = _range_load().get("ranges", {}).get(instrument_key)
 
-    # THE EXCLUSION. Everything strictly before the current minute is eligible
-    # for the box; the current minute is the thing tested against it. A box
-    # containing the current price cannot be broken.
-    prior = [c for c in cs if str(c[0])[:16] < cur_key]
-    current = [c for c in cs if str(c[0])[:16] == cur_key]
+    cs = candles
+    if cs is None:
+        try:
+            cs = _candles(instrument_key)
+        except Exception as e:
+            if cached:
+                cs = []          # fall through to the cached levels
+            else:
+                out["detail"] = f"candles unavailable: {type(e).__name__}: {e}"
+                return out
 
-    if len(prior) < n:
-        out["candles_used"] = len(prior)
-        out["detail"] = (f"cannot evaluate: {len(prior)} of {n} candles — the "
-                         f"NSE session opens at 09:15, so a {n}-candle box is "
-                         f"not complete until about "
-                         f"{9 + (15 + n) // 60:02d}:{(15 + n) % 60:02d}")
-        return out
-
-    win = prior[-n:]
-    out.update({
-        "ok": True, "reason_code": None,
-        "high": max(float(c[2]) for c in win),
-        "low": min(float(c[3]) for c in win),
-        "candles_used": len(win),
-        "first": str(win[0][0])[11:16], "last": str(win[-1][0])[11:16],
-    })
-    # THE PROBE is the current minute's own high and low -- a wick through the
-    # level inside this minute is a break, and the candle carries it where a
-    # last-traded-price sample would not.
-    if current:
-        out["probe_high"] = max(float(c[2]) for c in current)
-        out["probe_low"] = min(float(c[3]) for c in current)
-        out["probe_source"] = "current 1-minute candle"
+    if cached:
+        out.update({"high": float(cached["high"]), "low": float(cached["low"]),
+                    "candles_used": int(cached.get("candles_used", 0)),
+                    "first": cached.get("first"), "last": cached.get("last"),
+                    "from_cache": True, "ok": True, "reason_code": None})
     else:
-        out["probe_source"] = "none — no candle for the current minute yet"
-    out["detail"] = (f"box {out['low']:.2f}-{out['high']:.2f} from "
-                     f"{out['candles_used']} candles {out['first']}-{out['last']}")
+        if not cs:
+            out["detail"] = ("the intraday endpoint returned no candles — no "
+                             "opening range to compute")
+            return out
+        s_hm, e_hm = _hm(start), _hm(end)
+        win = [c for c in cs
+               if s_hm <= _hm(str(c[0])[11:16]) < e_hm]
+        if not win:
+            out["detail"] = (f"no candles inside {start}-{end} — the session "
+                             f"may not have opened")
+            return out
+        out.update({"high": max(float(c[2]) for c in win),
+                    "low": min(float(c[3]) for c in win),
+                    "candles_used": len(win),
+                    "first": str(win[0][0])[11:16],
+                    "last": str(win[-1][0])[11:16],
+                    "ok": True, "reason_code": None})
+        d = _range_load()
+        d.setdefault("ranges", {})[instrument_key] = {
+            "high": out["high"], "low": out["low"],
+            "candles_used": out["candles_used"],
+            "first": out["first"], "last": out["last"],
+            "computed_at": now.isoformat(timespec="seconds")}
+        _range_save(d)
+
+    # THE PROBE IS THE LAST COMPLETED MINUTE'S CLOSE. The current minute is
+    # still forming, so its "close" is just the last trade -- using it would be
+    # a wick test by another name, which is the thing being removed.
+    cur_key = now.strftime("%Y-%m-%dT%H:%M")
+    done = [c for c in (cs or []) if str(c[0])[:16] < cur_key]
+    if done:
+        out["probe_close"] = float(done[-1][4])
+        out["probe_minute"] = str(done[-1][0])[11:16]
+    out["detail"] = (f"range {out['low']:.2f}-{out['high']:.2f} from "
+                     f"{out['candles_used']} candles "
+                     f"{out['first']}-{out['last']}"
+                     + (" (cached)" if out["from_cache"] else "")
+                     + (f"; last close {out['probe_close']:.2f} at "
+                        f"{out['probe_minute']}"
+                        if out["probe_close"] is not None else
+                        "; no completed minute yet"))
     return out
 
 
-def with_last_price(b: dict, last_price) -> dict:
-    """Widen the probe with the live last price.
+# Kept as the name the rest of the module and the tests call.
+box = opening_range
 
-    THE CANDLE CAN LAG. The current minute's candle is incomplete and the
-    endpoint may not have published it yet at the instant a cycle runs, so the
-    live last price is folded in: whichever reaches further outside the box is
-    the probe. Belt and braces, and it never narrows the probe.
+
+def with_last_price(b: dict, last_price) -> dict:
+    """Attach the live last price FOR DISPLAY ONLY.
+
+    DELIBERATELY NOT PART OF THE BREAK TEST. It used to widen the probe so a
+    tick outside the box counted; the break is close-basis now, and folding the
+    live price back in would reintroduce exactly the wick behaviour that was
+    removed. It is carried so the inventory can say how far price is from the
+    edge.
     """
     if last_price in (None, 0):
         return b
-    lp = float(last_price)
     b = dict(b)
-    b["last_price"] = lp
-    b["probe_high"] = lp if b.get("probe_high") is None else max(b["probe_high"], lp)
-    b["probe_low"] = lp if b.get("probe_low") is None else min(b["probe_low"], lp)
-    if b.get("probe_source") and "last price" not in b["probe_source"]:
-        b["probe_source"] += " + live last price"
+    b["last_price"] = float(last_price)
     return b
 
 
 def verdict(b: dict, side: str) -> dict:
-    """Did the box break AGAINST `side`? Pure. The direction logic lives here.
+    """Did a one-minute CLOSE land outside the range, AGAINST `side`? Pure.
 
-    LONG  -> the FLOOR is the level that matters. A break of the ceiling is a
-             breakout in ATLAS's favour and must NOT fire.
-    SHORT -> the CEILING matters. A break of the floor is in its favour.
+    THE DIRECTION LOGIC LIVES HERE AND NOWHERE ELSE.
+
+    LONG  -> the FLOOR is the level that matters. A close above the ceiling is
+             a breakout in ATLAS's favour and must NOT fire.
+    SHORT -> the CEILING matters. A close below the floor is in its favour.
 
     Getting this backwards would stop ATLAS on its winners, which is the single
-    worst outcome available here, so it is one function, tested in all four
-    combinations, and nothing else decides direction.
+    worst outcome available here, so it is one function, tested in every
+    combination, and nothing else decides direction.
+
+    CLOSE-BASIS. `probe_close` is the close of the last COMPLETED minute. A low
+    that pierced the floor and recovered does not reach this function at all --
+    that is a stop sweep, which this codebase's own SMC logic scores as bullish.
     """
     out = {"broke": False, "level": None, "price": None, "side": side,
            "favourable_break": False}
-    if not b.get("ok"):
+    if not b.get("ok") or b.get("probe_close") is None:
         return out
+    c = float(b["probe_close"])
     s = str(side or "").upper()
     if s == "LONG":
-        if b.get("probe_low") is not None and b["probe_low"] < b["low"]:
-            out.update({"broke": True, "level": "floor", "price": b["probe_low"]})
-        elif b.get("probe_high") is not None and b["probe_high"] > b["high"]:
+        if c < b["low"]:
+            out.update({"broke": True, "level": "floor", "price": c})
+        elif c > b["high"]:
             # IN ATLAS'S FAVOUR. Recorded so the replay can count these and
             # prove the direction logic held, and explicitly NOT a break.
             out["favourable_break"] = True
     elif s == "SHORT":
-        if b.get("probe_high") is not None and b["probe_high"] > b["high"]:
-            out.update({"broke": True, "level": "ceiling",
-                        "price": b["probe_high"]})
-        elif b.get("probe_low") is not None and b["probe_low"] < b["low"]:
+        if c > b["high"]:
+            out.update({"broke": True, "level": "ceiling", "price": c})
+        elif c < b["low"]:
             out["favourable_break"] = True
     return out
 
@@ -305,6 +451,43 @@ def held_side(rows: list = None) -> tuple:
         return None, f"both sides open ({sorted(sides)}) — dormant, deliberately"
     side = sides.pop()
     return side, f"{len(rows)} open {side} position(s)"
+
+
+def _record_observed(scope: str, detail: str) -> None:
+    """Persist a would-be fire while BREAKER_OBSERVE_ONLY is on.
+
+    SO THE INVENTORY CANNOT READ AS AN ALL-CLEAR. "nothing fired" and
+    "something fired and was ignored" are different facts, and while observing
+    the second one is the whole point of the exercise.
+    """
+    d = _range_load()
+    rec = {"scope": scope, "detail": detail,
+           "at": _now_ist().isoformat(timespec="seconds")}
+    if any(o.get("scope") == scope and o.get("detail") == detail
+           for o in d.get("observed", [])):
+        return
+    d.setdefault("observed", []).append(rec)
+    _range_save(d)
+    log.error("=" * 70)
+    log.error(f"OBSERVE-ONLY — WOULD HAVE FIRED ({scope}): {detail[:300]}")
+    log.error("Nothing was blocked. BREAKER_OBSERVE_ONLY is True.")
+    log.error("=" * 70)
+    try:
+        from atlas.reporting.telegram import send
+        send(f"👁 <b>RANGE BREAK — OBSERVED, NOT ACTED ON</b>\n"
+             f"<code>{detail[:320]}</code>\n\n"
+             f"<b>Nothing was blocked.</b> BREAKER_OBSERVE_ONLY is True, so "
+             f"this is evidence only — entries continue as normal and the day "
+             f"is NOT stood down.\n"
+             f"EXITS ARE UNAFFECTED either way: the stop-loss order owns the "
+             f"exit decision.")
+    except Exception as e:
+        log.error(f"could not send the observed-break alert: {e}")
+
+
+def observed() -> list:
+    """Would-be fires recorded today while observing. Read-only."""
+    return list(_range_load().get("observed", []))
 
 
 def market_box(now=None, candles: list = None, last_price=None) -> dict:
@@ -358,24 +541,30 @@ def market_check(now=None, rows=None, candles=None, last_price=None) -> dict:
     out["verdict"] = v
     if not v["broke"]:
         edge = (b["low"] if side == "LONG" else b["high"])
-        probe = (b.get("probe_low") if side == "LONG" else b.get("probe_high"))
+        probe = b.get("probe_close")
         dist = (None if probe is None else
                 (probe - edge) if side == "LONG" else (edge - probe))
         out.update({"state": "clear",
                     "detail": (f"{b['detail']}; holding {side}, watching the "
                                f"{'floor' if side == 'LONG' else 'ceiling'} "
                                f"{edge:.2f}"
-                               + (f", price {probe:.2f} is {dist:.2f} away"
+                               + (f", last close is {dist:+.2f} from it"
                                   if dist is not None else "")
-                               + (" — FAVOURABLE break of the other side, "
+                               + (" — FAVOURABLE close beyond the other side, "
                                   "ignored" if v["favourable_break"] else ""))})
         return out
 
-    detail = (f"holding {side}; the {v['level']} of the "
-              f"{b['candles_used']}-minute box broke. box "
-              f"{b['low']:.2f}-{b['high']:.2f} from {b['first']}-{b['last']}, "
-              f"broken at {v['price']:.2f} at {b['current_minute']} IST "
-              f"({b['trading_symbol']})")
+    detail = (f"holding {side}; a one-minute CLOSE broke the {v['level']} of "
+              f"the {b['range_start']}-{b['range_end']} opening range. range "
+              f"{b['low']:.2f}-{b['high']:.2f} ({b['candles_used']} candles "
+              f"{b['first']}-{b['last']}), closed at {v['price']:.2f} at "
+              f"{b['probe_minute']} IST ({b['trading_symbol']})")
+    if observe_only():
+        # OBSERVING: compute, log, alert, block nothing.
+        _record_observed("market", detail)
+        out.update({"fired": False, "observed": True,
+                    "state": "OBSERVING_WOULD_STAND_DOWN", "detail": detail})
+        return out
     SD.stand_down(REASON_MARKET_BREAK, detail)
     out.update({"fired": True, "state": REASON_MARKET_BREAK, "detail": detail})
     return out
@@ -387,7 +576,7 @@ def market_check(now=None, rows=None, candles=None, last_price=None) -> dict:
 
 def _blocked_load() -> dict:
     day = _now_ist().date().isoformat()
-    _, _, path = _cfg()
+    _, _, _, _, path = _cfg()
     blank = {"session_date": day, "symbols": {}}
     try:
         if path.exists():
@@ -404,7 +593,7 @@ def _blocked_load() -> dict:
 
 
 def _blocked_save(d: dict) -> None:
-    _, _, path = _cfg()
+    _, _, _, _, path = _cfg()
     try:
         from atlas.risk.breaker import is_drill
         drilling, why = is_drill()
@@ -498,14 +687,20 @@ def stock_check(symbol: str, side: str, instrument_key: str = None,
         out.update({"state": "clear",
                     "detail": (f"{symbol} {b['detail']}; {side}, watching "
                                f"{edge:.2f}"
-                               + (" — favourable break of the other side, "
+                               + (" — favourable close beyond the other side, "
                                   "ignored" if v["favourable_break"] else ""))})
         return out
 
-    detail = (f"{side}; the {v['level']} of the {b['candles_used']}-minute box "
-              f"broke. box {b['low']:.2f}-{b['high']:.2f} from "
-              f"{b['first']}-{b['last']}, broken at {v['price']:.2f} at "
-              f"{b['current_minute']} IST")
+    detail = (f"{symbol} {side}; a one-minute CLOSE broke the {v['level']} of "
+              f"the {b['range_start']}-{b['range_end']} opening range. range "
+              f"{b['low']:.2f}-{b['high']:.2f} ({b['candles_used']} candles "
+              f"{b['first']}-{b['last']}), closed at {v['price']:.2f} at "
+              f"{b['probe_minute']} IST")
+    if observe_only():
+        _record_observed(f"symbol:{symbol}", detail)
+        out.update({"broke": False, "observed": True,
+                    "state": "OBSERVING_WOULD_BLOCK", "detail": detail})
+        return out
     block_symbol(symbol, detail)
     out.update({"broke": True, "state": REASON_SYMBOL_BREAK, "detail": detail})
     return out
@@ -515,6 +710,13 @@ def line(m: dict = None) -> str:
     """One line for the cycle log, the inventory and the 08:30 report."""
     m = m or {"state": "unknown", "detail": ""}
     nb = len(blocked_symbols())
+    nobs = len(observed())
     head = f"market breaker {m.get('state') or '—'}"
-    tail = f" | {nb} symbol(s) blocked by a stock break" if nb else ""
+    tail = ""
+    if observe_only():
+        tail += " | OBSERVE-ONLY: blocks nothing"
+    if nobs:
+        tail += f" | {nobs} would-be fire(s) observed today"
+    if nb:
+        tail += f" | {nb} symbol(s) blocked"
     return f"{head}: {str(m.get('detail') or '')[:200]}{tail}"
