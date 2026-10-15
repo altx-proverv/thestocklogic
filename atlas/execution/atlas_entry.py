@@ -1058,8 +1058,37 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # if the book moves away, and the settle step below cancels it and records a
     # clean no-entry rather than chasing. Not entering is a cost this strategy
     # can carry; an unbounded fill price is not.
+    # THE ENTRY LIMIT IS ALSO A PRICE THE BROKER PARSES. round(ltp, 2) is not
+    # a tick multiple on a 0.05, 0.10, 0.50, 1.00 or 5.00 instrument, and it
+    # survived only because the LTP it copies is itself on-tick -- an accident,
+    # not a guarantee, and the same accident that hid the stop's off-tick price
+    # until 2026-10-15.
+    #
+    # AN ENTRY ROUNDS UP FOR A LONG (DOWN for a short): pay the tick and get
+    # the fill. A protective price rounds to the safer side; an entry rounds to
+    # the side that fills, because a LIMIT that rests behind the book is a
+    # missed trade.
     from atlas.config import ENTRY_ORDER_TYPE
-    entry_px = round(float(ltp), 2)
+    from atlas.execution import exits as X
+    try:
+        entry_px = X.price_for(symbol, float(ltp), "entry", direction)
+    except X.TickUnknown as e:
+        # NOT A REFUSAL ABOUT TICK SIZE. ATLAS cannot compute a price the
+        # broker will accept, so it cannot protect what it is about to open --
+        # the same principle as refusing to enter when exit management is off.
+        from atlas.execution.tick_map import REASON_NO_TICK
+        # DETERMINATE: no order was sent, so the reservation is released the
+        # same way a margin refusal releases it. Leaving it PENDING would block
+        # Gate 3b on a symbol nothing was ever opened in.
+        log.error(f"{symbol}: ENTRY REFUSED — {e}. No order was sent; "
+                  f"releasing the reservation on trade {row_id}.")
+        _release_intent(row_id, f"{REASON_NO_TICK}: {e}")
+        return {"status": f"SKIPPED_{REASON_NO_TICK}", "trade_id": row_id,
+                "reason": (f"{symbol}: no tick size is known, so no price can "
+                           f"be computed that the broker will accept — "
+                           f"refusing to open a position that cannot be "
+                           f"protected"),
+                "blocked_by": REASON_NO_TICK}
     order = place_order(symbol=symbol, direction=direction, qty=sizing["qty"],
                         order_type=ENTRY_ORDER_TYPE, price=entry_px,
                         tag=f"ATLAS:{row_id}", product=sizing["product"],

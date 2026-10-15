@@ -291,7 +291,8 @@ assert_independent(PRIMARY_STOP_DAY0)
 assert_independent(PRIMARY_STOP_OVERNIGHT)
 
 
-def stop_limit_price(trigger: float, direction: str) -> float:
+def stop_limit_price(trigger: float, direction: str, *,
+                     tick: float = None, symbol: str = None) -> float:
     """The SL's limit price, set through the trigger so it fills like a market order.
 
     DIRECTION IS THE SIDE THAT CLOSES, not the side that opened. A long is closed
@@ -301,22 +302,151 @@ def stop_limit_price(trigger: float, direction: str) -> float:
     which is the unprotected position again wearing a limit price.
     """
     t = float(trigger)
-    if str(direction).upper() == "LONG":
-        return round_tick(t * (1.0 - STOP_LIMIT_SLIP_PCT))
-    return round_tick(t * (1.0 + STOP_LIMIT_SLIP_PCT))
+    raw = (t * (1.0 - STOP_LIMIT_SLIP_PCT) if str(direction).upper() == "LONG"
+           else t * (1.0 + STOP_LIMIT_SLIP_PCT))
+    # "exit" rounding: toward marketable, which for the closing side is the
+    # same direction the slip already went.
+    return price_for(symbol, raw, "exit", direction, tick=tick)
 
 
-def exit_limit_price(ltp: float, direction: str) -> float:
+def exit_limit_price(ltp: float, direction: str, *,
+                     tick: float = None, symbol: str = None) -> float:
     """An emergency exit's limit, priced through the book from the last trade."""
     p = float(ltp)
-    if str(direction).upper() == "LONG":
-        return round_tick(p * (1.0 - EXIT_LIMIT_SLIP_PCT))
-    return round_tick(p * (1.0 + EXIT_LIMIT_SLIP_PCT))
+    raw = (p * (1.0 - EXIT_LIMIT_SLIP_PCT) if str(direction).upper() == "LONG"
+           else p * (1.0 + EXIT_LIMIT_SLIP_PCT))
+    return price_for(symbol, raw, "exit", direction, tick=tick)
 
 
-def round_tick(p: float) -> float:
-    """Round to the exchange tick. A price off-tick is rejected outright."""
-    return round(round(float(p) / TICK) * TICK, 2)
+# ══════════════════════════════════════════════════════════════════
+# ROUNDING: ONE FUNCTION, THE INSTRUMENT'S OWN TICK, A DECIDED DIRECTION
+# ══════════════════════════════════════════════════════════════════
+#
+# TICK = 0.05 was a module constant and every protective price went through it.
+# ATHERENERG trades on 0.10: on 2026-10-15 the broker refused the day-0 SL, the
+# emergency exit, the OCO GTT and the stop-only GTT -- four mechanisms built so
+# no single fault could defeat them all, defeated by the one thing they shared.
+#
+# Six ticks exist across the universe (0.01 through 5.00) and price does not
+# determine which, so the tick is looked up per symbol; see
+# atlas/execution/tick_map.py.
+#
+# ROUNDING DIRECTION IS PART OF THE DECISION, NOT AN ARTEFACT OF round().
+# Nearest-rounding moves a stop toward entry half the time, which quietly
+# tightens risk below what was computed, and moves an entry limit away from the
+# market half the time, which quietly costs fills. Operator decision
+# 2026-10-16:
+#
+#     entry, long BUY       UP        pay the tick, get the fill
+#     entry, short SELL     DOWN      same, mirrored
+#     stop, long            DOWN      AWAY from entry -- never tighter than asked
+#     stop, short           UP        away from entry
+#     target, long          DOWN      slightly easier to reach than asked
+#     target, short         UP        same, mirrored
+#     emergency exit limit  toward marketable (long SELL down, short BUY up)
+#
+# Entries round to get filled; protective prices round to the safer side. Every
+# rounding here is at most one tick, which on the widest tick in the universe
+# (5.00, ten symbols, all above Rs19,000) is under 0.03%.
+TICK_LEGACY_DEFAULT = 0.05          # what the constant used to be; see below
+
+UP, DOWN, NEAREST = "up", "down", "nearest"
+
+
+def round_to_tick(price: float, tick: float, how: str = NEAREST) -> float:
+    """Round `price` to a multiple of `tick`, in the stated direction.
+
+    `tick` is required and is the instrument's own. There is no default: a
+    default is what produced four rejected orders and an unprotected position.
+    """
+    import math
+    t = float(tick)
+    if not t > 0:
+        raise ValueError(f"tick must be positive, got {tick!r}")
+    q = float(price) / t
+    if how == UP:
+        n = math.ceil(q - 1e-9)
+    elif how == DOWN:
+        n = math.floor(q + 1e-9)
+    else:
+        n = math.floor(q + 0.5)
+    # round() at the end because 3 * 0.1 is 0.30000000000000004, and a price
+    # the broker parses as off-tick is rejected exactly as an off-tick one is.
+    return round(n * t, 4)
+
+
+def price_for(symbol: str, price: float, kind: str, direction: str,
+              tick: float = None) -> float:
+    """THE ONE ENTRY POINT for any price that reaches the broker.
+
+    kind is "entry", "stop", "target" or "exit"; direction is LONG or SHORT.
+    Raises TickUnknown when no tick is known for the symbol -- the caller
+    refuses that candidate rather than sending a price that will be rejected.
+    """
+    d = str(direction).upper()
+    if tick is None:
+        from atlas.execution.tick_map import tick_for, REASON_NO_TICK
+        tick, src = tick_for(symbol)
+        if tick is None:
+            raise TickUnknown(f"{symbol}: {REASON_NO_TICK}")
+    k = str(kind).lower()
+    if k == "entry":
+        how = UP if d == "LONG" else DOWN
+    elif k == "stop":
+        how = DOWN if d == "LONG" else UP
+    elif k == "target":
+        how = DOWN if d == "LONG" else UP
+    elif k == "exit":
+        # toward marketable: a long is closed by a SELL, so round DOWN
+        how = DOWN if d == "LONG" else UP
+    else:
+        raise ValueError(f"unknown price kind {kind!r}")
+    return round_to_tick(price, tick, how)
+
+
+class TickUnknown(ValueError):
+    """No tick size is known for the symbol. The candidate must be skipped."""
+
+
+def _rp(symbol: str, price: float, kind: str, direction: str) -> float:
+    """price_for for REPORTING. Falls back to the legacy shim rather than
+    raising: a summary string must never be the thing that breaks a protective
+    call. Nothing from here reaches the broker."""
+    try:
+        return price_for(symbol, price, kind, direction)
+    except Exception:
+        return round_tick(price)
+
+
+def _tick_or_raise(symbol: str, tick: float = None) -> tuple:
+    """(tick, source) for `symbol`, or raise TickUnknown.
+
+    Resolved ONCE per protective call and passed to every price in it, so one
+    mechanism cannot round on a different tick from another by accident.
+
+    `tick` overrides the lookup. For tests and tools/prove_tick_prices.py,
+    which must run with no broker session -- NOT for production callers, which
+    pass None so the instrument master is the only source.
+    """
+    if tick is not None:
+        return float(tick), "override"
+    from atlas.execution.tick_map import tick_for, REASON_NO_TICK
+    tick, src = tick_for(symbol)
+    if tick is None:
+        raise TickUnknown(f"{symbol}: {REASON_NO_TICK}")
+    return tick, src
+
+
+def round_tick(p: float, tick: float = None) -> float:
+    """LEGACY SHIM, kept so a caller that has not been converted still works.
+
+    It rounds to the instrument-agnostic 0.05 when no tick is given, which is
+    the behaviour that caused 2026-10-15 -- so every production call site has
+    been converted to price_for() and tests/test_tick_and_derived_stop.py
+    asserts none remain. This exists for arithmetic that never reaches the
+    broker (display, comparisons, the 2R yardstick) and for test fixtures.
+    """
+    return round_to_tick(p, tick if tick else TICK_LEGACY_DEFAULT, NEAREST)
 
 
 class StopWouldLoosen(ValueError):
@@ -324,7 +454,8 @@ class StopWouldLoosen(ValueError):
 
 
 def tighten_only(current: float, proposed: float, direction: str,
-                 label: str = "stop") -> float:
+                 label: str = "stop", *,
+                 tick: float = None, symbol: str = None) -> float:
     """The ONLY way a stop is allowed to change. -> the new stop, or raises.
 
     STOPS MOVE UP ONLY (for a long). This is absolute: a stop must never be
@@ -356,7 +487,11 @@ def tighten_only(current: float, proposed: float, direction: str,
                 f"Stops move up only. A widened stop is a bigger loss "
                 f"accepted after the fact, which is the one thing this engine "
                 f"must never do.")
-        return round_tick(new) if new > cur else round_tick(cur)
+        # A STOP ROUNDS AWAY FROM ENTRY. For a long that is DOWN, so the
+        # tightened level is never rounded tighter than computed.
+        v = new if new > cur else cur
+        return price_for(symbol, v, "stop", "LONG", tick=tick) if tick \
+            else round_tick(v)
     # SHORT kept for symmetry. Shorts are disabled, not deleted, and a stop
     # guard that only understood longs would be the wrong thing to find here
     # if they are ever re-enabled.
@@ -364,11 +499,14 @@ def tighten_only(current: float, proposed: float, direction: str,
         raise StopWouldLoosen(
             f"refusing to move a SHORT {label} UP: {cur} -> {new}. "
             f"Stops move toward the position only.")
-    return round_tick(new) if new < cur else round_tick(cur)
+    v = new if new < cur else cur
+    return price_for(symbol, v, "stop", "SHORT", tick=tick) if tick \
+        else round_tick(v)
 
 
 def target_price(fill: float, stop: float, direction: str,
-                 r: float = TARGET_R_MULTIPLE) -> float:
+                 r: float = TARGET_R_MULTIPLE, *,
+                 tick: float = None, symbol: str = None) -> float:
     """
     The 2R level, measured from the ACTUAL FILL, not from the signal's entry_ref.
 
@@ -380,15 +518,20 @@ def target_price(fill: float, stop: float, direction: str,
     risk = abs(float(fill) - float(stop))
     if risk <= 0:
         raise ValueError(f"zero risk per share: fill {fill} == stop {stop}")
-    return round_tick(fill + r * risk if str(direction).upper() == "LONG"
-                      else fill - r * risk)
+    raw = (fill + r * risk if str(direction).upper() == "LONG"
+           else fill - r * risk)
+    # A TARGET ROUNDS TOWARD ENTRY -- slightly easier to reach than asked for.
+    return price_for(symbol, raw, "target", direction, tick=tick)
 
 
-def stop_trigger(stop: float, direction: str) -> float:
+def stop_trigger(stop: float, direction: str, *,
+                 tick: float = None, symbol: str = None) -> float:
     """Trigger just inside the stop, on the side price approaches from."""
     s = float(stop)
-    return round_tick(s * (1 - STOP_TRIGGER_BUFFER) if str(direction).upper() == "LONG"
-                      else s * (1 + STOP_TRIGGER_BUFFER))
+    raw = (s * (1 - STOP_TRIGGER_BUFFER) if str(direction).upper() == "LONG"
+           else s * (1 + STOP_TRIGGER_BUFFER))
+    # A STOP ROUNDS AWAY FROM ENTRY -- never tighter than asked for.
+    return price_for(symbol, raw, "stop", direction, tick=tick)
 
 
 def exit_side(direction: str) -> str:
@@ -458,7 +601,7 @@ def await_fill(order_id: str, timeout: float = FILL_POLL_SECONDS,
 
 def protect(symbol: str, direction: str, qty: int, product: str,
             fill_price: float, stop_price: float, kite=None,
-            place_target: bool = None) -> dict:
+            place_target: bool = None, tick: float = None) -> dict:
     """
     Place the stop and the 2R target for a filled position.
 
@@ -508,11 +651,20 @@ def protect(symbol: str, direction: str, qty: int, product: str,
                           "target leg and no OCO. The protection mechanism is "
                           "a TWO-leg GTT; refusing to place half of it."}
 
-    tgt = target_price(fill_price, stop_price, d)
-    return _protect_cnc_gtt(symbol, d, qty, fill_price, stop_price, tgt, kite)
+    # THE TARGET IS A BROKER PRICE (the OCO's second leg), so it resolves the
+    # instrument's tick like every other one. _protect_cnc_gtt re-rounds it
+    # against its own lookup, which is the price-independence axis.
+    try:
+        tgt = target_price(fill_price, stop_price, d, symbol=symbol, tick=tick)
+    except TickUnknown as e:
+        return {"ok": False, "mechanism": "NONE", "legs": {},
+                "reason": f"cannot price a target: {e}"}
+    return _protect_cnc_gtt(symbol, d, qty, fill_price, stop_price, tgt,
+                            kite, tick=tick)
 
 
-def gtt_leg_limit(trigger: float, direction: str) -> float:
+def gtt_leg_limit(trigger: float, direction: str, *,
+                  tick: float = None, symbol: str = None) -> float:
     """The limit price for a GTT leg, placed BELOW its trigger for a sell.
 
     THIS FIXES A STOP THAT WOULD TRIGGER AND NOT FILL. The first version of
@@ -538,11 +690,14 @@ def gtt_leg_limit(trigger: float, direction: str) -> float:
     """
     t = float(trigger)
     if str(direction).upper() == "LONG":
-        return round_tick(t * (1 - STOP_LIMIT_SLIP_PCT))     # SELL, below
-    return round_tick(t * (1 + STOP_LIMIT_SLIP_PCT))         # BUY, above
+        return price_for(symbol, t * (1 - STOP_LIMIT_SLIP_PCT), "exit",
+                         "LONG", tick=tick)                  # SELL, below
+    return price_for(symbol, t * (1 + STOP_LIMIT_SLIP_PCT), "exit",
+                     "SHORT", tick=tick)                     # BUY, above
 
 
-def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
+def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None,
+                     tick: float = None) -> dict:
     """ONE two-leg OCO GTT. Stop leg and target leg, either cancelling the other.
 
     THE MECHANISM THE OPERATOR ALREADY USES BY HAND. One leg firing cancels the
@@ -584,9 +739,11 @@ def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
                 "reason": "no target price; an OCO requires two legs"}
 
     side = exit_side(direction)                      # SELL, for a long
-    trig = stop_trigger(stop, direction)
-    stop_px, tgt_px = round_tick(stop), round_tick(tgt)
-    trig = round_tick(trig)
+    # THE INSTRUMENT'S OWN TICK, resolved once for every price in this call.
+    _tick, _tsrc = _tick_or_raise(symbol, tick)
+    stop_px = price_for(symbol, stop, "stop", direction, tick=_tick)
+    tgt_px = price_for(symbol, tgt, "target", direction, tick=_tick)
+    trig = stop_trigger(stop, direction, tick=_tick, symbol=symbol)
 
     # SANITY BEFORE SENDING. A long's stop must sit below its target or the two
     # trigger values are not ascending and the legs pair against the wrong
@@ -603,14 +760,18 @@ def _protect_cnc_gtt(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict
     # EACH LEG'S LIMIT SITS BELOW ITS OWN TRIGGER, because both legs are SELLs.
     # See gtt_leg_limit: pricing the stop leg AT the stop put the limit above
     # the trigger and produced a stop that fires and never fills.
-    orders = [{**common, "price": gtt_leg_limit(trig, direction)},
-              {**common, "price": gtt_leg_limit(tgt_px, direction)}]
+    orders = [{**common, "price": gtt_leg_limit(trig, direction, tick=_tick,
+                                               symbol=symbol)},
+              {**common, "price": gtt_leg_limit(tgt_px, direction, tick=_tick,
+                                               symbol=symbol)}]
 
     try:
         gid = kite.place_gtt(trigger_type="two-leg", tradingsymbol=symbol,
                              exchange="NSE",
                              trigger_values=[trig, tgt_px],
-                             last_price=round_tick(fill), orders=orders)
+                             last_price=price_for(symbol, fill, "entry",
+                                                 direction, tick=_tick),
+                             orders=orders)
         gid = gid.get("trigger_id") if isinstance(gid, dict) else gid
     except Exception as e:
         # NO SECOND GTT ATTEMPT. The caller exits the position on a different
@@ -663,7 +824,7 @@ def _protect_mis_sl(symbol, direction, qty, fill, stop, tgt, kite=None) -> dict:
 
 
 def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
-                 stop_price: float, kite=None) -> dict:
+                 stop_price: float, kite=None, tick: float = None) -> dict:
     """DAY 0: a regular SL (stop-loss LIMIT) order. Not a GTT.
 
     WHY NOT A GTT TODAY. A GTT checks the DEMAT account, and shares bought
@@ -699,8 +860,15 @@ def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
         return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
                 "reason": "kite unavailable — cannot place the day-0 SL"}
 
-    trig = stop_trigger(stop_price, direction)
-    lim = gtt_leg_limit(trig, direction)
+    # ONE TICK FOR BOTH PRICES IN THIS ORDER. The SL carries a trigger AND a
+    # limit and both reach the broker; on 2026-10-15 both were off-tick.
+    try:
+        _tick, _tsrc = _tick_or_raise(symbol, tick)
+    except TickUnknown as e:
+        return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
+                "reason": f"cannot price a stop: {e}"}
+    trig = stop_trigger(stop_price, direction, tick=_tick, symbol=symbol)
+    lim = gtt_leg_limit(trig, direction, tick=_tick, symbol=symbol)
     side = exit_side(direction)                      # SELL
     try:
         oid = kite.place_order(
@@ -711,7 +879,9 @@ def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
     except Exception as e:
         log.error(f"{symbol}: day-0 SL REFUSED ({type(e).__name__}: {e})")
         return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
-                "stop": round_tick(stop_price), "stop_trigger": trig,
+                "stop": price_for(symbol, stop_price, "stop", direction,
+                                  tick=_tick),
+                "stop_trigger": trig, "tick": _tick,
                 "reason": f"day-0 SL failed: {type(e).__name__}: {e}"}
     if not oid:
         return {"ok": False, "mechanism": "SL_DAY0", "legs": {},
@@ -721,7 +891,9 @@ def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
              f"{qty} {side} CNC, DAY validity")
     return {"ok": True, "mechanism": "SL_DAY0",
             "legs": {"day0_sl_order_id": oid},
-            "stop": round_tick(stop_price), "stop_trigger": trig,
+            "stop": price_for(symbol, stop_price, "stop", direction,
+                              tick=_tick),
+            "stop_trigger": trig, "tick": _tick, "tick_source": _tsrc,
             "limit": lim, "target": None,
             "reason": f"day-0 SL {oid} (trigger {trig} / limit {lim})"}
 
@@ -755,7 +927,7 @@ def split_quantity(qty: int, oco_fraction: float = None,
 
 def place_overnight_gtts(symbol: str, direction: str, qty: int,
                          fill_price: float, stop_price: float,
-                         kite=None) -> dict:
+                         kite=None, tick: float = None) -> dict:
     """TWO GTTs for one position: an OCO on half, a stop-only GTT on half.
 
     -> {"ok", "legs", "oco_qty", "trailed_qty", "stop", "target", "reason"}
@@ -791,12 +963,18 @@ def place_overnight_gtts(symbol: str, direction: str, qty: int,
                           f"{qty}"}
 
     legs, failures = {}, []
-    tgt = target_price(fill_price, stop_price, direction)
+    try:
+        tgt = target_price(fill_price, stop_price, direction, symbol=symbol,
+                           tick=tick)
+    except TickUnknown as e:
+        log.error(f"{symbol}: cannot price the overnight target ({e})")
+        return {"ok": False, "mechanism": "GTT_SPLIT", "legs": {},
+                "reason": f"cannot price a target: {e}"}
 
     # ── the OCO half: stop + target ───────────────────────────────
     if oco_qty > 0:
         r = _protect_cnc_gtt(symbol, direction, oco_qty, fill_price,
-                             stop_price, tgt, kite)
+                             stop_price, tgt, kite, tick=tick)
         if r.get("ok"):
             legs["oco_trigger_id"] = (r.get("legs") or {}).get("oco_trigger_id")
             legs["oco_qty"] = oco_qty
@@ -809,7 +987,7 @@ def place_overnight_gtts(symbol: str, direction: str, qty: int,
     # ── the trailed half: stop only, single-leg ───────────────────
     if trailed_qty > 0:
         r2 = _gtt_stop_only(symbol, direction, trailed_qty, fill_price,
-                            stop_price, kite)
+                            stop_price, kite, tick=tick)
         if r2.get("ok"):
             legs["trail_trigger_id"] = (r2.get("legs") or {}).get("stop_trigger_id")
             legs["trail_qty"] = trailed_qty
@@ -821,14 +999,18 @@ def place_overnight_gtts(symbol: str, direction: str, qty: int,
         log.error(f"{symbol}: overnight GTTs INCOMPLETE — " + "; ".join(failures))
     return {"ok": ok, "mechanism": "GTT_SPLIT", "legs": legs,
             "oco_qty": oco_qty, "trailed_qty": trailed_qty,
-            "stop": round_tick(stop_price), "target": round_tick(tgt),
+            "stop": _rp(symbol, stop_price, "stop", direction),
+            "target": _rp(symbol, tgt, "target", direction),
             "reason": ("; ".join(failures) if failures else
-                       f"OCO {oco_qty} (stop {round_tick(stop_price)} / target "
-                       f"{round_tick(tgt)}) + trailed {trailed_qty} (stop "
-                       f"{round_tick(stop_price)})")}
+                       f"OCO {oco_qty} (stop "
+                       f"{_rp(symbol, stop_price, 'stop', direction)} / target "
+                       f"{_rp(symbol, tgt, 'target', direction)}) + trailed "
+                       f"{trailed_qty} (stop "
+                       f"{_rp(symbol, stop_price, 'stop', direction)})")}
 
 
-def _gtt_stop_only(symbol, direction, qty, fill, stop, kite=None) -> dict:
+def _gtt_stop_only(symbol, direction, qty, fill, stop, kite=None,
+                   tick: float = None) -> dict:
     """A single-leg GTT: stop only, nothing to orphan, free to be trailed.
 
     THIS IS THE HALF THAT RUNS. No target, so a winner is not capped -- the
@@ -841,15 +1023,22 @@ def _gtt_stop_only(symbol, direction, qty, fill, stop, kite=None) -> dict:
     if kite is None:
         return {"ok": False, "mechanism": "GTT_STOP_ONLY", "legs": {},
                 "reason": "kite unavailable"}
-    trig = round_tick(stop_trigger(stop, direction))
-    lim = gtt_leg_limit(trig, direction)
+    try:
+        _tick, _tsrc = _tick_or_raise(symbol, tick)
+    except TickUnknown as e:
+        return {"ok": False, "mechanism": "GTT_STOP_ONLY", "legs": {},
+                "reason": f"cannot price a stop: {e}"}
+    trig = stop_trigger(stop, direction, tick=_tick, symbol=symbol)
+    lim = gtt_leg_limit(trig, direction, tick=_tick, symbol=symbol)
     order = {"exchange": "NSE", "tradingsymbol": symbol,
              "transaction_type": exit_side(direction), "quantity": int(qty),
              "order_type": "LIMIT", "product": "CNC", "price": lim}
     try:
         sid = kite.place_gtt(trigger_type="single", tradingsymbol=symbol,
                              exchange="NSE", trigger_values=[trig],
-                             last_price=round_tick(fill), orders=[order])
+                             last_price=price_for(symbol, fill, "entry",
+                                                 direction, tick=_tick),
+                             orders=[order])
         sid = sid.get("trigger_id") if isinstance(sid, dict) else sid
     except Exception as e:
         log.error(f"{symbol}: stop-only GTT REFUSED ({type(e).__name__}: {e})")
@@ -862,13 +1051,15 @@ def _gtt_stop_only(symbol, direction, qty, fill, stop, kite=None) -> dict:
              f"{qty} CNC, trailed")
     return {"ok": True, "mechanism": "GTT_STOP_ONLY",
             "legs": {"stop_trigger_id": sid},
-            "stop": round_tick(stop), "stop_trigger": trig, "target": None,
+            "stop": price_for(symbol, stop, "stop", direction, tick=_tick),
+            "stop_trigger": trig, "tick": _tick, "target": None,
             "reason": f"stop-only GTT {sid} (trigger {trig})"}
 
 
 def next_stop(entry: float, current_stop: float, high_since_entry: float,
               last_close: float, swing_low: float | None,
-              direction: str = "LONG") -> dict:
+              direction: str = "LONG", *,
+              tick: float = None, symbol: str = None) -> dict:
     """Where the stop should be after today's close. -> {"stop", "why", "moved"}
 
     THE RULE, and it is the operator's, verbatim:
@@ -933,7 +1124,9 @@ def next_stop(entry: float, current_stop: float, high_since_entry: float,
     # THE GUARD IS THE LAST THING THAT TOUCHES THE NUMBER. Anything above that
     # produced a looser stop raises here rather than being sent to the broker.
     final = tighten_only(cur, proposed, d, label="trailing stop")
-    return {"stop": final, "why": why, "moved": final != round_tick(cur)}
+    return {"stop": final, "why": why,
+            "moved": final != (price_for(symbol, cur, "stop", "LONG", tick=tick)
+                               if tick else round_tick(cur))}
 
 
 def swing_low_since(bars, bars_width: int = None) -> float | None:
@@ -1124,7 +1317,19 @@ def emergency_exit(symbol: str, direction: str, qty: int, product: str,
         return {"ok": False, "order_id": None,
                 "reason": "emergency exit could not read an LTP to price a limit "
                           "order — POSITION IS OPEN AND UNPROTECTED"}
-    lim = exit_limit_price(ltp, direction)
+    # THE FALLBACK'S OWN TICK LOOKUP. It must not share a resolved value with
+    # the primary: see assert_independent's price axis. Same instrument, so the
+    # same tick -- but looked up independently, so a stale or wrong value in
+    # one path cannot silently propagate into the other.
+    try:
+        _etick, _etsrc = _tick_or_raise(symbol)
+    except TickUnknown as e:
+        log.critical(f"{symbol}: cannot price an emergency exit ({e}) — "
+                     f"POSITION IS OPEN AND UNPROTECTED")
+        return {"ok": False, "order_id": None,
+                "reason": f"emergency exit could not price itself: {e} — "
+                          f"POSITION IS OPEN AND UNPROTECTED"}
+    lim = exit_limit_price(ltp, direction, tick=_etick, symbol=symbol)
     log.error(f"{symbol}: EMERGENCY EXIT — {side} {qty} LIMIT {lim} "
               f"(ltp {ltp}, {EXIT_LIMIT_SLIP_PCT*100:.1f}% through) ({why})")
     try:

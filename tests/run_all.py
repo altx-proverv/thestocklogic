@@ -59,6 +59,35 @@ os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
 # discovered is a losing game -- this is the second one. A suite that wants real
 # state has to opt out deliberately, which is the right way round.
 os.environ["ATLAS_DRILL"] = "1"
+# ── A SEEDED TICK MAP, SO LOOKUPS SUCCEED WITHOUT A BROKER ────────
+#
+# Tick size is per instrument as of 2026-10-16 and price_for() REFUSES rather
+# than defaulting when none is known -- which is the whole point, and which
+# would otherwise make every protective call in the suite raise.
+#
+# Production seeds this from kite.instruments("NSE") in the 08:30 job. The
+# suite seeds a fixture instead: every universe symbol at 0.05 so existing
+# expectations hold, plus the real ticks for the symbols that matter to the
+# tick tests. A suite that needs a different tick passes tick= explicitly.
+_TICKMAP = Path(tempfile.gettempdir()) / "atlas_test_tick_map.json"
+os.environ.setdefault("ATLAS_TICK_MAP_FILE", str(_TICKMAP))
+if os.environ["ATLAS_TICK_MAP_FILE"] == str(_TICKMAP):
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _day = _dt.now(_tz(_td(hours=5, minutes=30))).date().isoformat()
+    try:
+        sys.path.insert(0, str(ROOT))
+        from engine.universe import SYMBOL_SECTOR_MAP as _MAP
+        _seed = {s: 0.05 for s in _MAP}
+    except Exception:
+        _seed = {}
+    _seed.update({"RELIANCE": 0.10, "ATHERENERG": 0.10, "TATAELXSI": 0.10,
+                  "SONATSOFTW": 0.05, "HEXT": 0.05, "IDEA": 0.01,
+                  "MRF": 5.00, "MARUTI": 1.00, "ABB": 0.50,
+                  "TATASTEEL": 0.05, "X": 0.05, "TESTSYM": 0.05})
+    _TICKMAP.write_text(_json.dumps({"days": {_day: _seed},
+                                     "last_known": _seed}))
+
 os.environ.setdefault(
     "ATLAS_BREAKER_RANGE_FILE",
     str(Path(tempfile.gettempdir()) / "atlas_test_breaker_range.json"))

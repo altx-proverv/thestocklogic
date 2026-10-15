@@ -464,6 +464,38 @@ BREAKER_RANGE_FILE = Path(os.environ.get("ATLAS_BREAKER_RANGE_FILE")
 BREAKER_BLOCKED_FILE = Path(os.environ.get("ATLAS_BREAKER_BLOCKED_FILE")
                             or "/var/lib/atlas/breaker_blocked.json")
 
+# ── TICK SIZE IS PER INSTRUMENT ───────────────────────────────────
+#
+# exits.py carried TICK = 0.05 as a module constant and rounded every
+# protective price through it. ATHERENERG trades on 0.10, so on 2026-10-15 the
+# broker refused the day-0 SL, the emergency exit, the OCO GTT and the
+# stop-only GTT -- four mechanisms, one wrong constant, and a position left
+# open with no protection.
+#
+# THERE IS NO SAFE BLANKET VALUE. Measured across the 745-symbol universe from
+# kite.instruments("NSE"):
+#
+#     0.01   166 symbols    IDEA, CANBK, ASHOKLEY, BANKBARODA ...
+#     0.05   289 symbols    INFY, SONATSOFTW, HEXT, SWIGGY ...
+#     0.10   244 symbols    RELIANCE, ATHERENERG, ACC, TATAELXSI ...
+#     0.50    21 symbols    ABB, ALKEM, APOLLOHOSP, DIVISLAB ...
+#     1.00    13 symbols    MARUTI, ULTRACEMCO, DIXON, OFSS ...
+#     5.00    10 symbols    MRF, PAGEIND, BOSCHLTD, SHREECEM ...
+#
+# and price does not determine tick -- three of the five adjacent bands
+# overlap, so it cannot be inferred. The only universally valid rounding is
+# 5.00, which on a Rs240 stock is a 2% error and useless as a stop. So every
+# price uses its own instrument's tick, read from the master and cached.
+TICK_MAP_FILE = Path(os.environ.get("ATLAS_TICK_MAP_FILE")
+                     or "/var/lib/atlas/tick_map.json")
+
+# The tick used when a symbol has never been seen. NOT a fallback for a failed
+# refresh -- that falls back to the last known tick per symbol. This is only
+# for a symbol with no cached tick at all, and it is DELIBERATELY ABSENT: there
+# is no value that is both safe and sane, so atlas refuses that one candidate
+# instead. See atlas/execution/tick_map.py.
+TICK_UNKNOWN_REFUSES = True
+
 # ══════════════════════════════════════════════════════════════════
 # PROTECTION: DAY 0 IS AN ORDER, DAY 1 ONWARDS IS A GTT
 # ══════════════════════════════════════════════════════════════════

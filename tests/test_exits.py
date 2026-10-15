@@ -117,6 +117,17 @@ class FakeKite:
             raise RuntimeError("delete refused")
 
 
+def _tick_raises(X):
+    """price_for with no tick and no cached symbol must refuse, not default."""
+    try:
+        X.price_for("__NOSUCHSYMBOL__", 100.0, "stop", "LONG")
+    except X.TickUnknown as e:
+        return e
+    except Exception as e:
+        return e
+    return None
+
+
 def main() -> int:
     ok = True
 
@@ -132,19 +143,31 @@ def main() -> int:
     print("-" * 78)
     # An off-tick price is rejected outright, and a rejected stop is an
     # unprotected position -- which becomes a market exit. Rounding is not cosmetic.
-    check("1234.567 rounds to the 0.05 tick", X.round_tick(1234.567), 1234.55)
+    # THE TICK IS NOW PER INSTRUMENT. round_tick is the legacy shim for
+    # arithmetic that never reaches the broker; price_for is the one that does.
+    check("the shim still rounds 1234.567 to 0.05", X.round_tick(1234.567), 1234.55)
+    check("  and to 0.10 when told", X.round_to_tick(1234.567, 0.10, X.NEAREST), 1234.6)
+    check("a LONG stop rounds AWAY from entry (down)",
+          X.price_for("X", 1418.86, "stop", "LONG", tick=0.10), 1418.8)
+    check("a LONG entry rounds UP, to fill",
+          X.price_for("X", 1453.72, "entry", "LONG", tick=0.10), 1453.8)
+    check("a LONG target rounds toward entry (down)",
+          X.price_for("X", 1523.47, "target", "LONG", tick=0.10), 1523.4)
+    check("an unknown tick RAISES rather than guessing",
+          isinstance(_tick_raises(X), X.TickUnknown), True)
     check("  and 99.999", X.round_tick(99.999), 100.0)
     # 2R is measured from the FILL, not from entry_ref: a MARKET order slips, and
     # risk actually taken is |fill - stop|.
-    check("LONG 2R above a 100/95 fill/stop", X.target_price(100, 95, "LONG"), 110.0)
+    check("LONG 2R above a 100/95 fill/stop", X.target_price(100, 95, "LONG", tick=0.05), 110.0)
     check("SHORT 2R below a 100/105 fill/stop",
-          X.target_price(100, 105, "SHORT"), 90.0)
+          X.target_price(100, 105, "SHORT", tick=0.05), 90.0)
     check("a slipped long fill moves the target, not the stop",
-          X.target_price(101, 95, "LONG"), 113.0, "fill 101 -> 6R risk -> 113")
+          X.target_price(101, 95, "LONG", tick=0.05), 113.0,
+          "fill 101 -> 6R risk -> 113")
     check("LONG exit side is SELL", X.exit_side("LONG"), "SELL")
     check("SHORT exit side is BUY", X.exit_side("SHORT"), "BUY")
     try:
-        X.target_price(100, 100, "LONG")
+        X.target_price(100, 100, "LONG", tick=0.05)
         ok = False
         print("  zero-risk fill must raise                            ** DID NOT **")
     except ValueError:
@@ -192,7 +215,7 @@ def main() -> int:
     print("-" * 78)
     k = FakeKite()
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
-                  place_target=True)
+                  place_target=True, tick=0.05)
     check("two-leg OCO is preferred", r["mechanism"], "GTT_OCO")
     check("  and reports ok", r["ok"], True)
     check("  target is 2R", r["target"], 110.0)
@@ -220,7 +243,7 @@ def main() -> int:
     # LIMIT, on the orders API.
     k = FakeKite(gtt_two_leg=False)
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
-                  place_target=True)
+                  place_target=True, tick=0.05)
     check("two-leg refused -> NOT ok, no second GTT attempt", r["ok"], False)
     check("  mechanism is still named GTT_OCO", r["mechanism"], "GTT_OCO")
     check("  exactly one place_gtt call was made",
@@ -267,7 +290,7 @@ def main() -> int:
     print("-" * 78)
     k = FakeKite(fail=("gtt",))
     r = X.protect("RELIANCE", "LONG", 45, "CNC", 100.0, 95.0, kite=k,
-                  place_target=True)
+                  place_target=True, tick=0.05)
     check("the OCO GTT refused -> NOT ok", r["ok"], False)
     # THERE IS NO LONGER A "TARGET REFUSED BUT STOP PLACED" STATE. One
     # instruction carries both legs, so it is placed whole or not at all --

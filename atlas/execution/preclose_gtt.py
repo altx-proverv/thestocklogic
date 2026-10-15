@@ -220,8 +220,18 @@ def trail(trade: dict, kite, today: date, dry: bool = False) -> dict:
                 "stop": nxt["stop"], "reason": nxt["why"]}
 
     new_stop = nxt["stop"]
-    trig = X.round_tick(X.stop_trigger(new_stop, "LONG"))
-    lim = X.gtt_leg_limit(trig, "LONG")
+    # THE INSTRUMENT'S OWN TICK. This was X.round_tick(...) on the 0.05
+    # constant, which is one of the four prices the broker refused on
+    # 2026-10-15 -- the trail writes a GTT trigger, so it is broker-bound.
+    try:
+        _tick, _ = X._tick_or_raise(sym)
+    except Exception as e:
+        log.error(f"{sym}: cannot price a trailed stop ({e}) — leaving the "
+                  f"existing GTT alone")
+        return {"ok": False, "symbol": sym, "moved": False,
+                "reason": f"cannot price a stop: {e}"}
+    trig = X.stop_trigger(new_stop, "LONG", tick=_tick, symbol=sym)
+    lim = X.gtt_leg_limit(trig, "LONG", tick=_tick, symbol=sym)
     order = {"exchange": "NSE", "tradingsymbol": sym,
              "transaction_type": "SELL", "quantity": trail_q,
              "order_type": "LIMIT", "product": "CNC", "price": lim}
