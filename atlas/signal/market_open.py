@@ -917,7 +917,21 @@ def cycle(state: Session) -> dict:
         # watch-only, and `or ""` is what makes None land there rather than
         # inheriting the default and becoming tradeable.
         kind = str(sig.get("publication_kind") or "")
-        actionable = kind == "signal"
+        # A CANDIDATE IS ENTERABLE, 2026-10-16. This was `kind == "signal"`,
+        # so a candidate could never be entered whatever it did.
+        #
+        # WHY IT CHANGED. A candidate is not a worse setup -- it is a row with
+        # a valid zone whose PUBLISHED STOP did not fit
+        # [MIN_STOP_PCT, MAX_STOP_PCT]. On 2026-10-15 all 103 long candidates
+        # were demoted for exactly that and nothing else, 86 too wide and 17
+        # too tight, and they reached their zones at 20.3% against the
+        # signals' 19.0%. The stop band was the gate, not the label.
+        #
+        # ATLAS derives its own stop from structure now (derived_stop.py), so
+        # a candidate runs the SAME gates as a signal -- no separate
+        # thresholds, nothing relaxed. The kind travels onto the trade row so
+        # the two populations stay separable in the record.
+        actionable = kind in ("signal", "candidate")
         is_held = (sym, direction) in held
 
         # THE LIVE VIEW COVERS EVERY WATCHED PAIR, not only the enterable ones.

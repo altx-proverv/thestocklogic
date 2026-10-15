@@ -89,7 +89,14 @@ def fetch_signals() -> pd.DataFrame:
         # column existed. The migration defaults and backfills to 'signal' so this
         # is safe, and it is the same shape as the filter that would have quietly
         # excluded 443 rows from the wrong-side exclusion.
-        f"?publication_kind=eq.signal"
+        # CANDIDATES ARE INCLUDED, 2026-10-16. They became
+        # enterable, so excluding them here would mean ATLAS
+        # trades rows that never reach the accuracy record --
+        # the same class of problem as a published hit rate
+        # that describes a different population from the one
+        # traded. publication_kind is selected so the two can
+        # still be reported apart.
+        f"?publication_kind=in.(signal,candidate)"
         f"&select=signal_date,symbol,direction,setup_name,entry_ref,sl,target_1&limit=20000",
         headers=_headers(), timeout=60)
     if r.status_code != 200:

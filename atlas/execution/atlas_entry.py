@@ -921,6 +921,30 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # size_for_trade dispatches on SIZING_MODE. In fixed_notional mode the quantity
     # comes from the Rs10,000 target and risk is whatever the stop implies -- there
     # is no risk budget to report and the result carries no risk_budget key.
+    # ── THE STOP ATLAS WILL ACTUALLY USE ──────────────────────────
+    #
+    # The published stop is a proposal. On 2026-10-15 not one of 103 long
+    # candidates had one inside [MIN_STOP_PCT, MAX_STOP_PCT] -- 86 too wide,
+    # 17 too tight -- so the band, not publication_kind, was refusing them all.
+    #
+    # derive() returns the published stop unchanged when it fits, and otherwise
+    # the NEAREST SMC level that does: demand OB low, then bull FVG low, then
+    # the last swing low, all already computed by the nightly chain. Only when
+    # no level fits does it clamp to the band edge, and it says so.
+    #
+    # BOTH STOPS ARE RECORDED. If the derived stops get hit far more often than
+    # the published ones would have, that is the finding -- and it cannot be
+    # recovered later from one column.
+    from atlas.execution.derived_stop import derive as _derive_stop
+    _ds = _derive_stop(symbol, float(ltp), float(stop_price), direction)
+    if _ds["stop"] and _ds["source"] != "published":
+        log.info(f"{symbol}: published stop {stop_price} is "
+                 f"{(_ds['published_pct'] or 0):.2f}% from entry — using "
+                 f"{_ds['stop']:.2f} from {_ds['source']} "
+                 f"({_ds['stop_pct']:.2f}%). {_ds['why']}")
+    published_stop = float(stop_price)
+    if _ds["stop"]:
+        stop_price = float(_ds["stop"])
     sizing = size_for_trade(entry_price=ltp, stop_price=stop_price,
                             direction=direction, available_funds=spendable)
     if sizing.get("qty", 0) <= 0:
@@ -990,6 +1014,15 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}
 
     intent = _build_intent(signal, symbol, direction, ltp, sizing, ctx)
+    # BOTH STOPS AND THE KIND, onto the row. The migration that adds these
+    # columns is migrations/PENDING_atlas_trades_derived_stop.sql; until it is
+    # applied _reserve_intent's column probe drops them, which is why the
+    # reserve path probes rather than assuming -- the same shape that kept
+    # publishing working before signals.engine_sha existed.
+    intent["published_stop"] = published_stop
+    intent["stop_source"] = _ds["source"]
+    intent["stop_pct_used"] = _ds["stop_pct"]
+    intent["publication_kind"] = str(signal.get("publication_kind") or "")
 
     if dry_run:
         # EVERY GATE HAS RUN. The intent is built, which means sizing, the

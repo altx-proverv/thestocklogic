@@ -53,9 +53,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 HALT = Path(os.environ["ATLAS_HALT_FILE"])
 
 # publication_kind IS PART OF THE FIXTURE NOW. The loop tests it positively --
-# only 'signal' is enterable -- because historical rows are deliberately NULL and
-# the old `!= "signal"` with a default of "signal" would have made a NULL row
-# tradeable. get_signals always supplies the key (setdefault in the
+# 'signal' and 'candidate' are enterable as of 2026-10-16, a NULL row is not --
+# because historical rows are deliberately NULL and the old `!= "signal"` with a
+# default of "signal" would have made a NULL row tradeable. get_signals always supplies the key (setdefault in the
 # missing-column path), so a row without it is not a production state; the case
 # below asserts it fails SAFE anyway.
 SIG = {"symbol": "TCS", "direction": "LONG", "entry_ref": 100.0,
@@ -244,10 +244,18 @@ def main() -> int:
     print(f"  {'already shadowed today -> skipped':<46}"
           f"{'ok' if good else '** RE-LOGGED **'}")
 
-    # ONLY 'signal' IS ENTERABLE, and the unsafe directions are the ones worth
-    # asserting: a candidate must not be entered, and neither must a row whose
-    # kind is NULL or missing -- that is what the old default got wrong.
-    for kind, want_entered in (("signal", True), ("candidate", False),
+    # A CANDIDATE IS ENTERABLE AS OF 2026-10-16, and this assertion is
+    # INVERTED rather than weakened. A candidate is not a worse setup -- it is
+    # a row whose PUBLISHED STOP did not fit the band, which ATLAS now derives
+    # for itself. All 103 long candidates on 2026-10-15 were demoted for
+    # exactly that and they reached their zones slightly more often than the
+    # signals did.
+    #
+    # WHAT HAS NOT CHANGED, and is the half worth keeping: a row whose kind is
+    # NULL, empty or missing is still NOT enterable. Those are pre-2026-10-01
+    # rows where the column is deliberately null, and the old `!= "signal"`
+    # with a "signal" default made them tradeable. Only the two real kinds are.
+    for kind, want_entered in (("signal", True), ("candidate", True),
                                (None, False), ("", False), ("__absent__", False)):
         s = fresh_state()
         row = dict(SIG)
