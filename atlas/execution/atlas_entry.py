@@ -1014,11 +1014,12 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         return {"status": "BLOCKED_KILLSWITCH", "reason": "kill switch active"}
 
     intent = _build_intent(signal, symbol, direction, ltp, sizing, ctx)
-    # BOTH STOPS AND THE KIND, onto the row. The migration that adds these
-    # columns is migrations/PENDING_atlas_trades_derived_stop.sql; until it is
-    # applied _reserve_intent's column probe drops them, which is why the
-    # reserve path probes rather than assuming -- the same shape that kept
-    # publishing working before signals.engine_sha existed.
+    # BOTH STOPS AND THE KIND, onto the row. The columns were added by
+    # migrations/atlas_trades_derived_stop.sql, applied 2026-10-16.
+    # _reserve_intent still probes for each rather than assuming, so a database
+    # restored from a backup taken before the migration costs four reporting
+    # fields instead of every entry -- the same shape that kept publishing
+    # working before signals.engine_sha existed.
     intent["published_stop"] = published_stop
     intent["stop_source"] = _ds["source"]
     intent["stop_pct_used"] = _ds["stop_pct"]
@@ -1483,6 +1484,32 @@ def _reserve_intent(intent: dict) -> tuple:
            else {}),
         **({"risk_inr": intent.get("risk_actual")}
            if _trades_has("risk_inr") else {}),
+        # BOTH STOPS, WHERE THE USED ONE CAME FROM, AND THE KIND.
+        # atlas_trades_derived_stop applied 2026-10-16. These were set on the
+        # intent from the day derive() was wired in and never reached the row:
+        # _reserve_intent builds its own `rec` and only sends keys it names, so
+        # an intent field that is not listed here is silently dropped. Four
+        # columns of the record that explains every candidate entry were
+        # missing for exactly that reason.
+        #
+        # published_stop is the one that matters most. A derived stop that gets
+        # hit is only interpretable against the published stop it replaced --
+        # without both, the record cannot say whether deriving helped or hurt,
+        # and that comparison is the whole reason candidates are enterable.
+        **({"published_stop": intent.get("published_stop")}
+           if _trades_has("published_stop",
+                          "the stop ATLAS was handed is not recorded, so a "
+                          "derived stop cannot be compared to it.") else {}),
+        **({"stop_source": intent.get("stop_source")}
+           if _trades_has("stop_source",
+                          "a structural stop will be indistinguishable from a "
+                          "clamp to the band edge.") else {}),
+        **({"stop_pct_used": intent.get("stop_pct_used")}
+           if _trades_has("stop_pct_used") else {}),
+        **({"publication_kind": intent.get("publication_kind")}
+           if _trades_has("publication_kind",
+                          "signal and candidate entries will not be separable "
+                          "in the record.") else {}),
         "notes": (f"RESERVED before order placement — stop Rs"
                   f"{intent.get('stop_price', 0)} | risk Rs"
                   f"{intent.get('risk_actual', 0):,.0f}"),

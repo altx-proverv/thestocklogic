@@ -28,7 +28,7 @@
 #
 #     # 3. READ IT before applying -- confirm the variable count and the job count
 #     grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' /tmp/ct.new    # expect 19
-#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 27
+#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 34
 #     diff <(grep -E '^[0-9*@]' ~/crontab.before.*) <(grep -E '^[0-9*@]' /tmp/ct.new)
 #
 #     # 4. apply
@@ -279,3 +279,33 @@ MAILTO=""
 # THE TRAIL RUNS HERE TOO, once, after the close. No intraday churn: a stop that
 # moves on every tick is a stop that gets hit by noise.
 50 9 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.execution.preclose_gtt >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+
+# ── ATLAS — THE SESSION REPORTS ────────────────────────────────────────────────
+#
+# 11:30, 13:30, 15:30 IST and a day-end at 15:50, each CUMULATIVE SINCE 09:15.
+# atlas/reporting/session_report.py. Reads only: no order is placed, modified or
+# cancelled, so these run while halted and are most useful then.
+#
+# WHY SCHEDULED AND NOT PER CYCLE. The entry loop used to alert per blocked
+# symbol per cycle -- 103 candidates failing one gate is 103 messages saying one
+# thing -- plus the paused state re-alerted for as long as it persisted. The
+# events (an entry, a self-halt, a protection failure, PRECLOSE BLIND) arrived in
+# that same stream and were lost in it. The routine status now waits for these
+# four; the events are untouched. atlas/reporting/cadence.py lists exactly what
+# was silenced and why.
+#
+# THE 15:50 ONE IS 30 MINUTES AFTER preclose_gtt AND THAT IS THE POINT. It names,
+# for every open long, which overnight GTT was placed and whether it CONFIRMED at
+# the broker -- read back from get_gtts(), never from what ATLAS recorded
+# attempting. If a position is open with no confirmed GTT that goes in the first
+# line of the message. The exchange flushes day orders at 16:00, so 15:50 is the
+# last moment a human can still fix it by hand.
+#
+# 06:00 UTC = 11:30 IST
+0 6 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.session_report --slot 1130 >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+# 08:00 UTC = 13:30 IST
+0 8 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.session_report --slot 1330 >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+# 10:00 UTC = 15:30 IST — the close
+0 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.session_report --slot 1530 >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+# 10:20 UTC = 15:50 IST — day-end, after the 15:20 GTT handover
+20 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.session_report --slot dayend >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1

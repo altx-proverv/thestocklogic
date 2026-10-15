@@ -77,6 +77,7 @@ from atlas.execution import reconcile
 from atlas.risk import breaker
 from atlas.risk.kill_switch import get_agent_state, RiskDataUnavailable
 from atlas.reporting.telegram import send
+from atlas.reporting.cadence import telegram_silenced
 
 log = logging.getLogger(__name__)
 
@@ -147,6 +148,16 @@ def alert(kind: str, text: str, key: str = "") -> None:
     # from it -- a suppressed alert is still a failure that happened.
     if _session is not None:
         _session.note_failure(kind)
+    # ROUTINE STATUS DOES NOT GO TO TELEGRAM, 2026-10-16. The journal line
+    # above and the note_failure count are unchanged -- only the delivery
+    # stops, and atlas/reporting/session_report.py reports every silenced kind
+    # on the 11:30 / 13:30 / 15:30 / 15:50 schedule. See
+    # atlas/reporting/cadence.py for the list and the reason for each.
+    quiet, why = telegram_silenced(kind)
+    if quiet:
+        log.info(f"[{kind}] not sent to Telegram (routine status; it is in the "
+                 f"scheduled report). {why.splitlines()[0] if why else ''}")
+        return
     # send() DOES NOT RAISE. It catches its own exceptions and returns False --
     # including the "Telegram not configured" path, which only logs a warning. So
     # this except clause could never fire, and the return value being discarded

@@ -483,6 +483,16 @@ def _record_observed(scope: str, detail: str) -> None:
     log.error("=" * 70)
     try:
         from atlas.reporting.telegram import send
+        from atlas.reporting.cadence import telegram_silenced
+        # OBSERVED, NOT ACTED ON -- and therefore status, not an event: it is a
+        # measurement of what the breaker WOULD have blocked. Counted and
+        # listed in every session report's breaker lines instead. The stock
+        # breaker actually firing is the send below and is untouched.
+        _quiet, _ = telegram_silenced("RANGE_BREAK_OBSERVED")
+        if _quiet:
+            log.info(f"range break observed, not sent to Telegram "
+                     f"(in the scheduled report): {scope} {detail}")
+            return
         send(f"👁 <b>RANGE BREAK — OBSERVED, NOT ACTED ON</b>\n"
              f"<code>{detail[:320]}</code>\n\n"
              f"<b>Nothing was blocked.</b> BREAKER_OBSERVE_ONLY is True, so "
