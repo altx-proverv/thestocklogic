@@ -412,6 +412,44 @@ def _symbol_blocks():
                     f"probe failed: {type(e).__name__}: {e}", advisory=True)
 
 
+def _tick_map():
+    """Does a tick map exist for today, and what does it hold.
+
+    EVERY PROTECTIVE PRICE ROUNDS ON THIS. On 2026-10-15 four mechanisms were
+    refused because they rounded on a hardcoded 0.05 while the instrument
+    traded on 0.10; the map is what replaced that constant, so its freshness
+    is a thing that can stop an entry.
+
+    BLOCKING ONLY WHEN NOTHING IS KNOWN AT ALL. A missing map for today falls
+    back to the last known tick per symbol, which is almost always correct --
+    reported, not blocking. An empty map with no history means no price can be
+    computed for anything, which does block.
+    """
+    try:
+        from atlas.execution.tick_map import state
+        st = state()
+        today = st["today_symbols"]
+        lk = st["last_known_symbols"]
+        if today:
+            return _row("tick map", st["file"], f"{today} symbols", False,
+                        "yes (per day)",
+                        f"today {st['day']}; ticks {st['today_ticks']}; "
+                        f"{len(st['cached_days'])} day(s) cached")
+        if lk:
+            return _row("tick map", st["file"], "STALE", False, "yes (per day)",
+                        f"no map for {st['day']} — falling back to the last "
+                        f"known tick for each of {lk} symbol(s); the 08:30 job "
+                        f"refreshes it", advisory=True)
+        return _row("tick map", st["file"], "EMPTY", True, "yes (per day)",
+                    "no tick is known for any symbol, so no protective price "
+                    "can be computed — every entry will be refused under "
+                    "NO_TICK_SIZE_CANNOT_PRICE")
+    except Exception as e:
+        return _row("tick map", "tick map file", "UNKNOWN", False,
+                    "yes (per day)",
+                    f"probe failed: {type(e).__name__}: {e}", advisory=True)
+
+
 def _stand_down():
     """Is the session stood down for entries.
 
@@ -531,6 +569,7 @@ def inventory(include_signal_gates: bool = True, fast: bool = False) -> list:
                 _not_probed("live sentiment (Gate 1)", "live Upstox quote",
                             "it calls the market-data feed"))
     # Reads a local file, so it costs nothing and is probed even in fast mode.
+    rows.append(_tick_map())
     rows.append(_stand_down())
     rows.append(_symbol_blocks())
     # The market box needs a candle fetch, so fast mode lists it unprobed.

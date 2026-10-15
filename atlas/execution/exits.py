@@ -130,22 +130,28 @@ ORDER_SPECS = {
     # MIS, which is the fact that forced SL-M on 7 October.
     "GTT_OCO":      {"order_type": "GTT",    "needs_trigger": True,
                      "market_protection": False, "immediate": False,
-                     "api": "gtt", "product": "CNC"},
+                     "api": "gtt", "product": "CNC",
+                     "tick_source": "per_instrument"},
     # immediate, priced through the book, no trigger and no market protection
     "LIMIT_THROUGH": {"order_type": "LIMIT", "needs_trigger": False,
                       "market_protection": False, "immediate": True,
-                      "api": "orders", "product": "any"},
+                      "api": "orders", "product": "any",
+                      # resolves its OWN tick in exit_through_book, so a stale
+                      # lookup in the primary cannot propagate into it
+                      "tick_source": "per_instrument"},
     # RETIRED 2026-10-12, kept so the independence check can still name it and
     # so the record of what was tried survives. The SL stop built in 954b68e
     # existed because MIS shorts cannot take a GTT. There are no MIS shorts any
     # more, so there is nothing for it to protect.
     "SL":           {"order_type": "SL",     "needs_trigger": True,
                      "market_protection": False, "immediate": False,
-                     "api": "orders", "product": "MIS"},
+                     "api": "orders", "product": "MIS",
+                     "tick_source": "per_instrument"},
     # kept only so the independence check can name them as the thing NOT to pair
     "SLM":          {"order_type": "SL-M",   "needs_trigger": True,
                      "market_protection": True, "immediate": False,
-                     "api": "orders", "product": "MIS"},
+                     "api": "orders", "product": "MIS",
+                     "tick_source": "per_instrument"},
     "MARKET":       {"order_type": "MARKET", "needs_trigger": False,
                      "market_protection": True, "immediate": True,
                      "api": "orders", "product": "any"},
@@ -238,6 +244,24 @@ def assert_independent(primary: str = None,
     /gtt/triggers refuse a two-leg instruction will almost certainly refuse
     another one a moment later, so a GTT may never be backed by a GTT.
 
+    A SIXTH AXIS, ADDED 2026-10-16: PRICE VALIDITY.
+    ------------------------------------------------
+    The five axes above certify that no broker RULE can reject both legs. They
+    say nothing about whether both legs can compute an ACCEPTABLE PRICE, and on
+    2026-10-15 that is exactly what happened: the day-0 SL's trigger and the
+    emergency exit's limit were both rounded by round_tick() through a module
+    constant TICK = 0.05, ATHERENERG trades on 0.10, and the broker refused
+    both for the same reason within 500 milliseconds. Two mechanisms that
+    differ on every other axis are not independent if they share the number
+    they round with.
+
+    So a pair must not derive its prices from the same rounding call with the
+    same ASSUMED tick. The requirement is satisfied by each mechanism resolving
+    the instrument's tick for itself -- which is why exit_through_book does its
+    own _tick_or_raise() rather than taking the primary's resolved value, and
+    why price_for() has no default tick to fall back on. A shared CORRECT tick
+    for the same instrument is fine and unavoidable; a shared ASSUMPTION is not.
+
     THE DAY-0 PAIR SHARES AN ENDPOINT, AND THAT IS STATED RATHER THAN HIDDEN.
     SL and LIMIT_THROUGH both go through POST /orders. They differ on the four
     required axes -- resting vs immediate, trigger vs none, SL vs LIMIT,
@@ -249,6 +273,23 @@ def assert_independent(primary: str = None,
     """
     primary = primary or PRIMARY_STOP
     a, b = ORDER_SPECS[primary], ORDER_SPECS[fallback]
+    # PRICE VALIDITY, the sixth axis. A mechanism that prices itself from a
+    # hardcoded tick shares that assumption with every other mechanism that
+    # does, however they differ elsewhere.
+    if a.get("tick_source") == "constant" or b.get("tick_source") == "constant":
+        raise AssertionError(
+            f"{primary} or {fallback} prices itself from a CONSTANT tick. On "
+            f"2026-10-15 four mechanisms -- day-0 SL, emergency exit, OCO GTT "
+            f"and stop-only GTT -- all rounded through TICK = 0.05 while "
+            f"ATHERENERG traded on 0.10, and the broker refused all four. A "
+            f"pair that differs on every other axis is not independent if it "
+            f"shares the number it rounds with. Each mechanism must resolve "
+            f"the instrument's own tick.")
+    if (a.get("tick_source") == b.get("tick_source") == "shared_resolved"):
+        raise AssertionError(
+            f"{primary} and {fallback} reuse one resolved tick value. Resolve "
+            f"it per mechanism: a stale or wrong lookup in one path must not "
+            f"propagate into the other.")
     # A PRIMARY MUST REST. A stop waits for a price it hopes never comes; a
     # mechanism that executes on placement is an EXIT, not protection. Without
     # this, MARKET + LIMIT_THROUGH passes every other axis -- different type,

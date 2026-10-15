@@ -209,6 +209,29 @@ def run():
         # when none is is worse than saying nothing: drawdown and exits are
         # theirs to manage. See the same fix in telegram.py, which dropped
         # send_startup() for hardcoding "capital * 0.02".
+        # ── THE TICK MAP, REFRESHED BEFORE THE OPEN ────────────────
+        #
+        # HERE because this job already has a live broker session before the
+        # open, which is exactly what kite.instruments("NSE") needs, and
+        # nothing else has to remember. Every protective price for the session
+        # rounds on what this writes.
+        #
+        # A FAILURE HERE IS NOT FATAL: tick_for() falls back to the last known
+        # tick per symbol, which is almost always correct because tick size
+        # changes rarely. It is reported in the message either way.
+        _tm = {"ok": False, "detail": "not attempted"}
+        try:
+            from atlas.execution.tick_map import refresh as _tick_refresh
+            _tm = _tick_refresh()
+        except Exception as e:
+            _tm = {"ok": False, "detail": f"{type(e).__name__}: {e}"}
+        _tmline = (f"\U0001f4d0 Tick map: {_tm['symbols']} symbols, "
+                   f"{_tm.get('ticks')}"
+                   if _tm.get("ok") else
+                   f"\u26a0\ufe0f <b>Tick map NOT refreshed</b> — "
+                   f"{_tm.get('detail')}; protective prices will round on the "
+                   f"last known tick per symbol")
+
         send(
             f"✅ <b>ATLAS ONLINE</b>\n"
             f"Zerodha connected · Token valid\n"
@@ -225,6 +248,7 @@ def run():
             f"{_rules_line()}\n"
             f"{_halt_line()}\n"
             f"{_readiness_block()}\n"
+            f"{_tmline}\n"
             f"Market opens in 45 minutes."
         )
         return True

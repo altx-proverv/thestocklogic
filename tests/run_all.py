@@ -113,6 +113,7 @@ SUITES = [
     ("sentiment stand-down", [sys.executable,
                               "tests/test_sentiment_standdown.py"]),
     ("range breaker", [sys.executable, "tests/test_range_breaker.py"]),
+    ("tick sizes", [sys.executable, "tests/test_tick_sizes.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),
