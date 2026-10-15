@@ -329,6 +329,15 @@ def gate_state() -> list:
 # THE MESSAGE
 # ══════════════════════════════════════════════════════════════════
 
+def _pnl(v: float) -> str:
+    """Rs, Indian grouping, and an EXPLICIT SIGN. _inr() renders a gain as "95"
+    and a loss as "-95", which differ by one leading character in a message
+    read on a phone -- and the sign is the only part of a P&L figure that
+    cannot be misread without consequence."""
+    v = float(v or 0)
+    return f"{'+' if v >= 0 else '-'}Rs{_inr(abs(v))}"
+
+
 def _mark(v: str) -> str:
     return {"CONFIRMED": "✅", "NONE": "❌", "UNKNOWN": "❓"}.get(v, "❓")
 
@@ -417,7 +426,7 @@ def build(slot: str = "1130") -> tuple:
             sign = 1 if str(t.get("direction")).upper() == "LONG" else -1
             pnl = (ltp - entry) * qty * sign
             unreal += pnl
-            pl = f"LTP Rs{ltp:,.2f}  P&L {_inr(pnl)}"
+            pl = f"LTP Rs{ltp:,.2f}  P&L {_pnl(pnl)}"
         else:
             pl = "LTP unavailable — P&L not computed"
         L.append(f"  {_esc(t['symbol'])} {t.get('direction')} {qty} "
@@ -433,12 +442,12 @@ def build(slot: str = "1130") -> tuple:
         L.append(f"  {_esc(c['symbol'])} {c.get('direction')} "
                  f"{c.get('qty')} @ Rs{float(c.get('entry_price') or 0):,.2f} "
                  f"→ Rs{float(c.get('exit_price') or 0):,.2f}  "
-                 f"{_inr(float(c.get('pnl_net') or c.get('pnl') or 0))}  "
+                 f"{_pnl(float(c.get('pnl_net') or c.get('pnl') or 0))}  "
                  f"({_esc(c.get('exit_reason') or '—')})")
 
     L.append("")
-    L.append(f"<b>DAY P&L  {_inr(real + unreal)}</b>  "
-             f"(realised {_inr(real)} · open {_inr(unreal)})")
+    L.append(f"<b>DAY P&L  {_pnl(real + unreal)}</b>  "
+             f"(realised {_pnl(real)} · open {_pnl(unreal)})")
     if not ltps and opens:
         L.append("  open P&L excludes positions whose LTP could not be read")
 
