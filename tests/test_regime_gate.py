@@ -133,8 +133,11 @@ def main() -> int:
     # while BOTH were applied here. With regime reported and not applied, a
     # bull regime with bearish breadth is simply bearish sentiment -- and the
     # side that names is a short, so the label is LONG_ONLY.
-    case("bull structure vs BEARISH live read -> LONG_ONLY",
-         ctx(sentiment="bearish"), "LONG", False, "LONG_ONLY")
+    # A LONG IS STILL REFUSED ON A BEARISH READ -- the side named is a SHORT,
+    # so asking for a LONG is refused with REGIME as the countable reason.
+    # This said LONG_ONLY while shorts were off.
+    case("bull structure vs BEARISH live read -> no LONG",
+         ctx(sentiment="bearish"), "LONG", False, "REGIME")
     # SENTIMENT ALONE PERMITS A LONG, 2026-10-13. Regime is no longer applied
     # at entry: the nightly scoring stage already filters on it over the full
     # universe (bear_regime_no_reversal), and the entry-side copy was the
@@ -154,12 +157,13 @@ def main() -> int:
          ctx(regime="bear"), "LONG", True, None)
     case("UNKNOWN regime + bullish -> LONG",
          ctx(regime="unknown"), "LONG", True, None)
-    # Bearish sentiment is cash whatever the regime, because the side it names
-    # is a SHORT and shorts are disabled.
+    # Bearish sentiment names a SHORT whatever the regime, as of 2026-10-16.
+    # This block asserted the opposite -- cash, blocked_by LONG_ONLY -- for as
+    # long as ALLOW_SHORT_ENTRIES was False.
     for reg in ("bull", "bear", "sideways"):
-        case(f"{reg.upper()} + bearish -> cash (LONG_ONLY)",
+        case(f"{reg.upper()} + bearish -> SHORT is permitted",
              ctx(regime=reg, sentiment="bearish"),
-             "SHORT", False, "LONG_ONLY")
+             "SHORT", True, None)
     # AN UNKNOWN REGIME NO LONGER BLOCKS A LONG. It cannot: regime is not read
     # at entry. The nightly filter is what sees the regime, and it sees it on
     # the pipeline's own data rather than on the 361-of-746 entry-side copy.
@@ -249,7 +253,11 @@ def main() -> int:
     #
     #   LIVE_SENTIMENT_UNAVAILABLE  the feed would not answer -> investigate
     #   SENTIMENT                   it answered, no side permitted -> wait
-    #   LONG_ONLY                   it answered bearish, and shorts are off
+    #   REGIME                      it answered bearish, so a LONG is the
+    #                               wrong side -- this was LONG_ONLY until
+    #                               shorts were switched on on 2026-10-16,
+    #                               when "ATLAS does not take shorts" stopped
+    #                               being the reason a long was refused
     #
     # Over a long flat stretch "we could not read the market" and "we read it
     # and stood aside" are different facts, and only the second is the strategy
@@ -258,7 +266,7 @@ def main() -> int:
     _, _, b_mixed = regime_allows_side(ctx(sentiment="mixed"), "LONG")
     _, _, b_bear = regime_allows_side(ctx(sentiment="bearish"), "LONG")
     got = (b_unavail, b_mixed, b_bear)
-    distinct = got == ("LIVE_SENTIMENT_UNAVAILABLE", "SENTIMENT", "LONG_ONLY")
+    distinct = got == ("LIVE_SENTIMENT_UNAVAILABLE", "SENTIMENT", "REGIME")
     ok &= distinct
     for lbl, b in (("live read unavailable", b_unavail),
                    ("live read mixed", b_mixed),
@@ -329,18 +337,23 @@ def main() -> int:
     # ONE TRADEABLE CELL OUT OF SIXTEEN. That is what "strict, both must hold"
     # means, and seeing it as a table is the clearest statement of the rule
     # anywhere in the codebase.
-    # SENTIMENT IS THE ONLY COLUMN THAT MATTERS NOW. Every bullish row is a
-    # LONG whatever the regime; everything else is cash. Seeing it as a table
-    # is the clearest statement of the rule anywhere in the codebase -- and
-    # the regime column being irrelevant is the change, made visible.
+    # SENTIMENT IS THE ONLY COLUMN THAT MATTERS. Every bullish row is a LONG
+    # and every bearish row is a SHORT, whatever the regime; mixed and unknown
+    # are cash.
+    #
+    # THE BEARISH COLUMN CHANGED ON 2026-10-16. It was None in all four cells
+    # because ALLOW_SHORT_ENTRIES was False, and this table asserted that. It
+    # is now SHORT: approved by Hemal, "i want all trades from all directions
+    # as tested as per the rules". The branch was always there -- allowed_side
+    # says so in its own comment -- so the flag was the whole gate.
     MATRIX = {
-        ("bull", "bullish"): "LONG",     ("bull", "bearish"): None,
+        ("bull", "bullish"): "LONG",     ("bull", "bearish"): "SHORT",
         ("bull", "mixed"):   None,       ("bull", "unknown"): None,
-        ("bear", "bullish"): "LONG",     ("bear", "bearish"): None,
+        ("bear", "bullish"): "LONG",     ("bear", "bearish"): "SHORT",
         ("bear", "mixed"):   None,       ("bear", "unknown"): None,
-        ("sideways", "bullish"): "LONG", ("sideways", "bearish"): None,
+        ("sideways", "bullish"): "LONG", ("sideways", "bearish"): "SHORT",
         ("sideways", "mixed"):   None,   ("sideways", "unknown"): None,
-        ("unknown", "bullish"): "LONG",  ("unknown", "bearish"): None,
+        ("unknown", "bullish"): "LONG",  ("unknown", "bearish"): "SHORT",
         ("unknown", "mixed"):   None,    ("unknown", "unknown"): None,
     }
     bad = []
@@ -373,20 +386,29 @@ def main() -> int:
     ok &= only_bullish
     print(f"  {'  and ONLY the bullish ones':<58}"
           f"{'ok' if only_bullish else '** ' + str(longs) + ' **'}")
-    # AND NO CELL ANYWHERE RETURNS A SHORT.
+    # AND EVERY BEARISH CELL RETURNS A SHORT (4 of 16). This assertion is
+    # inverted from "no cell anywhere returns a SHORT", which is what it said
+    # while shorts were off.
     shorty = [k for k in MATRIX if allowed_side(mctx(*k))[0] == "SHORT"]
-    ok &= not shorty
-    print(f"  {'no cell in the matrix returns SHORT':<58}"
-          f"{'ok' if not shorty else '** ' + str(shorty) + ' **'}")
+    ok &= len(shorty) == 4
+    print(f"  {'every bearish-sentiment cell returns SHORT (4 of 16)':<58}"
+          f"{'ok' if len(shorty) == 4 else '** ' + str(shorty) + ' **'}")
+    only_bearish = all(k[1] == "bearish" for k in shorty)
+    ok &= only_bearish
+    print(f"  {'  and ONLY the bearish ones':<58}"
+          f"{'ok' if only_bearish else '** ' + str(shorty) + ' **'}")
 
-    # bearish sentiment is LONG_ONLY from any regime -- the countable reason is
-    # "the side would be a short", not a disagreement between two gates.
-    for regime, sent in (("bull", "bearish"), ("bear", "bearish")):
-        blk = allowed_side(mctx(regime, sent))[2]
-        good = blk == "LONG_ONLY"
-        ok &= good
-        print(f"  {regime + ' + ' + sent + ' is blocked_by LONG_ONLY':<58}"
-              f"{'ok' if good else '** ' + str(blk) + ' **'}")
+    # AND A SHORT IS INTRADAY. The direction gate naming SHORT is only safe
+    # because the product that carries it is MIS: a CNC short is a delivery
+    # short and goes to auction, which is the one loss the notional does not
+    # cap. Asserted here, next to the gate that enables it, as well as in
+    # tools/verify_long_only.py at the broker floor.
+    from atlas.risk.position_sizing import size_for_trade
+    _sz = size_for_trade(entry_price=100.0, stop_price=103.0, direction="SHORT")
+    good = _sz.get("product") == "MIS"
+    ok &= good
+    print(f"  {'a SHORT is sized as MIS, never CNC':<58}"
+          f"{'ok' if good else '** ' + str(_sz.get(chr(112)+chr(114)+chr(111)+chr(100)+chr(117)+chr(99)+chr(116))) + ' **'}")
 
     # the master switches still override the matrix, checked before any market
     # reading, so a side can be taken off the table without reasoning about state

@@ -412,6 +412,72 @@ def _symbol_blocks():
                     f"probe failed: {type(e).__name__}: {e}", advisory=True)
 
 
+def _protection_blocks():
+    """Symbols blocked for this session by a PROTECTION failure.
+
+    DISTINCT FROM _symbol_blocks() above, which is the range breaker's store.
+    Same shape, different cause, and they are kept apart so the reason an
+    entry was skipped is not guessed at.
+
+    ADDED 2026-10-16 WITH THE THING IT REPLACED. A protection failure used to
+    set the account-wide halt sentinel, which this inventory already showed.
+    By ruling it now blocks one symbol for one session -- a smaller blast
+    radius and an INVISIBLE one unless it is listed here, so an operator
+    reading this at 09:20 would not know why a symbol was being skipped.
+
+    NEVER BLOCKING AT THE ACCOUNT LEVEL, by construction: it is per symbol, so
+    it cannot disarm every entry and does not count toward the verdict.
+    """
+    try:
+        from atlas.risk.symbol_block import state
+        st = state()
+        n = st["blocked"]
+        return _row("blocked by protection (session)", st["file"],
+                    f"{n} blocked" if n else "none blocked", False,
+                    "yes (per session)",
+                    (f"{', '.join(st['symbols'][:8])} — new entries only; an "
+                     f"open position's stop is unaffected. Expires at the "
+                     f"close." if n else
+                     "a protection failure blocks that symbol only and never "
+                     "the account; nothing survives the close"))
+    except Exception as e:
+        return _row("blocked by protection (session)",
+                    "atlas/risk/symbol_block.py", "UNREADABLE", False,
+                    "yes (per session)", f"{type(e).__name__}: {e}")
+
+
+def _unprotected():
+    """Open positions ATLAS could not protect, and is alerting about.
+
+    THIS IS THE ONE AN OPERATOR MUST SEE. By ruling, ATLAS now takes a trade
+    it cannot protect rather than refusing or halting -- so a non-zero number
+    here is a live position with no stop at the broker, and the count is the
+    operator's own signal to pause. It deliberately does not block: there is
+    no threshold and no automatic action.
+    """
+    try:
+        from atlas.execution.protection import (outstanding, seen_today,
+                                                UNPROTECTED_FILE,
+                                                UNPROTECTED_REPEAT_SECONDS)
+        out = outstanding()
+        n = len(out)
+        syms = ", ".join(sorted(str(p.get("symbol") or "?")
+                                for p in out.values()))
+        return _row("UNPROTECTED positions", str(UNPROTECTED_FILE),
+                    f"{n} open" if n else "none", False, "yes (per session)",
+                    (f"{syms} — OPEN WITH NO STOP AT THE BROKER. Re-alerting "
+                     f"every {UNPROTECTED_REPEAT_SECONDS // 60} min until "
+                     f"confirmed. {seen_today()} today. Does not block: send "
+                     f"/pause if you want entries stopped."
+                     if n else
+                     f"{seen_today()} registered today; ATLAS keeps a trade it "
+                     f"cannot protect and alerts rather than halting"))
+    except Exception as e:
+        return _row("UNPROTECTED positions", "atlas/execution/protection.py",
+                    "UNREADABLE", False, "yes (per session)",
+                    f"{type(e).__name__}: {e}")
+
+
 def _tick_map():
     """Does a tick map exist for today, and what does it hold.
 
@@ -570,6 +636,8 @@ def inventory(include_signal_gates: bool = True, fast: bool = False) -> list:
                             "it calls the market-data feed"))
     # Reads a local file, so it costs nothing and is probed even in fast mode.
     rows.append(_tick_map())
+    rows.append(_protection_blocks())
+    rows.append(_unprotected())
     rows.append(_stand_down())
     rows.append(_symbol_blocks())
     # The market box needs a candle fetch, so fast mode lists it unprobed.

@@ -750,6 +750,18 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
                 "reason": f"{symbol} broke its range today — {_bwhy}",
                 "blocked_by": RB.REASON_SYMBOL_BREAK}
 
+    # THE SAME SHAPE, FOR A DIFFERENT CAUSE. A symbol whose protection could
+    # not be placed earlier today is blocked for the session -- the one thing
+    # that used to stand the whole account down. Per symbol, per session, and
+    # it does not touch an open position in that symbol: the block is about new
+    # entries, and the stop owns the exit.
+    from atlas.risk import symbol_block as SB
+    _sb, _sb_reason, _sb_detail = SB.is_blocked(symbol)
+    if _sb:
+        return {"status": f"SKIPPED_{_sb_reason}",
+                "reason": f"{symbol} is blocked for the session — {_sb_detail}",
+                "blocked_by": _sb_reason}
+
     # GATE 1 -- regime AND sentiment. Both must hold or ATLAS stays in cash.
     #
     # The status carries the split so it is countable in atlas_entry_log
@@ -1220,81 +1232,109 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     intent["fill_price"] = round(avg_price, 2)
     intent["filled_qty"] = filled_qty
 
-    # THE STOP AND ITS FALLBACK AS ONE CALL. This used to be protect() here and
-    # an "if not ok: emergency_exit()" below, which made the independence of the
-    # two a convention of this call site. exits.protect_or_exit() owns the pair,
-    # asserts they share no failure mode before either order is built, and cannot
-    # be called with a primary and fallback that do.
-    pe = X.protect_or_exit(symbol=symbol, direction=direction, qty=filled_qty,
+    # ── THE REAL FILL BECOMES THE RECORD ──────────────────────────
+    #
+    # entry_price USED TO BE THE PRE-ORDER LTP. _build_intent set it from the
+    # quote taken before the order went out, and the post-fill patch wrote that
+    # same value back, so the fill average reached no column at all. Row 22
+    # (ATHERENERG) recorded 1456.40 against a broker average of 1453.70 -- and
+    # every figure computed from the row, stop_pct_used and risk and R, was
+    # measured from a price the trade never paid.
+    #
+    # THE STOP AND TARGET DO NOT MOVE. Hemal's ruling: they stay exactly where
+    # ATLAS placed them. Entry variance is expected and the record should show
+    # what was actually paid, not be rewritten so the arithmetic looks tidy. So
+    # the fill replaces entry_price and the DERIVED figures are recomputed off
+    # it; the stop and target prices themselves are untouched.
+    intent["entry_price"] = round(avg_price, 2)
+    intent["qty"] = filled_qty
+    _stop_used = float(sizing["stop_price"])
+    intent["stop_pct_used"] = (abs(avg_price - _stop_used) / avg_price * 100.0
+                               if avg_price else None)
+    intent["risk_actual"] = abs(avg_price - _stop_used) * filled_qty
+    intent["r_multiple_basis"] = abs(avg_price - _stop_used)
+
+    # THE PRIMARY AND ITS OUTCOME. protect_or_flag no longer exits on failure:
+    # by ruling, a position that cannot be protected is KEPT and alerted on.
+    pe = X.protect_or_flag(symbol=symbol, direction=direction, qty=filled_qty,
                            product=sizing["product"], fill_price=avg_price,
-                           stop_price=sizing["stop_price"])
+                           stop_price=_stop_used)
     prot = pe["prot"]
     intent["exit_legs"] = prot.get("legs") or {}
     intent["exit_mechanism"] = prot.get("mechanism", "")
-    intent["target_price"] = prot.get("target")
 
-    # ── THE GTT FAILED: EXIT HAPPENED, NOW HALT ───────────────────
-    #
-    # SELF-HALT ON must_halt, WHICHEVER WAY THE FALLBACK WENT. A failed OCO GTT
-    # means the only protection mechanism ATLAS has is not working, so the next
-    # entry would be opened into exactly the same condition. The previous shape
-    # halted only when BOTH the stop and the exit failed, which treats a
-    # working fallback as evidence that the primary is fine -- and on
-    # 7 October that reasoning is what allowed a second unprotected position to
-    # be possible.
-    #
-    # The flag comes from protect_or_exit rather than being re-derived here, so
-    # there is one definition of "the primary failed" and tests can assert both
-    # branches halt.
-    if pe["exited"]:
-        ex = pe["exit"] or {}
-        # NAME THE MECHANISM THAT ACTUALLY FAILED. This said "the OCO GTT would
-        # not place" whichever mechanism had been tried -- true when there was
-        # one, wrong since the day-0/day-1 split. At fill time the primary is
-        # the DAY-0 SL, on the orders API, failing for order-level reasons; the
-        # GTT is placed later by preclose_gtt and fails for GTT reasons. An
-        # alert that names the wrong system costs the time it takes to rule
-        # that system out, and that time is spent unprotected.
-        mech_name, mech_api, halt_kind = X.mechanism_label(prot.get("mechanism"))
-        if pe.get("must_halt"):
-            breaker.halt(halt_kind,
-                         f"{symbol}: the {mech_name} would not place "
-                         f"({prot.get('reason')}). The position was closed on "
-                         f"a marketable LIMIT, but the protection mechanism is "
-                         f"not working -- no further entries.")
-        _alert(f"EXITED — {mech_name.upper()} WOULD NOT PLACE",
-               f"{symbol} {direction} {filled_qty}: the {mech_name} was "
-               f"refused ({prot.get('reason')}), so the position was closed at "
-               f"once on a marketable LIMIT — a different mechanism from the "
-               f"{mech_name} that failed"
-               + (f", and a different API ({X.ORDER_SPECS[X.FALLBACK_EXIT]['api']} "
-                  f"rather than {mech_api})"
-                  if mech_api != X.ORDER_SPECS[X.FALLBACK_EXIT]["api"]
-                  else f" (both on the {mech_api} API)")
-               + f". Position is FLAT. Entries are halted because the stop "
-                 f"mechanism is broken, not because this trade went wrong.")
-        return {"status": "EXITED_NO_STOP", "trade_id": row_id,
-                "mechanism_failed": prot.get("mechanism"),
-                "reason": prot.get("reason"), "halted": bool(pe.get("must_halt")),
-                **intent}
+    # THE TARGET IS RECORDED WHETHER OR NOT IT PLACED. target_price was None on
+    # row 22 because the OCO failed before anything was written, so the record
+    # could not say what the target had been. The INTENDED level is computed
+    # here from the fill and the stop actually used, and whether it is LIVE is
+    # recorded separately in target_confirmed -- two different facts that were
+    # previously one missing column.
+    _intended_target = prot.get("target")
+    if _intended_target is None:
+        try:
+            _intended_target = X.target_price(avg_price, _stop_used, direction,
+                                              symbol=symbol)
+        except Exception as e:
+            log.warning(f"{symbol}: could not compute the intended target "
+                        f"({type(e).__name__}: {e}) — recording none")
+            _intended_target = None
+    intent["target_price"] = _intended_target
+    intent["stop_confirmed"] = bool(prot.get("ok"))
+    intent["target_confirmed"] = bool(prot.get("ok") and prot.get("target"))
 
+    # ── THE STOP DID NOT PLACE: KEEP THE POSITION, SAY SO, LOUDLY ──
+    #
+    # APPROVED BY HEMAL ON 2026-10-16, overruling the recommendation that stood
+    # here. This block used to do two things and now does neither: it closed
+    # the position on a marketable LIMIT, and it set the account-wide halt.
+    # What it does instead:
+    #
+    #   1. BLOCKS THIS SYMBOL for the session, never the account. One stock's
+    #      tick size took 443 published rows off the table on 2026-10-16; the
+    #      fault was one instrument's rounding and the blast radius was the
+    #      whole universe.
+    #   2. REGISTERS the position as unprotected, so the alert REPEATS every
+    #      15 minutes until a stop is confirmed at the broker. ATHERENERG's
+    #      single alert on 15 October went quiet and the position stayed naked
+    #      for a session and a night.
+    #   3. ALERTS IMMEDIATELY with everything needed to act by hand, including
+    #      the running count that is the operator's signal to pause.
+    #
+    # It does NOT halt, does not exit, and does not decide anything on the
+    # count's behalf. There is deliberately no threshold here.
     if pe["unprotected"]:
-        # Both failed. Open, unprotected, and the broker is refusing on two
-        # different APIs -- which, now that the two are genuinely independent,
-        # is evidence of a broker-wide problem rather than one bad order type.
-        # That distinction is what 2026-10-07 could not make.
-        ex = pe["exit"] or {}
-        mech_name, mech_api, _ = X.mechanism_label(prot.get("mechanism"))
-        breaker.halt("OPEN_UNPROTECTED",
-                     f"{symbol}: OPEN with no stop — the {mech_name} failed "
-                     f"({prot.get('reason')}) AND the fallback limit exit "
-                     f"failed ({ex.get('reason')})")
-        _alert("OPEN AND UNPROTECTED",
-               f"{symbol} {direction} {filled_qty} is OPEN with no stop and "
-               f"the fallback exit failed too. {ex.get('reason')}. Entries "
-               f"halted. THIS NEEDS A HUMAN NOW.")
-        return {"status": "OPEN_UNPROTECTED", "trade_id": row_id,
-                "reason": ex.get("reason"), "halted": True, **intent}
+        from atlas.risk import symbol_block as SB
+        from atlas.execution import protection as PR
+        _why = prot.get("reason") or pe.get("reason") or "unknown"
+        _wanted = pe.get("wanted_stop", _stop_used)
+
+        SB.block(symbol, SB.REASON_PROTECTION_FAILED,
+                 f"the day-0 stop could not be placed ({_why}). The position "
+                 f"is OPEN and unprotected; a manual stop is needed.")
+
+        _row = {"id": row_id, "symbol": symbol, "direction": direction,
+                "qty": filled_qty, "entry_price": avg_price,
+                "stop_price": _wanted}
+        _entry = PR.register(_row, _why, wanted_stop=_wanted)
+        _alert("OPEN WITHOUT PROTECTION — MANUAL STOP NEEDED",
+               f"{symbol} {direction} {filled_qty} filled at "
+               f"Rs{avg_price:,.2f}. The stop ATLAS wanted was "
+               f"Rs{float(_wanted):,.2f} and it COULD NOT BE PLACED: {_why}. "
+               f"The position is open and unprotected — place a stop by hand "
+               f"now.\n\nunprotected position {_entry.get('ordinal')} of "
+               f"{PR.seen_today()} today. No new entries in {symbol} today; "
+               f"every other symbol is unaffected and ATLAS has NOT stood the "
+               f"day down. This alert repeats every "
+               f"{PR.UNPROTECTED_REPEAT_SECONDS // 60} minutes until a stop is "
+               f"confirmed at the broker. Send /pause to stop entries.")
+
+        _patch_trade(row_id, {"notes": (f"OPEN WITHOUT PROTECTION — wanted stop "
+                                        f"Rs{float(_wanted)}; placement failed: "
+                                        f"{str(_why)[:200]}")},
+                     "record unprotected")
+        return {"status": "ENTERED_UNPROTECTED", "trade_id": row_id,
+                "recorded": recorded, "unprotected": True,
+                "reason": _why, "halted": False, **intent}
 
     log.info(f"{symbol}: protected via {prot.get('mechanism')} — "
              f"stop {prot.get('stop')} target {prot.get('target')}")
@@ -1556,11 +1596,40 @@ def _patch_trade(row_id, patch: dict, what: str) -> bool:
 
 
 def _complete_intent(row_id, intent: dict) -> bool:
-    """PENDING -> OPEN, once the order is confirmed placed."""
+    """PENDING -> OPEN, once the order is confirmed placed.
+
+    entry_price HERE IS THE FILL. enter_trade() overwrites
+    intent["entry_price"] with the broker's average before this is called, so
+    the row records what was actually paid rather than the quote the order was
+    sized from. Everything derived from it -- stop_pct_used, risk_inr, the
+    R basis -- is recomputed against the fill at the same moment and written
+    below. The stop and target prices are NOT recomputed: by ruling they stay
+    exactly where ATLAS placed them.
+    """
     ok = _patch_trade(row_id, {
         "status": "OPEN",
         "order_id": intent.get("order_id"),
         "entry_price": intent.get("entry_price"),
+        "qty": intent.get("qty"),
+        # EACH CONDITIONAL, same reason as the reserve: PostgREST rejects the
+        # whole PATCH for one unknown key, and a rejected completion leaves a
+        # live position recorded as PENDING.
+        **({"stop_pct_used": intent.get("stop_pct_used")}
+           if _trades_has("stop_pct_used") else {}),
+        **({"risk_inr": intent.get("risk_actual")}
+           if _trades_has("risk_inr") else {}),
+        **({"target_price": intent.get("target_price")}
+           if _trades_has("target_price") else {}),
+        **({"exit_legs": intent.get("exit_legs") or {}}
+           if _trades_has("exit_legs") else {}),
+        **({"exit_mechanism": intent.get("exit_mechanism")}
+           if _trades_has("exit_mechanism") else {}),
+        **({"stop_confirmed": intent.get("stop_confirmed")}
+           if _trades_has("stop_confirmed",
+                          "the record cannot say whether the stop is live at "
+                          "the broker.") else {}),
+        **({"target_confirmed": intent.get("target_confirmed")}
+           if _trades_has("target_confirmed") else {}),
         "notes": (f"MANUAL RISK REQUIRED - place SL at Rs"
                   f"{intent.get('stop_price', 0)} | Order "
                   f"{intent.get('order_id', '')} | risk Rs"

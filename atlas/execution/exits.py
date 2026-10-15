@@ -668,10 +668,18 @@ def protect(symbol: str, direction: str, qty: int, product: str,
     # somewhere. A refusal makes the caller exit the position; a silent reroute
     # would put it back on the path being retired.
     if d != "LONG":
+        # NOT "ATLAS IS LONG-ONLY" ANY MORE -- shorts were switched on on
+        # 2026-10-16 and that wording would send the next reader to the config
+        # flag instead of to the mechanism. A short is MIS, and a GTT does not
+        # exist for MIS at all, so this function genuinely cannot protect one.
+        # protect_day0's SL order is a short's whole protection.
         return {"ok": False, "mechanism": "NONE", "legs": {},
-                "reason": f"ATLAS is long-only; refusing to protect a {d} "
-                          f"position. Nothing should have opened it -- see "
-                          f"ALLOW_SHORT_ENTRIES and the broker guard."}
+                "reason": f"this is the CNC OCO GTT mechanism and cannot "
+                          f"protect a {d} position: a {d} is "
+                          f"{SHORT_PRODUCT_TYPE} and GTT does not exist for "
+                          f"{SHORT_PRODUCT_TYPE}. A short is protected by the "
+                          f"day-0 SL order (protect_day0) and closed by "
+                          f"mis_squareoff."}
     if prod != "CNC":
         return {"ok": False, "mechanism": "NONE", "legs": {},
                 "reason": f"the only protection mechanism is a CNC OCO GTT; "
@@ -890,10 +898,35 @@ def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
     THE LIMIT SITS BELOW THE TRIGGER. Same reason as the GTT legs: a SELL limit
     above its trigger rests above the market and does not fill.
     """
-    if str(direction).upper() != "LONG":
+    # ── SHORTS USE THIS SAME MECHANISM, AND ONLY THIS ONE ─────────
+    #
+    # Opened to SHORT on 2026-10-16 when shorts were switched on. This refused
+    # anything but LONG while ATLAS was long-only.
+    #
+    # AN SL ORDER IS THE WHOLE PROTECTION FOR A SHORT, not the day-0 half of a
+    # handover. A short is MIS, MIS has no GTT at all (that is the fact that
+    # forced SL-M on 2026-10-07), and an MIS position is squared off the same
+    # day by atlas/execution/mis_squareoff.py at MIS_EXIT_TIME with Zerodha's
+    # own auto-square-off behind it. So there is nothing to hand over and
+    # place_overnight_gtts is never reached for a short.
+    #
+    # EVERY PRICE IS MIRRORED BY THE HELPERS, not by new logic here:
+    # stop_trigger rounds a SHORT stop UP (away from entry), gtt_leg_limit puts
+    # a BUY limit ABOVE its trigger so it is marketable, and exit_side returns
+    # BUY. All three already had their SHORT branches -- they were kept "for
+    # symmetry" while shorts were off and are now load-bearing.
+    d = str(direction).upper()
+    if d not in ("LONG", "SHORT"):
         return {"ok": False, "mechanism": "NONE", "legs": {},
-                "reason": f"ATLAS is long-only; refusing to protect a "
-                          f"{direction} position"}
+                "reason": f"refusing to protect a {direction} position: "
+                          f"direction must be LONG or SHORT"}
+
+    # THE PRODUCT IS NOT THE CALLER'S CHOICE HERE. A short protected as CNC
+    # would be a delivery short, and a delivery short that cannot be delivered
+    # goes to auction -- the one loss a Rs10,000 notional does not cap.
+    from atlas.config import LONG_PRODUCT_TYPE, SHORT_PRODUCT_TYPE
+    _product = LONG_PRODUCT_TYPE if d == "LONG" else SHORT_PRODUCT_TYPE
+
     if kite is None:
         from atlas.execution.broker import get_kite
         kite = get_kite()
@@ -914,7 +947,7 @@ def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
     try:
         oid = kite.place_order(
             variety="regular", exchange="NSE", tradingsymbol=symbol,
-            transaction_type=side, quantity=int(qty), product="CNC",
+            transaction_type=side, quantity=int(qty), product=_product,
             order_type=DAY0_STOP_ORDER_TYPE, trigger_price=trig, price=lim,
             validity="DAY", tag="ATLAS_SL0")
     except Exception as e:
@@ -929,7 +962,7 @@ def protect_day0(symbol: str, direction: str, qty: int, fill_price: float,
                 "reason": "place_order returned no order_id"}
 
     log.info(f"{symbol}: day-0 SL {oid} — trigger {trig} limit {lim}, "
-             f"{qty} {side} CNC, DAY validity")
+             f"{qty} {side} {_product}, DAY validity")
     return {"ok": True, "mechanism": "SL_DAY0",
             "legs": {"day0_sl_order_id": oid},
             "stop": price_for(symbol, stop_price, "stop", direction,
@@ -1203,9 +1236,31 @@ def swing_low_since(bars, bars_width: int = None) -> float | None:
     return round_tick(found) if found is not None else None
 
 
-def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
+def protect_or_flag(symbol: str, direction: str, qty: int, product: str,
                     fill_price: float, stop_price: float, kite=None) -> dict:
-    """The primary and its fallback, as ONE call. -> see keys below.
+    """Try to protect. If it cannot, SAY SO AND LEAVE THE POSITION OPEN.
+
+    RENAMED FROM protect_or_exit ON 2026-10-16, because it no longer exits.
+    Hemal's ruling, overruling the recommendation in this file's history: if
+    ATLAS wants a trade and cannot place protection, it TAKES THE TRADE and
+    alerts until a human protects it. The old behaviour -- close the position
+    immediately on a marketable LIMIT, then self-halt -- is gone. A function
+    called protect_or_exit that never exits would be the same class of lie as
+    the "OCO GTT" alert that named a mechanism it was not using.
+
+    WHAT THIS MEANS, STATED PLAINLY: this function can now return a position
+    that is open with no stop. That is the approved outcome, not a failure to
+    handle. The containment is elsewhere and is threefold -- the symbol is
+    blocked for the session (never the account), the position is entered in
+    atlas/execution/protection.py's register, and that register re-alerts every
+    15 minutes until a stop is CONFIRMED at the broker. A single alert that
+    then goes quiet is how ATHERENERG sat naked from 15 to 16 October.
+
+    emergency_exit() is kept and still works, but nothing calls it
+    automatically any more. It is a tool an operator-driven path can use; it is
+    no longer an automatic reaction to a failed stop.
+
+    -> see keys below.
 
     WHY THIS EXISTS AS A FUNCTION. The relationship between the stop and the
     emergency exit IS the lesson of 2026-10-07: the fallback has to fail for
@@ -1223,24 +1278,29 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
     Step 1 cannot be skipped by a caller, because the caller no longer chooses the
     pair.
 
-    -> {"protected": bool,   the GTT is resting -- nothing further is needed
-        "exited":    bool,   no GTT, but the position is closed
-        "unprotected": bool, open with no GTT AND no exit -- operator incident
-        "must_halt": bool,   TRUE whenever the primary failed, even if the
-                             fallback worked. See below.
-        "prot": {...},       what protect() returned
-        "exit": {...}|None,  what emergency_exit() returned, if it was reached
+    -> {"protected": bool,   a stop is resting -- nothing further is needed
+        "exited":    bool,   always False now; kept so a caller written
+                             against the old shape fails loudly on the key it
+                             relied on rather than silently reading None
+        "unprotected": bool, OPEN WITH NO STOP. The approved outcome of a
+                             failed placement, and the caller's obligation to
+                             block the symbol, register it and alert
+        "must_halt": bool,   always False now. ATLAS does not switch itself
+                             off; see atlas/risk/symbol_block.py
+        "prot": {...},       what protect_day0() returned
+        "exit": None,        nothing is exited automatically any more
+        "wanted_stop": float, the stop it tried to place, for the alert
         "mechanism": str, "reason": str}
 
-    MUST_HALT IS SET WHENEVER THE GTT DID NOT PLACE, successful fallback or
-    not. A failed GTT means the only protection mechanism is not working, and
-    the next entry would be opened into the same condition -- so ATLAS stops
-    taking entries even though this particular position was closed cleanly.
-    Halting only when BOTH failed, which is what the previous shape did, treats
-    a working fallback as evidence that the primary is fine.
+    MUST_HALT IS NOW ALWAYS FALSE, and the key is kept rather than removed so
+    that a caller still branching on it reads False and does nothing, instead
+    of raising a KeyError in the one path that runs with a live unprotected
+    position. The old contract -- halt whenever the primary failed, successful
+    fallback or not -- stood the entire account down over one instrument's
+    rounding on 2026-10-15.
 
-    It does not alert and does not halt ITSELF. The flag is returned and the
-    caller acts on it, because only the caller knows the trade id and what to
+    It does not alert and does not block ITSELF. The flags are returned and the
+    caller acts on them, because only the caller knows the trade id and what to
     write to the ledger. A flag rather than a convention: a caller that ignores
     it is a test failure, not a silent omission.
     """
@@ -1278,37 +1338,45 @@ def protect_or_exit(symbol: str, direction: str, qty: int, product: str,
     # refused us" regardless of which mechanism had failed -- wrong on day 0,
     # where the primary is an SL on the orders API. A log line that misnames
     # the thing that broke sends the next reader to the wrong place.
+    # THE POSITION STAYS OPEN. No fallback exit, no halt.
+    #
+    # This block used to fire emergency_exit() and set must_halt. Both are
+    # gone by ruling: closing the position converted a protectable position
+    # into a realised loss plus a stood-down account, and the stand-down was
+    # account-wide over one instrument's tick size.
+    #
+    # WHAT REPLACES THEM IS NOT NOTHING. The caller must, in this order:
+    #   1. block THIS SYMBOL for the session   (atlas.risk.symbol_block)
+    #   2. register the position as unprotected (atlas.execution.protection)
+    #   3. alert immediately, and keep alerting every 15 minutes until a stop
+    #      is confirmed at the broker
+    # `unprotected` being True is what obliges the caller to do all three, and
+    # tests/test_unprotected_entry.py asserts the caller does.
     _p = ORDER_SPECS[PRIMARY_STOP_DAY0]
-    _f = ORDER_SPECS[FALLBACK_EXIT]
-    _same_api = _p["api"] == _f["api"]
     log.error(
-        f"{symbol}: DAY-0 STOP FAILED ({prot.get('reason')}) — exiting NOW "
-        f"with an immediate {_f['order_type']} through the book. The "
-        f"{_p['order_type']} that refused us needed a trigger and rested; this "
-        f"needs neither"
-        + (f", though both go through the {_f['api']} API — see "
-           f"assert_independent" if _same_api else
-           f", and goes through the {_f['api']} API rather than "
-           f"{_p['api']}")
-        + ". ATLAS will self-halt: the protection mechanism is not working.")
-    ex = emergency_exit(symbol, direction, qty, product,
-                        why=f"stop placement failed: {prot.get('reason')}",
-                        kite=kite)
-    if ex.get("ok"):
-        return {"protected": False, "exited": True, "unprotected": False,
-                "must_halt": True, "prot": prot, "exit": ex,
-                "mechanism": f"{prot.get('mechanism', '?')}->FALLBACK_EXIT",
-                "reason": prot.get("reason", "")}
+        f"{symbol}: DAY-0 STOP FAILED ({prot.get('reason')}) — the position is "
+        f"OPEN AND UNPROTECTED and is being kept that way deliberately. The "
+        f"{_p['order_type']} on the {_p['api']} API was refused. ATLAS will "
+        f"NOT exit the position and will NOT halt: it blocks {symbol} for the "
+        f"session and alerts until a human places a stop.")
     return {"protected": False, "exited": False, "unprotected": True,
-            "must_halt": True, "prot": prot, "exit": ex, "mechanism": "NONE",
-            "reason": (f"the OCO GTT failed ({prot.get('reason')}) AND the "
-                       f"fallback exit failed ({ex.get('reason')})")}
+            "must_halt": False, "prot": prot, "exit": None,
+            "mechanism": prot.get("mechanism") or "NONE",
+            "wanted_stop": stop_price,
+            "reason": (f"the day-0 stop failed ({prot.get('reason')}); the "
+                       f"position is open and unprotected by ruling")}
 
 
 def emergency_exit(symbol: str, direction: str, qty: int, product: str,
                    why: str, kite=None) -> dict:
     """
     Close with a marketable LIMIT because the position could not be protected.
+
+    NO LONGER CALLED AUTOMATICALLY, 2026-10-16. protect_or_flag() used to fire
+    this the instant a stop failed; by ruling it now keeps the position and
+    alerts instead. Kept working, kept asserted independent, and kept
+    documented because an operator-driven exit path is a reasonable thing to
+    want -- but a failed stop no longer triggers it on its own.
 
     DELIBERATELY NOT A RETRY. An unprotected open position is worse than a bad
     exit: the exit costs a known amount once, the unprotected position is an
@@ -1538,7 +1606,8 @@ def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
 # the resulting exit time now live in atlas/config.py with the date they were
 # verified, so there is one place to change and one place to read.
 from atlas.config import DAY0_STOP_ORDER_TYPE  # noqa: E402
-from atlas.config import (MIS_EXIT_HOUR, MIS_EXIT_MIN, MIS_EXIT_TIME,
+from atlas.config import (
+    SHORT_PRODUCT_TYPE,MIS_EXIT_HOUR, MIS_EXIT_MIN, MIS_EXIT_TIME,
                           MIS_BROKER_CUTOFF, MIS_EXIT_MARGIN_MIN)
 
 MIS_BROKER_SQUAREOFF = MIS_BROKER_CUTOFF   # Zerodha's, at market

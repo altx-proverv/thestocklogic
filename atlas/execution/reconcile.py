@@ -171,8 +171,14 @@ def settle(now=None) -> dict:
         log.error(f"reconcile: broker unreadable — leaving all {len(rows)} "
                   f"PENDING row(s) untouched and blocking")
         if len(rows) >= MAX_UNSETTLED:
-            breaker.halt("cannot settle PENDING trades",
-                         f"{len(rows)} rows pending and the broker is unreadable")
+            # WAS A HALT, 2026-10-16. Every PENDING row still blocks its own
+            # symbol -- that is what stops a second entry in it -- so the
+            # account-wide stand-down added nothing except stopping every
+            # OTHER symbol. The flag alerts and hands the decision over.
+            breaker.flag("cannot settle PENDING trades",
+                         f"{len(rows)} rows pending and the broker is "
+                         f"unreadable. Each of those rows still blocks its own "
+                         f"symbol, so no symbol can be entered twice.")
         return {"checked": len(rows), "opened": 0, "cancelled": 0,
                 "unsettled": len(rows), "broker_readable": False}
 
@@ -208,6 +214,23 @@ def settle(now=None) -> dict:
                 opened += 1
                 log.warning(f"  trade {rid} {row.get('symbol')}: OPEN at Rs{fill} "
                             f"— this position existed unrecorded; place its stop")
+                # ADOPTION IS NOT PROTECTION, and saying "place its stop" in a
+                # note is what left ATHERENERG naked. An adopted row is now
+                # registered as unprotected, which makes the alert repeat every
+                # 15 minutes until a stop is CONFIRMED at the broker -- and the
+                # per-cycle repair in market_open will try to place one.
+                try:
+                    from atlas.execution import protection as PR
+                    PR.register({"id": rid, "symbol": row.get("symbol"),
+                                 "direction": row.get("direction"),
+                                 "qty": order.get("filled_quantity") or row.get("qty"),
+                                 "entry_price": fill,
+                                 "stop_price": row.get("stop_price")},
+                                "adopted at reconcile with no protection placed",
+                                wanted_stop=row.get("stop_price"))
+                except Exception as e:
+                    log.error(f"  could not register trade {rid} as "
+                              f"unprotected: {e}")
             else:
                 unsettled += 1
 
@@ -226,8 +249,10 @@ def settle(now=None) -> dict:
             log.info(f"  trade {rid} {row.get('symbol')}: still {status} — leaving")
 
     if unsettled >= MAX_UNSETTLED:
-        breaker.halt("PENDING trades will not settle",
-                     f"{unsettled} row(s) unresolved after a reconcile pass")
+        # WAS A HALT. Same reasoning: a PENDING row blocks its own symbol.
+        breaker.flag("PENDING trades will not settle",
+                     f"{unsettled} row(s) unresolved after a reconcile pass. "
+                     f"Each still blocks its own symbol.")
 
     summary = {"checked": len(rows), "opened": opened, "cancelled": cancelled,
                "unsettled": unsettled, "broker_readable": True}

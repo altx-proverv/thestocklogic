@@ -763,7 +763,18 @@ ALLOW_SHORT_IN_SIDEWAYS = False
 # principle as the exit fallback: a config flag alone is a convention, and a
 # convention is what a future edit breaks silently.
 ALLOW_LONG_ENTRIES  = True
-ALLOW_SHORT_ENTRIES = False
+# SHORTS ON, 2026-10-16, approved by Hemal: "simply activate the shorts ...
+# this is the testing phase with limited capital per stock and i want all
+# trades from all directions as tested as per the rules."
+#
+# WHAT MAKES THIS SAFE TO FLIP IS NOT THE FLAG. A short is only acceptable as
+# an INTRADAY position: a CNC short is a delivery short, it fails settlement,
+# and it goes to auction -- which is the one loss a Rs10,000 notional does not
+# cap, because the auction price is not bounded by anything ATLAS controls. So
+# SHORT_PRODUCT_TYPE is MIS, position_sizing chooses it, and
+# broker.place_order refuses a SHORT entry that is not MIS whatever the caller
+# believes. Two independent guards, the same shape as this flag's own pair.
+ALLOW_SHORT_ENTRIES = True
 
 # LONGS ARE CNC. Stated here rather than inferred from position_sizing, which
 # is where the product is actually chosen, so the pair is readable together

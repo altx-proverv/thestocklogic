@@ -75,12 +75,6 @@ SLOTS = {
 
 SESSION_START = "09:15"
 
-# An SL order resting at the broker is one of these. ANYTHING ELSE IS NOT
-# PROTECTION: COMPLETE means it already fired, CANCELLED and REJECTED mean it
-# is not there, and REJECTED is exactly what 2026-10-15 produced four times
-# while every mechanism reported success.
-LIVE_ORDER_STATUS = ("OPEN", "TRIGGER PENDING", "AMO REQ RECEIVED")
-
 
 def _now_ist():
     return datetime.now(IST)
@@ -148,112 +142,17 @@ def decisions_today() -> tuple:
 
 
 # ══════════════════════════════════════════════════════════════════
-# WHAT THE BROKER SAYS — the only source that counts for "confirmed"
+# WHAT THE BROKER SAYS
 # ══════════════════════════════════════════════════════════════════
-
-def broker_protection() -> dict:
-    """-> {"ok": bool, "why": str, "orders": {...}, "gtts": {...}}
-
-    Reads resting SL orders and active GTTs, keyed by symbol. ok=False means
-    the broker could not be read, and then NOTHING may be reported as
-    confirmed -- an unreadable broker is indistinguishable from an unprotected
-    position, and the safe reading of the two is the same.
-    """
-    out = {"ok": False, "why": "", "orders": {}, "gtts": {}}
-    try:
-        from atlas.execution.broker import get_kite
-        kite = get_kite()
-        if not kite:
-            out["why"] = "no broker session (token missing or expired)"
-            return out
-    except Exception as e:
-        out["why"] = f"could not reach the broker: {type(e).__name__}: {e}"
-        return out
-
-    try:
-        for o in kite.orders() or []:
-            if str(o.get("status", "")).upper() not in LIVE_ORDER_STATUS:
-                continue
-            if str(o.get("order_type", "")).upper() not in ("SL", "SL-M"):
-                continue
-            out["orders"].setdefault(o.get("tradingsymbol"), []).append({
-                "order_id": o.get("order_id"),
-                "trigger": o.get("trigger_price"),
-                "price": o.get("price"),
-                "qty": o.get("quantity"),
-                "type": o.get("order_type"),
-                "status": o.get("status"),
-                "side": o.get("transaction_type")})
-    except Exception as e:
-        out["why"] = f"orders unreadable: {type(e).__name__}: {e}"
-        return out
-
-    try:
-        for g in kite.get_gtts() or []:
-            if str(g.get("status", "")).lower() != "active":
-                continue
-            cond = g.get("condition") or {}
-            sym = cond.get("tradingsymbol")
-            legs = []
-            for leg in (g.get("orders") or []):
-                legs.append({"price": leg.get("price"),
-                             "qty": leg.get("quantity"),
-                             "side": leg.get("transaction_type")})
-            out["gtts"].setdefault(sym, []).append({
-                "trigger_id": g.get("id"),
-                "type": g.get("type"),
-                "triggers": cond.get("trigger_values") or [],
-                "last_price": cond.get("last_price"),
-                "legs": legs})
-    except Exception as e:
-        out["why"] = f"GTTs unreadable: {type(e).__name__}: {e}"
-        return out
-
-    out["ok"] = True
-    return out
-
-
-def confirm_legs(trade: dict, prot: dict) -> dict:
-    """Is this trade's stop confirmed live, and its target? -> dict of verdicts.
-
-    Verdicts are exactly three: CONFIRMED (read back from the broker), NONE
-    (the broker was readable and it is not there) and UNKNOWN (the broker could
-    not be read). There is deliberately no "attempted" and no "placed" -- those
-    are claims about ATLAS, and the question is about the exchange.
-    """
-    sym = trade.get("symbol")
-    entry = float(trade.get("entry_price") or 0)
-    long_ = str(trade.get("direction") or "").upper() == "LONG"
-    if not prot["ok"]:
-        return {"stop": "UNKNOWN", "target": "UNKNOWN", "detail": prot["why"],
-                "gtt_ids": [], "stop_at": None, "target_at": None}
-
-    stop_at, target_at, ids, bits = None, None, [], []
-
-    for o in prot["orders"].get(sym, []):
-        stop_at = o["trigger"]
-        bits.append(f"SL order {o['order_id']} trigger Rs{o['trigger']}")
-
-    for g in prot["gtts"].get(sym, []):
-        ids.append(g["trigger_id"])
-        for t in g["triggers"]:
-            t = float(t)
-            # Which side a GTT trigger is protecting is decided by where it
-            # sits relative to the ENTRY, not by leg order: a two-leg OCO puts
-            # the stop below and the target above for a long, and reading them
-            # positionally broke the moment one leg was modified by the trail.
-            is_stop = (t < entry) if long_ else (t > entry)
-            if is_stop:
-                stop_at = t if stop_at is None else stop_at
-                bits.append(f"GTT {g['trigger_id']} stop trigger Rs{t}")
-            else:
-                target_at = t if target_at is None else target_at
-                bits.append(f"GTT {g['trigger_id']} target trigger Rs{t}")
-
-    return {"stop": "CONFIRMED" if stop_at is not None else "NONE",
-            "target": "CONFIRMED" if target_at is not None else "NONE",
-            "detail": "; ".join(bits), "gtt_ids": ids,
-            "stop_at": stop_at, "target_at": target_at}
+#
+# MOVED TO atlas/execution/protection.py ON 2026-10-16. It lived here first,
+# and then the pre-close repair needed the same answer -- at which point two
+# implementations of "is this protected" would have been two things that can
+# disagree about a naked position. There is one, and the execution path and
+# the reports read it.
+from atlas.execution.protection import (                    # noqa: E402
+    broker_protection, confirm_legs, LIVE_ORDER_STATUS,
+    CONFIRMED, NONE, UNKNOWN)
 
 
 def live_prices(symbols: list) -> dict:

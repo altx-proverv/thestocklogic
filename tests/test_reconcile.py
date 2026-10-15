@@ -119,19 +119,38 @@ def main() -> int:
           f"{'ok — unreadable is not flat' if distinct else '** CONFLATED **'}")
 
     print()
-    print("BOUNDED")
+    print("BOUNDED — AND IT NO LONGER STANDS THE DAY DOWN")
     print("-" * 78)
-    rows = [dict(ROW, id=i) for i in range(7, 7 + rc.MAX_UNSETTLED)]
-    _, halted = run(rows, None)
-    ok &= halted
-    print(f"  {str(rc.MAX_UNSETTLED) + ' unsettleable rows halt':<40}"
-          f"{str(halted):<16}{'ok' if halted else '** grinds instead **'}")
+    # THIS ASSERTION IS INVERTED FROM WHAT IT WAS, by Hemal's ruling of
+    # 2026-10-16: ATLAS does not switch itself off. It used to read
+    # "MAX_UNSETTLED unsettleable rows halt" and pass.
+    #
+    # The containment that mattered was never the account-wide one: every
+    # PENDING row still blocks its OWN symbol, because Gate 3b counts PENDING,
+    # so no symbol can be entered twice whatever this does. The stand-down only
+    # ever stopped the OTHER symbols -- the whole universe over N stuck rows.
+    # It flags instead, which alerts and names how to pause.
+    flags = []
+    _real_flag = breaker.flag
+    breaker.flag = lambda kind, detail: (flags.append((kind, detail)), False)[1]
+    try:
+        rows = [dict(ROW, id=i) for i in range(7, 7 + rc.MAX_UNSETTLED)]
+        _, halted = run(rows, None)
+        good = (not halted) and len(flags) >= 1
+        ok &= good
+        print(f"  {str(rc.MAX_UNSETTLED) + ' unsettleable rows -> NOT halted':<46}"
+              f"{'ok' if not halted else '** STOOD THE DAY DOWN **'}")
+        print(f"  {'  and it flagged instead':<46}"
+              f"{'ok — ' + flags[0][0] if flags else '** SILENT **'}")
 
-    _, halted_one = run([ROW], None)
-    fine = not halted_one
-    ok &= fine
-    print(f"  {'1 unsettleable row does not halt':<40}{str(not fine):<16}"
-          f"{'ok' if fine else '** halts on noise **'}")
+        flags.clear()
+        _, halted_one = run([ROW], None)
+        fine = not halted_one and not flags
+        ok &= fine
+        print(f"  {'1 unsettleable row -> no halt, no flag':<46}"
+              f"{'ok' if fine else '** reacted to noise **'}")
+    finally:
+        breaker.flag = _real_flag
 
     HALT.unlink(missing_ok=True)
     print("-" * 78)

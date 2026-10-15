@@ -279,25 +279,33 @@ def main() -> int:
          "the day-0 SL trigger is refused"),
     ):
         k3 = StrictKite(**kwargs)
-        out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
+        out = X.protect_or_flag(symbol="RELIANCE", direction="LONG", qty=10,
                                 product="CNC", fill_price=100.0,
                                 stop_price=95.0, kite=k3)
+        # THESE THREE ARE INVERTED FROM WHAT THEY WERE, by Hemal's ruling of
+        # 2026-10-16: a position that cannot be protected is KEPT and alerted
+        # on, not closed, and nothing stands the account down. They asserted
+        # "the FALLBACK completed", "it completed with a LIMIT" and "must_halt
+        # is set", and they passed -- which is exactly why they are rewritten
+        # rather than deleted: the file's job is to pin what the fill path does
+        # when a stop will not place, and that is now something different.
         check(f"[{label}] the primary failed", out["protected"], False)
-        check(f"[{label}] the FALLBACK completed", out["exited"], True,
-              str((out["exit"] or {}).get("reason", ""))[:40])
-        check(f"[{label}] it completed with a LIMIT", types_sent(k3),
-              ["SL", "LIMIT"])
+        check(f"[{label}] the position is NOT exited", out["exited"], False,
+              "no marketable LIMIT is fired automatically any more")
+        check(f"[{label}] ONLY the SL was attempted", types_sent(k3), ["SL"])
         check(f"[{label}] and NO GTT was placed on fill", len(k3.gtts), 0,
               "the GTT belongs to the pre-close job; nothing on the fill path "
               "touches /gtt/triggers")
-        check(f"[{label}] must_halt is set", out.get("must_halt"), True,
-              "a broken protection mechanism stops further entries even when "
-              "this position closed cleanly")
+        check(f"[{label}] must_halt is NOT set", out.get("must_halt"), False,
+              "ATLAS does not switch itself off; the caller blocks the symbol "
+              "and alerts until a human places a stop")
+        check(f"[{label}] it reports unprotected", out["unprotected"], True,
+              "which is what obliges the caller to block, register and alert")
 
     # AND THE CONVERSE: if the fallback's own family is refused, the result is
     # an honest "unprotected", not a silent success.
     k4 = StrictKite(reject=("SL", "LIMIT"))
-    out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
+    out = X.protect_or_flag(symbol="RELIANCE", direction="LONG", qty=10,
                             product="CNC", fill_price=100.0, stop_price=95.0,
                             kite=k4)
     check("both refused -> unprotected is reported, not swallowed",
@@ -357,8 +365,17 @@ def main() -> int:
     # ever changes, this fails rather than a position being stranded.
     from atlas.risk import position_sizing as PS
     src = (ROOT / "atlas" / "risk" / "position_sizing.py").read_text()
+    # ASSERTED ON BEHAVIOUR, NOT ON SOURCE TEXT. This matched the literal
+    # 'product = "CNC" if d == "LONG" else "MIS"', which stopped existing on
+    # 2026-10-16 when the two products became named constants -- a change that
+    # made the rule stronger and this assertion fail. What matters is which
+    # product a short is actually sized with, so ask.
     check("MIS is used for shorts only",
-          'product     = "CNC" if d == "LONG" else "MIS"' in src, True)
+          (PS.size_for_trade(entry_price=100.0, stop_price=103.0,
+                             direction="SHORT").get("product") == "MIS"
+           and PS.size_for_trade(entry_price=100.0, stop_price=97.0,
+                                 direction="LONG").get("product") == "CNC"),
+          True)
     sel = (ROOT / "atlas" / "execution" / "session_selector.py").read_text()
     check("shorts are allowed in the morning session only",
           sel.count('"SHORT"'), 1,
@@ -568,7 +585,7 @@ def main() -> int:
     print("=" * 78)
     print("8 — THE ALERT NAMES THE MECHANISM THAT FAILED")
     print("-" * 78)
-    # protect_or_exit's branch 2 said "the OCO GTT would not place" and halted
+    # protect_or_flag's branch 2 said "the OCO GTT would not place" and halted
     # with kind GTT_FAILED, whatever had actually been tried. Since the day-0 /
     # day-1 split the thing that fails AT FILL TIME is the day-0 SL on the
     # ORDERS api; the GTT is placed hours later by preclose_gtt and fails for
@@ -606,17 +623,34 @@ def main() -> int:
           'breaker.halt("GTT_FAILED"' in entry_src_8, False)
     check("  nor the words 'the OCO GTT was refused'",
           "the OCO GTT was refused" in entry_src_8, False)
-    check("  it asks exits which mechanism failed",
-          "X.mechanism_label(prot.get(\"mechanism\"))" in entry_src_8, True)
-    check("the refusal reports which mechanism it was",
-          '"mechanism_failed": prot.get("mechanism")' in entry_src_8, True)
+    # THESE TWO ARE GONE WITH THE BRANCH THEY DESCRIBED. mechanism_label() and
+    # "mechanism_failed" lived in the EXITED-then-HALT branch of the fill path,
+    # which was removed on 2026-10-16: a failed stop no longer exits the
+    # position or halts, so there is no refusal to label.
+    #
+    # WHAT REPLACES THEM asserts the branch that now runs, and the two
+    # properties that matter about it: the entry path must not halt, and it
+    # must block the symbol and register the position instead.
+    check("the fill path no longer halts on a failed stop",
+          "breaker.halt(" in entry_src_8, False,
+          "ATLAS does not switch itself off")
+    check("  it blocks the SYMBOL instead",
+          "SB.block(symbol, SB.REASON_PROTECTION_FAILED" in entry_src_8, True)
+    check("  and registers the position so the alert repeats",
+          "PR.register(" in entry_src_8, True)
+    check("  under its own countable status",
+          '"status": "ENTERED_UNPROTECTED"' in entry_src_8, True)
+    # AND mechanism_label ITSELF IS KEPT, because the mechanism vocabulary is
+    # still what exits reports and preclose_gtt still names it.
+    check("mechanism_label still exists for the mechanisms that remain",
+          callable(getattr(X, "mechanism_label", None)), True)
 
     print()
     print("=" * 78)
     print("9 — EXIT MANAGEMENT OFF REFUSES THE ENTRY; IT IS NOT AN ENTRY PATH")
     print("-" * 78)
     # ENABLE_EXIT_MANAGEMENT=False used to be checked BETWEEN await_fill and
-    # protect_or_exit: ATLAS placed the order, let it fill, logged a warning and
+    # protect_or_flag: ATLAS placed the order, let it fill, logged a warning and
     # returned status ENTERED with exit_managed=False. A live position, no stop,
     # no halt, and a status that read the same as a protected entry to anything
     # querying atlas_entry_log. The flag that removes all protection was an

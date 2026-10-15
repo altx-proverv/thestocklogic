@@ -43,6 +43,7 @@ from atlas.config import (
     MAX_RISK_PER_TRADE, MAX_NOTIONAL_PER_TRADE, QUANTITY_MULTIPLE,
     SHORT_MARGIN_PCT_ESTIMATE, MIN_STOP_PCT, MAX_STOP_PCT,
     SIZING_MODE, FIXED_NOTIONAL_PER_TRADE,
+    LONG_PRODUCT_TYPE, SHORT_PRODUCT_TYPE,
 )
 
 log = logging.getLogger("ATLAS-SIZE")
@@ -117,7 +118,7 @@ def size_by_risk(entry_price: float, stop_price: float, direction: str,
 
     notional    = qty * entry_price
     risk_actual = qty * risk_per_share
-    product     = "CNC" if d == "LONG" else "MIS"
+    product     = LONG_PRODUCT_TYPE if d == "LONG" else SHORT_PRODUCT_TYPE
 
     # Longs are delivery: full value blocked. Shorts intraday: ~20% margin.
     capital_required = (notional if d == "LONG"
@@ -256,7 +257,7 @@ def size_fixed_notional(entry_price: float, stop_price: float, direction: str,
         # Price exceeded the target, so one share was taken regardless.
         "oversized":        bool(entry_price > target_notional),
         "capital_required": round(capital_required, 2),
-        "product":          "CNC" if d == "LONG" else "MIS",
+        "product":          LONG_PRODUCT_TYPE if d == "LONG" else SHORT_PRODUCT_TYPE,
         "binding_cap":      binding,
         "sizing_basis":     SIZING_BASIS,
         "reason":           reason,

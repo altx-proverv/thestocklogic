@@ -389,7 +389,7 @@ def section_independence():
               reject_reason="Trigger price is out of the permitted range")),
     ):
         k = RecordingKite(ltp=100.0, **kw)
-        out = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=10,
+        out = X.protect_or_flag(symbol="RELIANCE", direction="LONG", qty=10,
                                 product="CNC", fill_price=100.0,
                                 stop_price=95.0, kite=k)
         sent = [(o.get("order_type"), o.get("price")) for o in k.orders]

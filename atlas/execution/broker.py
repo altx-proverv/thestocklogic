@@ -255,7 +255,7 @@ def place_order(
     # make it impossible to close a position, which is the failure mode the
     # halt guard below is careful to avoid for the same reason.
     if str(intent).upper() != "EXIT" and str(direction).upper() == "SHORT":
-        from atlas.config import ALLOW_SHORT_ENTRIES
+        from atlas.config import ALLOW_SHORT_ENTRIES, SHORT_PRODUCT_TYPE
         if not ALLOW_SHORT_ENTRIES:
             log.error(f"SHORT ENTRY REFUSED at the broker layer — longs only "
                       f"(ALLOW_SHORT_ENTRIES is False). {qty} {symbol} was "
@@ -263,6 +263,34 @@ def place_order(
             return {"success": False,
                     "reason": "short entries are disabled — ATLAS is long-only",
                     "blocked_by": "long_only", "error_type": "LongOnly",
+                    "determinate": True}
+
+        # ── A SHORT MUST BE INTRADAY. NEVER DELIVERY. ─────────────
+        #
+        # Shorts were switched on on 2026-10-16 and this is the guard that
+        # makes that safe, not the flag above. A CNC short is a DELIVERY
+        # short: there are no shares to deliver, settlement fails, and the
+        # exchange buys them in at auction. The auction price is set by
+        # whoever shows up, so it is the one loss a Rs10,000 notional does
+        # NOT cap -- every other failure mode in ATLAS is bounded by the
+        # notional and this one is not.
+        #
+        # SECOND GUARD, SAME SHAPE AS THE FLAG'S. position_sizing already
+        # returns SHORT_PRODUCT_TYPE for a short, and this refuses anything
+        # else at the floor whatever the caller believes. Every entry ATLAS
+        # has ever placed was CNC, so this path has never run live and the
+        # convention has never been tested by anything but a test.
+        if str(product).upper() != str(SHORT_PRODUCT_TYPE).upper():
+            log.error(f"SHORT ENTRY REFUSED at the broker layer — product is "
+                      f"{product!r}, and a short must be "
+                      f"{SHORT_PRODUCT_TYPE} (intraday). A CNC short is a "
+                      f"delivery short and goes to auction on failure. "
+                      f"{qty} {symbol} was not sent.")
+            return {"success": False,
+                    "reason": (f"a SHORT must be {SHORT_PRODUCT_TYPE}, not "
+                               f"{product} — a delivery short goes to auction"),
+                    "blocked_by": "short_must_be_intraday",
+                    "error_type": "ShortMustBeIntraday",
                     "determinate": True}
 
     if str(intent).upper() != "EXIT":

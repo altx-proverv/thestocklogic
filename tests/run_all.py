@@ -43,7 +43,7 @@ os.environ.setdefault("PYTHONWARNINGS", "error::FutureWarning")
 # ── THE SUITE IS A DRILL, AND SAYS SO ─────────────────────────────
 #
 # WHY. On 2026-10-13 running this suite on the box set atlas_state.mode =
-# PAUSED mid-session, because tools/verify_long_only drives a real failure
+# PAUSED mid-session, because tools/verify_long_only drove a real failure
 # through breaker.halt() and halt() also PATCHes shared state. 3d18fe7 fenced
 # that: breaker.is_drill() refuses to touch production while drilling.
 #
@@ -97,6 +97,17 @@ os.environ.setdefault(
 os.environ.setdefault(
     "ATLAS_SENTIMENT_STANDDOWN_FILE",
     str(Path(tempfile.gettempdir()) / "atlas_test_sentiment_standdown.json"))
+# THE TWO STATE FILES ADDED 2026-10-16, redirected for the same reason as the
+# three above: the suite blocks symbols and registers unprotected positions,
+# and neither may touch the live files the box reads at 09:20. Both modules
+# also refuse to write their canonical path while is_drill() is true, so this
+# is the second of two guards.
+os.environ.setdefault(
+    "ATLAS_SYMBOL_BLOCK_FILE",
+    str(Path(tempfile.gettempdir()) / "atlas_test_symbol_block.json"))
+os.environ.setdefault(
+    "ATLAS_UNPROTECTED_FILE",
+    str(Path(tempfile.gettempdir()) / "atlas_test_unprotected.json"))
 
 SUITES = [
     ("environment",     [sys.executable, "tests/test_environment.py"]),
@@ -115,6 +126,7 @@ SUITES = [
     ("range breaker", [sys.executable, "tests/test_range_breaker.py"]),
     ("tick sizes", [sys.executable, "tests/test_tick_sizes.py"]),
     ("session report", [sys.executable, "tests/test_session_report.py"]),
+    ("unprotected entry", [sys.executable, "tests/test_unprotected_entry.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),
     ("regime gate",    [sys.executable, "tests/test_regime_gate.py"]),
     ("market-hours loop", [sys.executable, "tests/test_market_hours_loop.py"]),
@@ -143,7 +155,7 @@ SUITES = [
     # The long-only proof and the GTT-failure-halts demonstration. In the suite
     # rather than run by hand: both are claims the operator asked to see held,
     # and a claim nothing re-checks is a claim that decays.
-    ("long only",        [sys.executable, "-m", "tools.verify_long_only"]),
+    ("short path",      [sys.executable, "-m", "tools.verify_short_path"]),
     # The day-0/day-1 handover and the move-up-only stop guard. In the suite
     # because both are claims the operator asked to see held, and the stop
     # guard in particular is the one thing in the engine that must never

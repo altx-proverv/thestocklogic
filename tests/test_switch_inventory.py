@@ -165,15 +165,26 @@ def main() -> int:
     print("4 — THE HARNESS DECLARES ITSELF")
     print("-" * 78)
     from _srcutil import executable_source
-    vl = executable_source(ROOT / "tools" / "verify_long_only.py")
+    # REPOINTED 2026-10-16. tools/verify_long_only.py is DELETED, not edited:
+    # it existed to prove no code path can place a SHORT and that a failed stop
+    # exits and halts, and both of those were reversed by ruling. Its
+    # replacement, tools/verify_short_path.py, proves the new guarantee -- a
+    # short is permitted and a short is always MIS -- and carries the same
+    # fence obligation, because it drives the same real code paths.
+    vl = executable_source(ROOT / "tools" / "verify_short_path.py")
     # executable_source unparses the AST, so quotes come back normalised.
-    check("verify_long_only redirects the halt file",
+    check("verify_short_path redirects the halt file",
           "os.environ['ATLAS_HALT_FILE']" in vl, True)
     check("  and sets ATLAS_DRILL", "os.environ['ATLAS_DRILL']" in vl, True)
     check("  and asserts the fence held", "is_drill()" in vl, True)
-    check("it is registered in run_all (so this matters)",
-          "tools.verify_long_only" in (ROOT / "tests" / "run_all.py").read_text(),
+    check("  and redirects the new state files too",
+          "ATLAS_SYMBOL_BLOCK_FILE" in vl and "ATLAS_UNPROTECTED_FILE" in vl,
           True)
+    check("it is registered in run_all (so this matters)",
+          "tools.verify_short_path" in (ROOT / "tests" / "run_all.py").read_text(),
+          True)
+    check("the long-only tool is gone, not weakened",
+          (ROOT / "tools" / "verify_long_only.py").exists(), False)
 
     print()
     print("=" * 78)

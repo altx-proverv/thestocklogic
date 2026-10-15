@@ -291,6 +291,52 @@ def clear() -> bool:
 # FAILURE CLASSIFICATION
 # ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+# A FLAG IS AN ALERT, NOT A STAND-DOWN
+# ══════════════════════════════════════════════════════════════════
+#
+# HEMAL'S RULING, 2026-10-16: "ATLAS should not be switched off by the system.
+# If there is a flag always make the system ask me to pause it with a reason.
+# Do not take that decision."
+#
+# Every condition below used to call halt(), which writes the sentinel file AND
+# sets atlas_state.mode to PAUSED -- stopping every entry in every symbol until
+# a human cleared it, which on 2026-10-15 meant seventeen hours and 443
+# refused rows over one instrument's tick size.
+#
+# They now alert and name three things: what tripped, why, and how to pause if
+# the operator wants to. The decision is handed back rather than taken.
+#
+# WHAT IS NOT TOUCHED, and must not be: halt() itself (the operator's /pause
+# and the kill switch still use it), clear(), is_drill(), and the per-symbol
+# block in atlas/risk/symbol_block.py. Hemal pausing ATLAS is the point.
+
+
+def flag(kind: str, detail: str) -> bool:
+    """Report a condition that used to stand the day down. -> always False.
+
+    RETURNS FALSE, exactly as halt() left its callers returning, so the local
+    fail-closed behaviour is unchanged: the cycle that could not write its
+    ledger still refuses to continue THAT cycle. What is gone is the part that
+    outlived the cycle and the symbol.
+    """
+    log.error("=" * 70)
+    log.error(f"FLAG: {kind} — {detail}")
+    log.error("ATLAS is NOT standing the day down. Entries continue.")
+    log.error("=" * 70)
+    try:
+        from atlas.reporting.telegram import send
+        send(f"⚠️ <b>ATLAS FLAG — {kind}</b>\n"
+             f"<code>{str(detail)[:400]}</code>\n\n"
+             f"<b>ATLAS has NOT stopped trading.</b> It does not switch itself "
+             f"off. This cycle failed closed and the next one carries on.\n"
+             f"If you want entries stopped, send <b>/pause</b> — that is the "
+             f"only thing that stands the day down, and it is yours to decide.")
+    except Exception as e:
+        log.error(f"could not send the flag alert for {kind}: {e}")
+    return False
+
+
 def record_ledger_write(ok: bool, status_code: int = None, detail: str = "",
                         phase: str = "reserve") -> bool:
     """
@@ -311,24 +357,33 @@ def record_ledger_write(ok: bool, status_code: int = None, detail: str = "",
         # so this is not a duplicate risk -- it is a known-incomplete ledger,
         # and continuing to trade on one is how the book and the broker part
         # company.
-        halt("ledger completion failed",
-             f"{detail} — a position may exist recorded as PENDING")
-        return False
+        # WAS A HALT. The row still blocks its own symbol (Gate 3b counts
+        # PENDING), so the containment that mattered was never the account-wide
+        # one -- and reconcile settles it against the broker on the next pass.
+        return flag("ledger completion failed",
+                    f"{detail} — a position may exist recorded as PENDING. "
+                    f"That row still blocks its symbol and reconcile will "
+                    f"settle it against the broker.")
 
     if status_code is not None and 400 <= status_code < 500:
         # Deterministic. PGRST204 on a missing column answered identically on
         # every attempt and would do so again.
-        halt("ledger rejected the row (4xx)",
-             f"HTTP {status_code} {detail} — deterministic, will not self-heal")
-        return False
+        # WAS A HALT. A rejected RESERVE means no order was placed -- the
+        # whole guarantee of the two-phase write -- so this is self-limiting:
+        # entries fail one by one and nothing reaches the broker unrecorded.
+        return flag("ledger rejected the row (4xx)",
+                    f"HTTP {status_code} {detail} — deterministic, will not "
+                    f"self-heal. No order was placed for this one.")
 
     n = _consecutive.get(key, 0) + 1
     _consecutive[key] = n
     log.error(f"ledger write failed ({n}/{MAX_CONSECUTIVE_WRITE_FAILURES}): {detail}")
     if n >= MAX_CONSECUTIVE_WRITE_FAILURES:
-        halt("ledger unwritable",
-             f"{n} consecutive failures — last: {detail}")
-        return False
+        # WAS A HALT. Same reasoning: a failed reserve places no order.
+        return flag("ledger unwritable",
+                    f"{n} consecutive failures — last: {detail}. Reserves are "
+                    f"failing, so entries are failing one at a time; no order "
+                    f"is placed without a row.")
     return True
 
 
@@ -382,9 +437,12 @@ def record_read(ok: bool, what: str, detail: str = "") -> bool:
     _consecutive[key] = n
     log.error(f"{what} read failed ({n}/{MAX_CONSECUTIVE_READ_FAILURES}): {detail}")
     if n >= MAX_CONSECUTIVE_READ_FAILURES:
-        halt(f"{what} unreadable",
-             f"{n} consecutive failures — last: {detail}")
-        return False
+        # WAS A HALT. Each cycle already fails closed on an unreadable read
+        # ("cannot read" is not "nothing there"), which is the containment that
+        # prevents a duplicate entry. The day no longer ends because of it.
+        return flag(f"{what} unreadable",
+                    f"{n} consecutive failures — last: {detail}. Every cycle "
+                    f"that cannot read this one skips itself.")
     return True
 
 
@@ -450,9 +508,14 @@ def record_order_reject(symbol: str, reason: str) -> bool:
     log.warning(f"order rejected for {symbol} "
                 f"({n}/{MAX_CONSECUTIVE_ORDER_REJECTS}): {reason}")
     if n >= MAX_CONSECUTIVE_ORDER_REJECTS:
-        halt("broker refusing orders",
-             f"{n} consecutive rejections — last: {symbol} {reason}")
-        return False
+        # WAS A HALT. A rejected order is not a position: nothing is at risk
+        # from trying again. If the refusals are real the operator sees this
+        # alert and decides; if they are one bad symbol, that symbol is
+        # blocked by the protection path and the rest of the universe trades.
+        return flag("broker refusing orders",
+                    f"{n} consecutive rejections — last: {symbol} {reason}. A "
+                    f"rejected order is not a position, so nothing is at risk "
+                    f"from the next attempt.")
     return True
 
 

@@ -180,8 +180,36 @@ def trail(trade: dict, kite, today: date, dry: bool = False) -> dict:
     trail_q = int(legs.get("trail_qty") or 0)
 
     if not tid or not trail_q:
-        return {"ok": True, "symbol": sym, "moved": False,
-                "reason": "no trailed leg to move (no stop-only GTT recorded)"}
+        # THIS RETURNED ok=True AND THAT WAS THE TRAP. "No recorded leg" was
+        # treated as "nothing to do", which is true when the position is
+        # protected by something else and false when it is protected by
+        # nothing -- and the two were indistinguishable because this read
+        # exit_legs, the column that is empty precisely when placement failed.
+        # ATHERENERG, entered 15 October, took this branch on 16 October and
+        # the job reported success while the position was naked.
+        #
+        # So ask the broker. Protected by something we did not record is fine
+        # (nothing to trail, nothing to fix). Protected by nothing is a
+        # FAILURE, and the caller repairs it.
+        try:
+            from atlas.execution import protection as PR
+            prot = PR.broker_protection(kite=kite)
+            legs_live = PR.confirm_legs(trade, prot)
+        except Exception as e:
+            return {"ok": False, "symbol": sym, "moved": False,
+                    "needs_protection": True,
+                    "reason": f"no recorded leg and the broker could not be "
+                              f"read to check for one ({type(e).__name__}: {e})"}
+        if legs_live["stop"] == PR.CONFIRMED:
+            return {"ok": True, "symbol": sym, "moved": False,
+                    "reason": f"no stop-only GTT recorded to trail, but a stop "
+                              f"IS confirmed at the broker "
+                              f"({legs_live['detail'][:120]}) — nothing to move"}
+        return {"ok": False, "symbol": sym, "moved": False,
+                "needs_protection": True,
+                "reason": (f"NOTHING IS PROTECTING THIS POSITION. No stop-only "
+                           f"GTT recorded and the broker shows no stop "
+                           f"({legs_live['stop']}: {legs_live['detail'] or prot.get('why')})")}
     if not (entry and cur_stop):
         return {"ok": False, "symbol": sym, "moved": False,
                 "reason": f"incomplete row: entry={entry} stop={cur_stop}"}
@@ -289,7 +317,24 @@ def run(dry: bool = False, trail_only: bool = False,
             return 1
 
     today = now.date()
-    new_today, older = [], []
+
+    # ── WHAT IS ACTUALLY PROTECTED, read from the broker ──────────
+    #
+    # THIS USED TO SPLIT ON entry_date ALONE: entered today -> handover,
+    # entered earlier -> trail. That routing assumes a position older than
+    # today already HAS its GTTs, which is true only when its own handover
+    # succeeded. When one fails, the position is "older" the next morning and
+    # routes to a trail that finds nothing to trail -- and no path in the
+    # system ever places the protection that was missed. That is how
+    # ATHERENERG went a session and a night naked.
+    #
+    # Age now decides only the MECHANISM. Whether to act at all is decided by
+    # what the broker is holding.
+    from atlas.execution import protection as PR
+    prot = PR.broker_protection(kite=kite) if not dry else {"ok": False,
+            "why": "dry run — the broker was not read", "orders": {}, "gtts": {}}
+
+    new_today, older, unprotected = [], [], []
     for t in rows:
         ed = t.get("entry_date")
         if isinstance(ed, str):
@@ -297,12 +342,44 @@ def run(dry: bool = False, trail_only: bool = False,
                 ed = date.fromisoformat(ed)
             except ValueError:
                 ed = None
-        (new_today if ed == today else older).append(t)
+        protected = prot.get("ok") and PR.is_protected(t, prot)
+        if not protected and not dry:
+            unprotected.append(t)
+        elif ed == today:
+            new_today.append(t)
+        else:
+            older.append(t)
 
-    log.info(f"{len(rows)} open long(s): {len(new_today)} opened today "
-             f"(handover), {len(older)} older (trail)")
+    log.info(f"{len(rows)} open long(s): {len(unprotected)} UNPROTECTED "
+             f"(repair), {len(new_today)} opened today (handover), "
+             f"{len(older)} older (trail)")
 
     failures = []
+
+    # ── THE REPAIR, FIRST ─────────────────────────────────────────
+    #
+    # Before the handover and before the trail, because a position with no
+    # protection at all is a different order of problem from a stop that could
+    # be a little tighter. At the pre-close every repair uses a GTT regardless
+    # of the position's age: a day-0 SL placed at 15:20 is flushed at 16:00,
+    # which is the window this whole job exists to close.
+    if unprotected and not dry:
+        print(f"\n── REPAIR — open with NO protection at the broker ──")
+        for t in unprotected:
+            r = PR.ensure_protected(t, kite=kite, prot=prot, now_ist=now,
+                                    at_preclose=True)
+            flg = "ok " if r["ok"] else "FAIL"
+            print(f"  [{flg}] {r['symbol']:<12} {r['action']:<20} "
+                  f"{str(r.get('reason', ''))[:70]}")
+            if r["ok"] and r.get("legs"):
+                _patch_trade(t["id"], {"exit_legs": {**(t.get("exit_legs") or {}),
+                                                     **(r.get("legs") or {})},
+                                       "exit_mechanism": r.get("mechanism") or "",
+                                       **({"target_price": r["target"]}
+                                          if r.get("target") else {})})
+            if not r["ok"]:
+                failures.append(f"{r['symbol']}: {r.get('reason')}")
+
     if not trail_only:
         print(f"\n── HANDOVER — positions opened {today} ──")
         for t in new_today:
@@ -329,16 +406,32 @@ def run(dry: bool = False, trail_only: bool = False,
           f"{len(failures)} failure(s)")
 
     if failures and not dry:
-        # A FAILED HANDOVER IS AN OVERNIGHT NAKED POSITION. Halt so nothing
-        # else is opened, and say which.
-        from atlas.risk import breaker
-        breaker.halt("PRECLOSE_GTT_FAILED",
-                     "could not complete the pre-close GTT handover for: "
-                     + "; ".join(failures[:4]))
+        # A FAILED HANDOVER IS AN OVERNIGHT NAKED POSITION -- and it is one
+        # SYMBOL's naked position. This used to call breaker.halt(), which on
+        # 2026-10-15 took the whole account down over ATHERENERG's tick size
+        # and refused 443 published rows the next morning in every sector.
+        #
+        # Each failing symbol is blocked for the session and registered as
+        # unprotected, so the alert repeats every 15 minutes until a stop is
+        # confirmed. Nothing stands the day down, and nothing survives it.
+        from atlas.risk import symbol_block as SB
+        from atlas.execution import protection as PR
+        _by_sym = {str(t.get("symbol")): t for t in rows}
+        for f in failures:
+            _sym = str(f).split(":", 1)[0].strip()
+            SB.block(_sym, SB.REASON_PROTECTION_FAILED,
+                     f"pre-close protection failed: {str(f)[:300]}")
+            _t = _by_sym.get(_sym)
+            if _t:
+                PR.register(_t, f"pre-close protection failed: {str(f)[:300]}",
+                            wanted_stop=_t.get("stop_price"))
         _alert("PRECLOSE HANDOVER FAILED",
                "The day-0 SL order dies at 16:00 and the overnight GTT is NOT "
                "in place for:\n" + "\n".join(f"· {f}" for f in failures[:6])
-               + "\nEntries are halted. THIS NEEDS A HUMAN BEFORE THE CLOSE.")
+               + "\n\nTHIS NEEDS A HUMAN BEFORE 16:00 — place these stops by "
+                 "hand. Those symbols are blocked for the rest of the session; "
+                 "ATLAS has NOT stood the day down and every other symbol is "
+                 "unaffected. Send /pause if you want entries stopped.")
         return 1
     return 0
 

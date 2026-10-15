@@ -263,7 +263,13 @@ def main() -> int:
                   place_target=True)
     check("a SHORT is refused, not protected", r["ok"], False)
     check("  mechanism is NONE", r["mechanism"], "NONE")
-    check("  and it says why", "long-only" in r["reason"], True, r["reason"][:56])
+    # THE REASON NAMES THE MECHANISM, NOT THE DIRECTION POLICY. It used to
+    # assert "long-only" was in the text; shorts were switched on on
+    # 2026-10-16, so that wording would send the next reader to a config flag
+    # instead of to the fact that matters -- a GTT does not exist for MIS, and
+    # a short is MIS.
+    check("  and it says why: GTT does not exist for MIS",
+          "GTT does not exist for MIS" in r["reason"], True, r["reason"][:56])
     check("  nothing reached the broker at all", len(k.calls), 0)
 
     k = FakeKite()
@@ -299,25 +305,35 @@ def main() -> int:
     # described a partial-protection state that can no longer exist.
     check("  no legs are left behind to orphan", len(r.get("legs") or {}), 0,
           "one instruction, both legs: placed whole or not at all")
-    # And a FAILED GTT must be reported as needing a halt, which is the signal
-    # the caller acts on. Checked here against protect_or_exit, since protect()
-    # itself does not own that decision.
-    # protect_or_exit RUNS ON FILL, so its primary is the DAY-0 SL order, not
-    # the GTT. The GTT is placed before the close by preclose_gtt. Injecting on
-    # the GTT here would exercise nothing, which is what this test did for a
-    # moment after the day-0/day-1 split landed.
+    # A FAILED DAY-0 SL NOW KEEPS THE POSITION. These four assertions are
+    # INVERTED from what they were, by Hemal's ruling of 2026-10-16: if ATLAS
+    # wants a trade and cannot protect it, it takes the trade and alerts until
+    # a human places a stop. They used to assert must_halt True and exited
+    # True, and they passed.
+    #
+    # WHY THE OLD SHAPE WAS RULED AGAINST: it converted a protectable position
+    # into a realised loss (the marketable LIMIT) AND stood the whole account
+    # down -- on 2026-10-15 over one instrument's tick size, refusing 443
+    # published rows the next morning.
+    #
+    # protect_or_flag RUNS ON FILL, so its primary is the DAY-0 SL order, not
+    # the GTT. The GTT is placed before the close by preclose_gtt.
     k2 = FakeKite(fail=("sl",))
-    pe = X.protect_or_exit(symbol="RELIANCE", direction="LONG", qty=45,
+    pe = X.protect_or_flag(symbol="RELIANCE", direction="LONG", qty=45,
                            product="CNC", fill_price=100.0, stop_price=95.0,
                            kite=k2)
-    check("a failed DAY-0 SL sets must_halt", pe["must_halt"], True,
-          "a broken protection mechanism must stop further entries even when "
-          "this position was closed cleanly")
-    check("  and the position was exited", pe["exited"], True)
-    check("  the primary attempted was an SL, not a GTT",
+    check("a failed DAY-0 SL does NOT set must_halt", pe["must_halt"], False,
+          "ATLAS does not switch itself off; the caller blocks the symbol")
+    check("  and the position is NOT exited", pe["exited"], False,
+          "the position is kept, deliberately, and alerted on")
+    check("  it reports unprotected, which obliges the caller",
+          pe["unprotected"], True)
+    check("  and it carries the stop it wanted, for the alert",
+          pe.get("wanted_stop"), 95.0)
+    check("  ONLY the SL was attempted — no fallback exit was sent",
           [c[1]["order_type"] for c in k2.calls if c[0] == "place_order"],
-          ["SL", "LIMIT"],
-          "SL refused -> marketable LIMIT; no GTT is placed on fill")
+          ["SL"],
+          "the marketable LIMIT fallback is no longer fired automatically")
 
     # THE FALLBACK IS A LIMIT PRICED THROUGH THE BOOK, NOT A MARKET ORDER.
     # On 2026-10-07 it was MARKET, and MARKET was refused by the same rule that

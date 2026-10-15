@@ -607,9 +607,14 @@ def open_positions_for_reconcile() -> list:
     resting exactly as they were. It is the opposite of committed_today(), where an
     empty set would read as "nothing is held" and permit a duplicate entry.
     """
+    # entry_price, stop_price, entry_date and exit_legs are here for the
+    # PROTECTION SWEEP below, which has to price a stop for a position that has
+    # none -- and reconcile_exits already falls back to exit_legs when it
+    # cannot discover legs from the broker. One read serves both.
     base = (f"{SUPABASE_URL}/rest/v1/atlas_trades"
             f"?status=in.({','.join(OPEN_STATUSES)})"
-            f"&select=id,symbol,direction,qty,gtt_trigger_id")
+            f"&select=id,symbol,direction,qty,gtt_trigger_id,entry_price,"
+            f"stop_price,entry_date,exit_legs")
     try:
         r = requests.get(base + ",product", headers=_headers(), timeout=15)
         if r.status_code == 200:
@@ -883,13 +888,75 @@ def cycle(state: Session) -> dict:
         try:
             from atlas.execution import exits as X
             from atlas.execution.gtt import list_atlas_gtts
+            # HELD FOR THE PROTECTION SWEEP BELOW, so one fetch serves both.
+            from atlas.execution.broker import get_kite as _gk
+            _k = _gk()
+            _rec_orders = _k.orders() if _k else None
+            _rec_gtts = _k.get_gtts() if _k else None
             rec = X.reconcile_exits(open_positions_for_reconcile(),
+                                    kite=_k, orders=_rec_orders,
                                     atlas_gtts=list_atlas_gtts())
             state.exit_cancelled = getattr(state, "exit_cancelled", 0) + rec["cancelled"]
             out["exits_reconciled"] = rec["checked"]
             out["exits_cancelled"] = rec["cancelled"]
             for a in rec.get("alerts", []):
                 alert("EXIT RECONCILE", a, key=a[:48])
+
+            # ── IS EVERY OPEN POSITION ACTUALLY PROTECTED? ────────
+            #
+            # The hole this closes: before 2026-10-16 protection was placed
+            # only at the moment of a fill and by preclose_gtt's handover,
+            # which was gated on entry_date == today. A position whose
+            # handover failed was never looked at again -- ATHERENERG went a
+            # session and a night naked while every path reported success.
+            #
+            # Asking HERE, every cycle, means a gap is found in minutes rather
+            # than at 15:20 or never. It costs no extra broker request: the
+            # orders and GTTs were already fetched for reconcile_exits.
+            #
+            # DURING THE SESSION the repair is a day-0 SL for a position
+            # entered today and a GTT for an older one -- the shares of an
+            # older position have settled, and a GTT checks demat.
+            try:
+                from atlas.execution import protection as PR
+                _open = open_positions_for_reconcile()
+                _prot = PR.broker_protection(orders=_rec_orders,
+                                             gtts=_rec_gtts)
+                _fixed = _naked = 0
+                for _t in _open:
+                    if _prot.get("ok") and PR.is_protected(_t, _prot):
+                        continue
+                    _r = PR.ensure_protected(_t, prot=_prot, now_ist=now_ist())
+                    if _r["ok"] and _r["action"].startswith("placed"):
+                        _fixed += 1
+                        log.warning(f"{_t.get('symbol')}: was OPEN with no "
+                                    f"protection — placed {_r['action']} "
+                                    f"({_r.get('mechanism')})")
+                        alert("PROTECTION REPAIRED",
+                              f"{_t.get('symbol')} was open with no stop at the "
+                              f"broker. ATLAS placed {_r['action']} "
+                              f"({_r.get('mechanism')}). Nothing was stood down.",
+                              key=str(_t.get("id")))
+                        PR.resolve(_t.get("id"))
+                    elif not _r["ok"]:
+                        _naked += 1
+                        PR.register(_t, _r.get("reason") or "unprotected",
+                                    wanted_stop=_t.get("stop_price"))
+                out["protection_repaired"] = _fixed
+                out["protection_naked"] = _naked
+
+                # THE REPEATING ALERT. Every cycle re-checks the register
+                # against the broker, drops anything now protected (including
+                # a stop the operator placed by hand) and re-alerts the rest
+                # every PR.UNPROTECTED_REPEAT_SECONDS.
+                sw = PR.sweep(_open, prot=_prot, send=send)
+                out["unprotected_outstanding"] = sw["outstanding"]
+            except Exception as e:
+                log.exception("protection sweep raised")
+                alert("PROTECTION SWEEP FAILED",
+                      f"{type(e).__name__}: {e} — ATLAS could not confirm that "
+                      f"open positions are protected this cycle. Nothing was "
+                      f"stood down; check by hand.")
         except Exception as e:
             log.exception("exit reconciliation raised")
             alert("EXIT RECONCILE FAILED",
