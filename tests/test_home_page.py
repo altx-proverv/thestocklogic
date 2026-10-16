@@ -18,7 +18,9 @@ sys.path.insert(0, str(ROOT))
 
 from engine.universe import SYMBOL_SECTOR_MAP          # noqa: E402
 
-PAGE = ROOT / "index.html"
+# THE MARKET VIEW MOVED TO /home ON 2026-10-17. index.html is the public
+# marketing landing page again; this file asserts the gated market view.
+PAGE = ROOT / "home.html"
 
 
 def main() -> int:

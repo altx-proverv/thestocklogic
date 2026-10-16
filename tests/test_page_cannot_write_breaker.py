@@ -22,7 +22,7 @@ THE FORBIDDEN SET, from the operator's instruction:
     breaker.halt · breaker.flag · any write under /var/lib/atlas
 
 THE PAGE'S DATA PATH, in full:
-    index.html                     static, no Python at all
+    home.html                      static, no Python at all
     atlas/execution/breaker_public.py   the read-only accessor (a leaf)
     engine/publish_orb.py          breaker -> public.orb_breaks (one way)
     engine/index_quotes.py         broker -> public.index_quotes (a producer)
@@ -78,7 +78,9 @@ PRODUCERS = [
     "engine/index_quotes.py",
 ]
 
-SERVED = ROOT / "index.html"
+# The market view, which moved to /home. index.html is the landing page and
+# touches none of this.
+SERVED = ROOT / "home.html"
 
 
 def module_name_for(path: Path):
@@ -248,7 +250,7 @@ def main() -> int:
     print("THE PAGE WRITES NOTHING AT ALL")
     print("-" * 104)
     if not SERVED.exists():
-        print("  ** index.html is missing **")
+        print("  ** home.html is missing **")
         ok = False
     else:
         html = SERVED.read_text(encoding="utf-8")
@@ -259,14 +261,14 @@ def main() -> int:
                      "method: 'PATCH'", 'method: "PATCH"',
                      "method: 'DELETE'", 'method: "DELETE"',
                      "method: 'PUT'", 'method: "PUT"'):
-            check(f"index.html issues no {verb}", verb in html, False)
+            check(f"home.html issues no {verb}", verb in html, False)
         for tbl in ("orb_breaks", "breadth_snapshots", "index_quotes"):
             # Reading them is the point; the check above covers writing.
             pass
-        check("index.html never names a breaker state file",
+        check("home.html never names a breaker state file",
               "/var/lib/atlas" in html, False)
         for name in FORBIDDEN_NAMES:
-            check(f"index.html never names {name!r}", name in html, False)
+            check(f"home.html never names {name!r}", name in html, False)
 
     print()
     print("AND THE TEST HAS TEETH — a planted import must fail it")

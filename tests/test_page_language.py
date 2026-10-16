@@ -31,8 +31,35 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# The served public surface. index.html is what "/" returns.
-SERVED = [ROOT / "index.html"]
+# ── WHAT THE RULE COVERS, AND WHAT IT CANNOT ──────────────────────
+#
+# EVERY PUBLICLY REACHABLE SERVED FILE, not just index.html. The gap this
+# closes is real: manifest.json read "Daily NSE trade signals — SMC-based
+# setups with entry, SL and targets", was served at /manifest.json, carried
+# three forbidden words, and passed because the test looked at one file.
+#
+# THE SCOPE IS THE PUBLIC SURFACE, and that is a judgement worth stating
+# rather than burying. §07 governs what TSL publishes to people who have not
+# signed in. The member pages behind the login -- /dashboard, /atlas,
+# /tsl-dashboard, /performance.html, /admin -- ARE a trade record: entry, stop
+# and target columns are their entire purpose, and the operator kept them
+# deliberately. Extending a forbidden-word test over them would leave two
+# options, delete content that was explicitly preserved or weaken the test
+# until it passes, and both are worse than naming the boundary here.
+#
+# So: everything an external visitor can reach is checked. Everything behind
+# the gate is listed as out of scope, by name, so the boundary is visible and
+# a new PUBLIC file cannot quietly land outside it.
+PUBLIC = ["index.html", "waitlist.html", "manifest.json"]
+
+GATED_OUT_OF_SCOPE = ["home.html", "signals.html", "atlas.html",
+                      "tsl-dashboard.html", "performance.html",
+                      "admin.html", "flash.html"]
+
+# Deployment config, not content. Served, but nobody reads it as copy.
+CONFIG_NOT_CONTENT = ["vercel.json"]
+
+SERVED = [ROOT / f for f in PUBLIC]
 
 # Single words, matched on word boundaries. Exactly the operator's list --
 # not a word more. "bullish" and "bearish" were in an earlier draft of this
@@ -119,6 +146,19 @@ def reader_visible(html: str) -> str:
     return "\n".join(x for x in out if x)
 
 
+# A DISCLAIMER IS NOT ADVICE. "Not a buy/sell recommendation" and "Not buy/sell
+# advice" are REQUIRED disclosures, and flagging them would push a page toward
+# removing its own disclaimer to pass a compliance test -- the exact opposite
+# of the intent. A match is exempt when it sits inside a negation.
+DISCLAIMER = re.compile(
+    r"\bnot\s+(a\s+|an\s+)?(sebi[- ]registered\s+)?"
+    r"[\w/&;, -]{0,40}$", re.I)
+
+
+def _is_disclaimer(text: str, pos: int) -> bool:
+    return bool(DISCLAIMER.search(text[max(0, pos - 60):pos]))
+
+
 def hits(text: str) -> list:
     """Words and phrases are judged on what a READER SEES. The encoded-grade
     tokens are judged on the RAW file, because their whole point is that they
@@ -129,6 +169,8 @@ def hits(text: str) -> list:
     found = []
     for w in FORBIDDEN_WORDS:
         for m in re.finditer(r"\b" + re.escape(w) + r"\b", text, re.I):
+            if _is_disclaimer(text, m.start()):
+                continue
             found.append((w, m.start(), text[max(0, m.start() - 45):
                                              m.start() + 45]
                           .replace("\n", " ")))
@@ -149,7 +191,7 @@ def hits(text: str) -> list:
 def main() -> int:
     ok = True
 
-    print("THE SERVED TEMPLATE")
+    print("EVERY PUBLICLY SERVED FILE")
     print("-" * 100)
     for page in SERVED:
         if not page.exists():
@@ -165,41 +207,66 @@ def main() -> int:
             print(f"      {w!r} at byte {pos}: …{ctx.strip()}…")
 
     print()
+    print("THE PUBLIC SET IS COMPLETE")
+    print("-" * 100)
+    # Every served file is either checked or named out of scope. A new public
+    # page that lands in neither list fails here rather than silently
+    # escaping the rule.
+    ignore = set()
+    vi = ROOT / ".vercelignore"
+    if vi.exists():
+        for line in vi.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                ignore.add(line.rstrip("/"))
+    served_files = sorted(
+        f.name for f in ROOT.iterdir()
+        if f.is_file() and f.suffix in (".html", ".json", ".webmanifest")
+        and f.name not in ignore and not f.name.endswith(".bak"))
+    classified = set(PUBLIC) | set(GATED_OUT_OF_SCOPE) | set(CONFIG_NOT_CONTENT)
+    unclassified = [f for f in served_files if f not in classified]
+    good = not unclassified
+    ok &= good
+    print(f"  {'every served file is classified':<56}"
+          f"{'ok' if good else '** UNCLASSIFIED: ' + ', '.join(unclassified) + ' **':<22}"
+          f"{len(served_files)} served file(s)")
+    print(f"      public  ({len(PUBLIC)}): {', '.join(PUBLIC)}")
+    print(f"      gated   ({len(GATED_OUT_OF_SCOPE)}): "
+          f"{', '.join(GATED_OUT_OF_SCOPE)}")
+
+    print()
     print("AND THE TEST HAS TEETH — a planted word must fail it")
     print("-" * 100)
     # PROOF. Plant each forbidden word into a copy of the real page, in the
     # places the rule names, and assert every one is caught.
-    base = SERVED[0].read_text(encoding="utf-8") if SERVED[0].exists() else ""
+    # A SYNTHETIC PAGE CARRYING EVERY SURFACE THE RULE NAMES. These used to
+    # plant into the real index.html by string anchor, which broke the moment
+    # that page changed -- the plants silently reported "anchor not found"
+    # instead of proving anything. A self-contained fixture cannot rot.
+    def page(body, head=""):
+        return ("<!DOCTYPE html><html><head>" + head +
+                "</head><body>" + body +
+                "<script>var x='harmless';</script></body></html>")
+
     plants = [
-        ("visible copy",
-         base.replace("<p id=\"reading\">Reading the market&hellip;</p>",
-                      "<p id=\"reading\">A clear buy here.</p>")),
-        ("a heading",
-         base.replace("<h2>Disclosed events</h2>",
-                      "<h2>Our top tip</h2>")),
-        ("an aria-label",
-         base.replace('aria-label="Events and breadth"',
-                      'aria-label="Entry and target levels"')),
-        ("alt text",
-         base + '\n<img src="/x.png" alt="recommendation chart">'),
-        ("a title tooltip",
-         base + '\n<span title="stop loss at 95">x</span>'),
+        ("visible copy",        page("<p>A clear buy here.</p>")),
+        ("a heading",           page("<h2>Our top tip</h2>")),
+        ("an aria-label",       page('<div aria-label="Entry and target levels">x</div>')),
+        ("alt text",            page('<img src="/x.png" alt="recommendation chart">')),
+        ("a title tooltip",     page('<span title="stop loss at 95">x</span>')),
+        ("a meta description",  page("<p>ok</p>",
+                                     head='<meta name="description" content="grade A setups">')),
         ("a JS string the page renders",
-         base.replace("No disclosed trigger found.",
-                      "A strong conviction signal.")),
-        ("an encoded grade class",
-         base + '\n<span class="ring-ap">x</span>'),
+         "<!DOCTYPE html><html><body><script>"
+         "var t='A strong conviction signal.';</script></body></html>"),
+        ("an encoded grade class", page('<span class="ring-ap">x</span>')),
     ]
     for where, mutated in plants:
-        if mutated == base:
-            print(f"  {where:<34}** ANCHOR NOT FOUND — plant did not apply **")
-            ok = False
-            continue
         found = hits(mutated)
         caught = bool(found)
         ok &= caught
         word = found[0][0] if found else "—"
-        print(f"  planted in {where:<30}"
+        print(f"  planted in {where:<32}"
               f"{'CAUGHT ' + repr(word) if caught else '** MISSED **'}")
 
     print()

@@ -1,7 +1,7 @@
 {
   "name": "The Stock Logic",
   "short_name": "Stock Logic",
-  "description": "Daily NSE trade signals — SMC-based setups with entry, SL and targets",
+  "description": "Observed market data for Indian equities: index levels, sector strength and disclosed company events. Information only.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0F1F38",

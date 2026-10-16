@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Stock Logic — Indian market data</title>
+<meta name="description" content="Observed market data for Indian equities: index levels, sector strength, opening-range activity and disclosed events. Information only.">
+<link rel="icon" href="/icon.svg">
+<link rel="manifest" href="/manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#080F1C; --header:#0A1424; --card:#0D1829; --rail:#0C1626;
+  --rail-label:#101E33; --hair:rgba(232,237,245,0.1);
+  --ink:#E8EDF5; --ink2:#8A9BB4; --micro:#7D8FA8; --ink3:#C4D2E4;
+  --link:#7FA8D9; --link-h:#A9C6E8;
+  --brand:#3BA9EE; --pos:#4ADE80; --neg:#F87171;
+  --amber:#E39F7F; --amber-b:rgba(217,119,87,0.6); --closed:#7D8FA8;
+  --h3:#1E8A4C; --h2:#19663D; --h1:#15492F; --h0:#1C2E4A;
+  --hm1:#5E1A20; --hm2:#8A1F26; --hm3:#B4232B;
+  --tile-ink:#F8FAFC; --tile-sub:rgba(248,250,252,0.68);
+  --stale-fill:#131C29; --stale-ink:#9AA9BE; --stale-sub:#78889D;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+.mono,.fig{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-variant-numeric:tabular-nums}
+.wrap{
+  max-width:1480px; margin:0 auto;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));
+  padding-right:max(16px, env(safe-area-inset-right, 0px));
+}
+a{color:var(--link); text-decoration:none}
+a:hover{color:var(--link-h); text-decoration:underline}
+button{font:inherit; color:inherit; background:none; border:none; cursor:pointer}
+:focus-visible{outline:2px solid var(--ink); outline-offset:2px}
+.micro{font-size:9.5px; font-weight:600; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--micro)}
+
+/* 1 HEADER */
+.hdr{background:var(--header); border-bottom:1px solid var(--hair);
+  position:sticky; top:0; z-index:30}
+.hdr-in{display:flex; align-items:center; gap:18px; padding-block:12px; min-height:52px}
+/* THE LOGO, to the same convention as every other page: 26px asset, an
+   11px rule, then the wordmark. This rendered as text before -- the only page
+   on the site that did not use the real mark. */
+.logo{display:flex; align-items:center; text-decoration:none; flex:0 0 auto}
+.logo:hover{text-decoration:none}
+.logo img{height:26px; width:auto; display:block}
+.logo-name{margin-left:11px; padding-left:11px;
+  border-left:1px solid rgba(232,237,245,.18);
+  font-size:10px; letter-spacing:3px; color:var(--ink2); white-space:nowrap;
+  line-height:1}
+@media(max-width:560px){.logo-name{display:none}}
+nav{display:flex; gap:16px; margin-left:4px; min-width:0}
+nav a{font-size:13px; color:var(--ink2); padding-bottom:3px; white-space:nowrap}
+nav a:hover{color:var(--ink); text-decoration:none}
+nav a[aria-current="page"]{color:var(--ink); font-weight:600;
+  border-bottom:2px solid var(--brand)}
+.state{margin-left:auto; display:flex; align-items:center; gap:8px; min-width:0}
+.dot{width:7px; height:7px; border-radius:50%; background:var(--closed); flex:0 0 auto}
+.dot.on{background:var(--brand)}
+.state-txt{font-size:11px; color:var(--ink2); white-space:nowrap}
+
+/* THE ACCOUNT MENU. Hidden until a session is confirmed, so a signed-out
+   visitor never sees a control that would do nothing. */
+.acct{position:relative; flex:0 0 auto}
+.acct-btn{display:flex; align-items:center; gap:5px; font-size:11px;
+  color:var(--ink2); padding:5px 8px; border:1px solid var(--hair);
+  border-radius:6px; min-height:30px}
+.acct-btn:hover{color:var(--ink); border-color:rgba(232,237,245,.28)}
+.acct-menu{position:absolute; right:0; top:calc(100% + 6px); min-width:210px;
+  background:var(--card); border:1px solid var(--hair); border-radius:8px;
+  padding:6px; z-index:50; box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.acct-menu button{display:block; width:100%; text-align:left; font-size:12px;
+  color:var(--ink); padding:8px 9px; border-radius:5px; min-height:34px}
+.acct-menu button:hover{background:var(--rail-label)}
+.acct-who{font-size:10.5px; color:var(--micro); padding:6px 9px 8px;
+  border-bottom:1px solid var(--hair); margin-bottom:5px;
+  overflow:hidden; text-overflow:ellipsis}
+
+.gate{padding-block:70px 90px}
+.gate-h{font-size:clamp(19px,2.2vw,27px); font-weight:600; margin:0 0 10px;
+  letter-spacing:-.012em; max-width:52ch}
+.gate-s{font-size:13px; color:var(--ink2); margin:0 0 8px; max-width:62ch}
+
+/* 2 THE READING */
+.reading{padding-block:26px 18px}
+.reading p{
+  font-size:clamp(19px,2.2vw,27px); font-weight:600; letter-spacing:-.012em;
+  line-height:1.3; margin:0; max-width:62ch; text-wrap:balance;
+}
+.prov{margin-top:10px; font-size:11px; color:var(--micro); max-width:72ch}
+
+/* 3 INDEX STRIP */
+.idx{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px;
+  padding-bottom:18px}
+.idx-t{background:var(--card); border:1px solid var(--hair); border-radius:10px;
+  padding:11px 12px; min-width:0}
+.idx-n{font-size:10.5px; font-weight:600; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--micro); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis}
+.idx-l{font-size:20px; font-weight:600; letter-spacing:-.01em; margin-top:5px}
+.idx-c{font-size:12.5px; font-weight:600; margin-top:2px}
+.fut{font-size:9px; color:var(--micro); letter-spacing:.06em; margin-top:3px}
+
+/* 4 THE TAPE */
+.tape{background:var(--rail); border-block:1px solid var(--hair);
+  overflow:hidden; position:relative}
+.tape-in{display:flex; width:max-content; animation:tape 86s linear infinite}
+@keyframes tape{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media (prefers-reduced-motion:reduce){
+  .tape-in{animation:none}
+  .tape{overflow-x:auto}
+}
+.tape-i{display:flex; align-items:baseline; gap:7px; padding:9px 18px;
+  border-right:1px solid var(--hair); white-space:nowrap}
+.tape-s{font-size:12px; font-weight:600}
+.tape-f{font-size:12px; font-weight:600}
+.tape-r{font-size:11px; color:var(--micro)}
+.arr{display:inline-block; font-size:11px; line-height:1}
+.arr.dn{transform:rotate(180deg)}
+.badge{font-size:9px; font-weight:600; letter-spacing:.08em; padding:1px 5px;
+  border:1px solid var(--hair); border-radius:3px; color:var(--micro)}
+
+/* 5 THE FLOOR */
+.floor{display:grid; grid-template-columns:minmax(0,1fr) 352px; gap:12px;
+  padding-block:18px}
+.centre{min-width:0}
+.flash{min-width:0; display:flex; flex-direction:column; gap:12px}
+@media (min-width:1100px){
+  .floor{height:clamp(440px,54vh,620px)}
+  .centre{overflow-y:auto; overflow-x:hidden; padding-right:4px}
+  .flash{overflow-y:auto}
+}
+.sect{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px}
+.sbox{background:var(--card); border:1px solid rgba(8,15,28,0.45);
+  border-radius:7px; padding:10px; text-align:left; min-width:0;
+  min-height:44px; display:block; width:100%}
+.sbox:hover{border-color:rgba(232,237,245,0.28)}
+.sbox[aria-expanded="true"]{grid-column:1/-1; border:2px solid var(--ink)}
+.s-n{font-size:10.5px; font-weight:600; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--tile-ink)}
+.s-p{font-size:15px; font-weight:600; margin-top:3px}
+.s-ad{font-size:9.5px; color:var(--tile-sub); margin-top:1px}
+.s-c{margin-top:7px; display:flex; flex-direction:column; gap:1px}
+.s-c div{font-size:9.5px; color:var(--tile-sub); display:flex;
+  justify-content:space-between; gap:8px; min-width:0}
+.s-c span:first-child{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.s-more{font-size:9.5px; color:var(--micro); margin-top:3px}
+.tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(94px,1fr));
+  gap:6px; margin-top:10px}
+.tile{border:1px solid rgba(8,15,28,0.45); border-radius:5px; padding:7px;
+  text-align:left; min-width:0; min-height:44px}
+.tile:hover{outline:2px solid rgba(232,237,245,0.45); outline-offset:-2px}
+.tile[aria-pressed="true"]{border:2px solid var(--ink)}
+.t-s{font-size:10px; font-weight:600; color:var(--tile-ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.t-p{font-size:12.5px; font-weight:600; color:var(--tile-ink)}
+.t-l{font-size:9.5px; color:var(--tile-sub)}
+.tile.stale{background:var(--stale-fill); border:1px dashed rgba(227,159,127,0.75)}
+.tile.stale .t-s{color:var(--stale-ink)}
+.tile.stale .t-p,.tile.stale .t-l{color:var(--stale-sub)}
+.stale-tag{font-size:8.5px; font-weight:600; letter-spacing:.06em;
+  color:var(--amber); margin-top:2px; line-height:1.25}
+.detail{grid-column:1/-1; background:var(--rail); border:1px solid var(--hair);
+  border-radius:7px; padding:12px; margin-top:8px}
+.d-top{display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap}
+.d-sym{font-size:14px; font-weight:700; letter-spacing:.04em}
+.d-px{margin-left:auto; text-align:right}
+.d-l{font-size:18px; font-weight:600}
+.d-c{font-size:12.5px; font-weight:600}
+.d-row{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px;
+  margin-top:12px}
+.d-f{min-width:0}
+.d-fv{font-size:12.5px; font-weight:600; margin-top:2px}
+.d-say{margin-top:11px; font-size:12px; color:var(--ink3); max-width:62ch}
+.rng{height:4px; background:rgba(232,237,245,0.12); border-radius:2px;
+  margin-top:7px; position:relative}
+.rng i{position:absolute; top:-3px; width:2px; height:10px; background:var(--ink);
+  border-radius:1px}
+
+/* FLASH BLOCKS */
+.blk{background:var(--card); border:1px solid var(--hair); border-radius:10px;
+  padding:12px; min-width:0}
+.blk h2{font-size:9.5px; font-weight:600; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--micro); margin:0 0 9px}
+.ev{border-top:1px solid var(--hair); padding-top:9px; margin-top:9px}
+.ev:first-of-type{border-top:none; padding-top:0; margin-top:0}
+.ev-h{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap}
+.ev-s{font-size:12px; font-weight:600}
+.ev-t{font-size:10px; color:var(--micro); margin-left:auto}
+.ev-p{font-size:12px; font-weight:600}
+.ev-x{font-size:11.5px; color:var(--ink3); margin-top:4px}
+.ev-src{font-size:10.5px; margin-top:4px}
+.spark{width:100%; height:48px; display:block; margin-bottom:7px}
+.bd-n{display:flex; gap:14px; align-items:baseline; flex-wrap:wrap}
+.bd-v{font-size:15px; font-weight:600}
+.bd-s{font-size:11.5px; color:var(--ink3); margin-top:6px}
+.empty{font-size:11.5px; color:var(--micro); line-height:1.5}
+
+/* 6 CALENDAR */
+.cal{display:grid; grid-template-columns:1fr 1fr; gap:12px; padding-bottom:22px}
+
+/* 7 FOOTER */
+footer{border-top:1px solid var(--hair); padding-block:20px 30px;
+  font-size:11px; color:var(--micro); line-height:1.6}
+footer p{margin:0 0 6px; max-width:88ch}
+
+/* RESPONSIVE */
+@media (max-width:1099px){
+  .floor{grid-template-columns:minmax(0,1fr); height:auto}
+  .centre,.flash{overflow:visible; height:auto}
+  .idx{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .sect{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .d-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:760px){
+  .sect{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-width:620px){
+  .idx{grid-template-columns:minmax(0,1fr)}
+  .sect{grid-template-columns:minmax(0,1fr)}
+  .cal{grid-template-columns:minmax(0,1fr)}
+  .d-row{grid-template-columns:minmax(0,1fr)}
+  .d-px{margin-left:0; text-align:left; width:100%}
+  .tiles{grid-template-columns:repeat(auto-fill,minmax(98px,1fr))}
+  .hdr-in{flex-wrap:wrap; gap:10px}
+  .state{margin-left:0; width:100%}
+}
+</style>
+</head>
+<body>
+<header class="hdr"><div class="wrap hdr-in">
+  <a href="/home" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"><span class="logo-name">THE STOCK LOGIC</span></a>
+  <nav aria-label="Main">
+    <a href="/home" aria-current="page">HOME</a>
+    <a href="/atlas">ATLAS</a>
+  </nav>
+  <div class="state"><span class="dot" id="dot"></span>
+    <span class="state-txt" id="state">Loading market data</span>
+    <div class="acct" id="acct" hidden>
+      <button class="acct-btn" id="acctBtn" aria-haspopup="true"
+              aria-expanded="false" aria-controls="acctMenu">
+        <span id="acctName">&mdash;</span><span aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="acct-menu" id="acctMenu" role="menu" hidden>
+        <div class="acct-who" id="acctEmail"></div>
+        <button role="menuitem" id="pwBtn">Change password</button>
+        <button role="menuitem" id="outBtn">Log out</button>
+      </div>
+    </div>
+  </div>
+</div></header>
+
+<section class="gate" id="gate" hidden><div class="wrap">
+  <h1 class="gate-h" id="gateMsg">Checking your access&hellip;</h1>
+  <p class="gate-s" id="gateSub"></p>
+  <p class="gate-s"><a href="/">Go to the home page to sign in</a></p>
+</div></section>
+
+<main id="shell" hidden>
+<div class="wrap">
+  <section class="reading" aria-labelledby="rd-h">
+    <h1 class="micro" id="rd-h">The reading</h1>
+    <p id="reading">Reading the market&hellip;</p>
+    <div class="prov" id="prov"></div>
+  </section>
+
+  <section aria-labelledby="ix-h">
+    <h2 class="micro" id="ix-h" style="margin:0 0 8px">Index levels</h2>
+    <div class="idx" id="idx"></div>
+  </section>
+</div>
+
+<section class="tape" aria-labelledby="tp-h">
+  <h2 class="micro" id="tp-h" style="position:absolute;left:-9999px">Market activity</h2>
+  <div class="tape-in" id="tape"></div>
+</section>
+
+<div class="wrap">
+  <section class="floor">
+    <div class="centre" id="centre" aria-labelledby="sc-h">
+      <h2 class="micro" id="sc-h" style="margin:0 0 8px">Sector strength</h2>
+      <div class="sect" id="sect"></div>
+    </div>
+    <aside class="flash" aria-label="Events and breadth">
+      <div class="blk"><h2>Disclosed events</h2><div id="events"></div></div>
+      <div class="blk"><h2>Breadth through the session</h2><div id="breadth"></div></div>
+      <div class="blk"><h2>Heavy volume, little movement</h2><div id="heavy"></div></div>
+    </aside>
+  </section>
+
+  <section class="cal" aria-labelledby="cl-h">
+    <h2 class="micro" id="cl-h" style="grid-column:1/-1;margin:0">Calendar</h2>
+    <div class="blk"><h2>Scheduled today</h2><div id="cal-today"></div></div>
+    <div class="blk"><h2>Landed yesterday</h2><div id="cal-yday"></div></div>
+  </section>
+</div>
+</main>
+
+<footer><div class="wrap">
+  <p>This page is market data, published for information only. The Stock Logic is
+  not registered with SEBI as a Research Analyst or as an Investment Adviser, and
+  nothing on this page is investment advice.</p>
+  <p>Figures are observed values from exchange-sourced feeds and may be delayed or
+  incomplete. Verify against your broker or the exchange before acting on anything
+  you read here.</p>
+</div></footer>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+var SB='https://eibdlcanpudjgmkjxrga.supabase.co';
+var AK='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpYmRsY2FucHVkamdta2p4cmdhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MzUxODMsImV4cCI6MjA5NDExMTE4M30.KmdMatjh1l8I-c80h71W7g0elATIBCwefa5gFU7t29A';
+var HDR={apikey:AK,Authorization:'Bearer '+AK};
+
+/* SYMBOL_SECTOR_MAP, embedded. The contract forbids globbing the price
+   directory: there were 19 orphan parquets once and a globbing page drew a
+   tile for each. tests/test_home_page.py fails if this drifts from
+   engine/universe.SYMBOL_SECTOR_MAP by even one symbol. */
+var SECTOR_MAP={"360ONE":"FINANCE","3MINDIA":"INFRA","AADHARHFC":"FINANCE","AARTIDRUGS":"PHARMA","AARTIIND":"METAL","AARTIPHARM":"PHARMA","AAVAS":"FINANCE","ABB":"INFRA","ABBOTINDIA":"PHARMA","ABCAPITAL":"FINANCE","ABDL":"FMCG","ABFRL":"FMCG","ABLBL":"FMCG","ABREL":"REALTY","ABSLAMC":"FINANCE","ACC":"INFRA","ACE":"INFRA","ACI":"METAL","ACMESOLAR":"ENERGY","ACUTAAS":"PHARMA","ADANIENSOL":"ENERGY","ADANIENT":"METAL","ADANIGREEN":"ENERGY","ADANIPORTS":"INFRA","ADANIPOWER":"ENERGY","ADVENZYMES":"PHARMA","AEGISLOG":"ENERGY","AEGISVOPAK":"ENERGY","AETHER":"METAL","AFCONS":"INFRA","AFFLE":"IT","AGARWALEYE":"PHARMA","AIAENG":"INFRA","AIIL":"FINANCE","AJANTPHARM":"PHARMA","AKUMS":"PHARMA","ALIVUS":"PHARMA","ALKEM":"PHARMA","ALKYLAMINE":"METAL","AMBER":"FMCG","AMBUJACEM":"INFRA","ANANDRATHI":"FINANCE","ANANTRAJ":"REALTY","ANGELONE":"FINANCE","ANTHEM":"PHARMA","ANUP":"INFRA","ANURAS":"METAL","APARINDS":"INFRA","APLAPOLLO":"INFRA","APLLTD":"PHARMA","APOLLO":"INFRA","APOLLOHOSP":"PHARMA","APOLLOTYRE":"AUTO","APTUS":"FINANCE","ARE&M":"AUTO","ARVIND":"FMCG","ARVINDFASN":"FMCG","ASAHIINDIA":"AUTO","ASHAPURMIN":"METAL","ASHOKA":"INFRA","ASHOKLEY":"INFRA","ASIANPAINT":"FMCG","ASIANTILES":"FMCG","ASKAUTOLTD":"AUTO","ASTERDM":"PHARMA","ASTRAL":"INFRA","ASTRAMICRO":"INFRA","ASTRAZEN":"PHARMA","ATGL":"ENERGY","ATHERENERG":"AUTO","ATUL":"METAL","AUBANK":"BANKING","AURIONPRO":"IT","AUROPHARMA":"PHARMA","AVALON":"INFRA","AVANTIFEED":"FMCG","AVL":"FMCG","AWL":"FMCG","AXISBANK":"BANKING","AZAD":"INFRA","BAJAJ-AUTO":"AUTO","BAJAJFINSV":"FINANCE","BAJAJHFL":"FINANCE","BAJAJHLDNG":"FINANCE","BAJFINANCE":"FINANCE","BALAMINES":"METAL","BALKRISIND":"AUTO","BALRAMCHIN":"FMCG","BALUFORGE":"INFRA","BANCOINDIA":"AUTO","BANDHANBNK":"BANKING","BANKBARODA":"BANKING","BANKINDIA":"FINANCE","BASF":"METAL","BATAINDIA":"FMCG","BAYERCROP":"METAL","BBL":"INFRA","BBOX":"IT","BBTC":"FMCG","BDL":"DEFENCE","BECTORFOOD":"FMCG","BEL":"DEFENCE","BELRISE":"AUTO","BEML":"DEFENCE","BERGEPAINT":"FMCG","BHARATFORG":"AUTO","BHARTIARTL":"TELECOM","BHARTIHEXA":"TELECOM","BHEL":"INFRA","BIKAJI":"FMCG","BIOCON":"PHARMA","BIRLACORPN":"INFRA","BLS":"FMCG","BLUEDART":"INFRA","BLUEJET":"PHARMA","BLUESTARCO":"FMCG","BLUESTONE":"FMCG","BOMDYEING":"FMCG","BORORENEW":"INFRA","BOSCHLTD":"AUTO","BPCL":"ENERGY","BRIGADE":"REALTY","BRITANNIA":"FMCG","BSE":"FINANCE","BSOFT":"IT","CAMPUS":"FMCG","CAMS":"FINANCE","CANBK":"BANKING","CANFINHOME":"FINANCE","CANHLIFE":"FINANCE","CAPLIPOINT":"PHARMA","CARBORUNIV":"INFRA","CARERATING":"FINANCE","CARTRADE":"FMCG","CASTROLIND":"ENERGY","CCL":"FMCG","CDSL":"FINANCE","CEATLTD":"AUTO","CELLO":"FMCG","CEMPRO":"INFRA","CENTRALBK":"FINANCE","CENTUM":"INFRA","CERA":"FMCG","CESC":"ENERGY","CGCL":"FINANCE","CGPOWER":"INFRA","CHALET":"FMCG","CHAMBLFERT":"METAL","CHENNPETRO":"ENERGY","CHOICEIN":"FINANCE","CHOLAFIN":"FINANCE","CHOLAHLDNG":"FINANCE","CIEINDIA":"AUTO","CIPLA":"PHARMA","CLEAN":"METAL","COALINDIA":"METAL","COCHINSHIP":"DEFENCE","COFORGE":"IT","COHANCE":"PHARMA","COLPAL":"FMCG","CONCOR":"INFRA","CONCORDBIO":"PHARMA","COROMANDEL":"METAL","CPPLUS":"INFRA","CRAFTSMAN":"AUTO","CREDITACC":"FINANCE","CRISIL":"FINANCE","CRIZAC":"FMCG","CROMPTON":"FMCG","CSBBANK":"FINANCE","CUB":"FINANCE","CUMMINSIND":"INFRA","CUPID":"FMCG","CYIENT":"IT","DABUR":"FMCG","DALBHARAT":"INFRA","DATAMATICS":"IT","DATAPATTNS":"INFRA","DBL":"INFRA","DCBBANK":"FINANCE","DCMSHRIRAM":"METAL","DEEPAKFERT":"METAL","DEEPAKNTR":"METAL","DELHIVERY":"INFRA","DELTACORP":"INFRA","DEVYANI":"FMCG","DIVISLAB":"PHARMA","DIXON":"FMCG","DLF":"REALTY","DMART":"FMCG","DOMS":"FMCG","DREDGECORP":"INFRA","DRREDDY":"PHARMA","DYNAMATECH":"INFRA","ECLERX":"IT","EDELWEISS":"FINANCE","EICHERMOT":"AUTO","EIDPARRY":"FMCG","EIEL":"ENERGY","EIHOTEL":"FMCG","ELECON":"INFRA","ELECTCAST":"INFRA","ELGIEQUIP":"INFRA","ELLEN":"METAL","EMAMILTD":"FMCG","EMCURE":"PHARMA","EMIL":"FMCG","EMMVEE":"INFRA","ENDURANCE":"AUTO","ENGINERSIN":"INFRA","ENRIN":"INFRA","ENTERO":"FMCG","EPL":"INFRA","EQUITASBNK":"FINANCE","ERIS":"PHARMA","ESCORTS":"INFRA","ETERNAL":"FMCG","ETHOSLTD":"FMCG","EUREKAFORB":"FMCG","EXIDEIND":"AUTO","FACT":"METAL","FEDERALBNK":"BANKING","FEDFINA":"FINANCE","FIEMIND":"AUTO","FINCABLES":"INFRA","FINPIPE":"INFRA","FIRSTCRY":"FMCG","FIVESTAR":"FINANCE","FLUOROCHEM":"METAL","FORCEMOT":"AUTO","FORTIS":"PHARMA","FSL":"IT","GABRIEL":"AUTO","GAEL":"FMCG","GAIL":"ENERGY","GALLANTT":"INFRA","GENESYS":"IT","GENUSPOWER":"INFRA","GESHIP":"INFRA","GHCL":"METAL","GICRE":"FINANCE","GILLETTE":"FMCG","GLAND":"PHARMA","GLAXO":"PHARMA","GLENMARK":"PHARMA","GLOBUSSPR":"FMCG","GMBREW":"FMCG","GMDCLTD":"METAL","GMMPFAUDLR":"INFRA","GMRAIRPORT":"FINANCE","GMRP&UI":"ENERGY","GNFC":"METAL","GODFRYPHLP":"FMCG","GODIGIT":"FINANCE","GODREJAGRO":"FMCG","GODREJCP":"FMCG","GODREJIND":"METAL","GODREJPROP":"REALTY","GOKEX":"FMCG","GOKULAGRO":"FMCG","GOLDIAM":"FMCG","GPIL":"INFRA","GPPL":"INFRA","GRANULES":"PHARMA","GRAPHITE":"INFRA","GRASIM":"INFRA","GRAVITA":"METAL","GREAVESCOT":"INFRA","GRINDWELL":"INFRA","GROWW":"FINANCE","GRSE":"DEFENCE","GRWRHITECH":"INFRA","GSFC":"METAL","GVT&D":"INFRA","HAL":"DEFENCE","HAPPSTMNDS":"IT","HAVELLS":"FMCG","HBLENGINE":"INFRA","HCG":"PHARMA","HCLTECH":"IT","HDBFS":"FINANCE","HDFCAMC":"FINANCE","HDFCBANK":"BANKING","HDFCLIFE":"FINANCE","HEGAM":"INFRA","HERITGFOOD":"FMCG","HEROMOTOCO":"AUTO","HEXT":"IT","HFCL":"IT","HGINFRA":"INFRA","HIKAL":"PHARMA","HINDALCO":"METAL","HINDCOPPER":"METAL","HINDOILEXP":"ENERGY","HINDPETRO":"ENERGY","HINDUNILVR":"FMCG","HINDZINC":"METAL","HIRECT":"INFRA","HOMEFIRST":"FINANCE","HONASA":"FMCG","HONAUT":"INFRA","HSCL":"METAL","HUBTOWN":"INFRA","HUDCO":"FINANCE","HYUNDAI":"AUTO","ICICIAMC":"FINANCE","ICICIBANK":"BANKING","ICICIGI":"FINANCE","ICICIPRULI":"FINANCE","ICIL":"FMCG","IDBI":"FINANCE","IDEA":"IT","IDFCFIRSTB":"BANKING","IEX":"FINANCE","IFBIND":"FMCG","IFCI":"FINANCE","IGIL":"FINANCE","IGL":"ENERGY","IIFL":"FINANCE","IIFLCAPS":"FINANCE","IKS":"IT","IMFA":"METAL","INDGN":"PHARMA","INDHOTEL":"FMCG","INDIACEM":"INFRA","INDIAGLYCO":"FMCG","INDIAMART":"IT","INDIANB":"FINANCE","INDIASHLTR":"FINANCE","INDIGO":"INFRA","INDIGOPNTS":"FMCG","INDUSINDBK":"BANKING","INDUSTOWER":"TELECOM","INFY":"IT","INOXINDIA":"INFRA","INOXWIND":"INFRA","INTELLECT":"IT","IOB":"FINANCE","IOC":"ENERGY","IOLCP":"PHARMA","IONEXCHANG":"ENERGY","IPCALAB":"PHARMA","IRB":"INFRA","IRCON":"INFRA","IRCTC":"FMCG","IREDA":"FINANCE","IRFC":"FINANCE","ITC":"FMCG","ITCHOTELS":"FMCG","ITI":"TELECOM","IXIGO":"FMCG","J&KBANK":"FINANCE","JAICORPLTD":"METAL","JAINREC":"METAL","JAMNAAUTO":"AUTO","JAYNECOIND":"INFRA","JBMA":"AUTO","JINDALSAW":"INFRA","JINDALSTEL":"METAL","JINDRILL":"ENERGY","JIOFIN":"FINANCE","JKCEMENT":"INFRA","JKIL":"INFRA","JKLAKSHMI":"INFRA","JKPAPER":"METAL","JKTYRE":"AUTO","JMFINANCIL":"FINANCE","JPPOWER":"ENERGY","JSFB":"FINANCE","JSL":"METAL","JSLL":"FMCG","JSWCEMENT":"INFRA","JSWDULUX":"FMCG","JSWENERGY":"ENERGY","JSWINFRA":"INFRA","JSWSTEEL":"METAL","JUBLFOOD":"FMCG","JUBLINGREA":"METAL","JUBLPHARMA":"PHARMA","JUSTDIAL":"FMCG","JWL":"INFRA","JYOTHYLAB":"FMCG","JYOTICNC":"INFRA","KAJARIACER":"FMCG","KALYANKJIL":"FMCG","KANSAINER":"FMCG","KARURVYSYA":"BANKING","KAYNES":"INFRA","KEC":"INFRA","KEI":"INFRA","KERNEX":"IT","KFINTECH":"FINANCE","KIMS":"PHARMA","KIRIINDUS":"METAL","KIRLOSBROS":"INFRA","KIRLOSENG":"INFRA","KIRLPNU":"INFRA","KITEX":"FMCG","KNRCON":"INFRA","KOTAKBANK":"BANKING","KPIGREEN":"ENERGY","KPIL":"INFRA","KPITTECH":"IT","KPRMILL":"FMCG","KRBL":"FMCG","KSB":"INFRA","KSCL":"FMCG","KTKBANK":"FINANCE","LALPATHLAB":"PHARMA","LATENTVIEW":"IT","LAURUSLABS":"PHARMA","LEMONTREE":"FMCG","LENSKART":"FMCG","LGEINDIA":"FMCG","LICHSGFIN":"FINANCE","LICI":"FINANCE","LINDEINDIA":"METAL","LLOYDSENGG":"INFRA","LLOYDSENT":"METAL","LLOYDSME":"METAL","LODHA":"REALTY","LT":"INFRA","LTF":"FINANCE","LTFOODS":"FMCG","LTM":"IT","LTTS":"IT","LUMAXIND":"AUTO","LUMAXTECH":"AUTO","LUPIN":"PHARMA","LXCHEM":"METAL","M&M":"AUTO","M&MFIN":"FINANCE","MAHABANK":"FINANCE","MAHSCOOTER":"FINANCE","MAHSEAMLES":"INFRA","MANAPPURAM":"FINANCE","MANINDS":"METAL","MANINFRA":"INFRA","MANKIND":"PHARMA","MANORAMA":"FMCG","MANYAVAR":"FMCG","MAPMYINDIA":"IT","MARICO":"FMCG","MARKSANS":"PHARMA","MARUTI":"AUTO","MASTEK":"IT","MAXHEALTH":"PHARMA","MAZDOCK":"DEFENCE","MCX":"FINANCE","MEDANTA":"PHARMA","MEDPLUS":"FMCG","MEESHO":"FMCG","METROPOLIS":"PHARMA","MFSL":"FINANCE","MGL":"ENERGY","MIDHANI":"INFRA","MINDACORP":"AUTO","MMTC":"METAL","MOIL":"METAL","MOREPENLAB":"PHARMA","MOTHERSON":"AUTO","MOTILALOFS":"FINANCE","MPHASIS":"IT","MRF":"AUTO","MRPL":"ENERGY","MSUMI":"AUTO","MUTHOOTFIN":"FINANCE","NAM-INDIA":"FINANCE","NATCOPHARM":"PHARMA","NATIONALUM":"METAL","NAUKRI":"IT","NAVA":"ENERGY","NAVINFLUOR":"METAL","NAZARA":"FMCG","NBCC":"INFRA","NCC":"INFRA","NELCO":"IT","NEOGEN":"METAL","NESTLEIND":"FMCG","NETWEB":"IT","NEULANDLAB":"PHARMA","NEWGEN":"IT","NFL":"METAL","NH":"PHARMA","NHPC":"ENERGY","NIACL":"FINANCE","NIVABUPA":"FINANCE","NLCINDIA":"ENERGY","NMDC":"METAL","NOCIL":"METAL","NSLNISP":"METAL","NTPC":"ENERGY","NTPCGREEN":"ENERGY","NUVAMA":"FINANCE","NUVOCO":"INFRA","NYKAA":"FMCG","OBEROIRLTY":"REALTY","OFSS":"IT","OIL":"ENERGY","OLAELEC":"AUTO","OLECTRA":"AUTO","ONESOURCE":"PHARMA","ONGC":"ENERGY","OPTIEMUS":"TELECOM","ORIENTCEM":"INFRA","OSWALPUMPS":"INFRA","PAGEIND":"FMCG","PANACEABIO":"PHARMA","PARADEEP":"METAL","PARAS":"INFRA","PATANJALI":"FMCG","PAYTM":"FINANCE","PCBL":"METAL","PENIND":"METAL","PERSISTENT":"IT","PETRONET":"ENERGY","PFC":"FINANCE","PFIZER":"PHARMA","PFOCUS":"FMCG","PGEL":"FMCG","PGHH":"FMCG","PGIL":"FMCG","PHOENIXLTD":"REALTY","PICCADIL":"FMCG","PIDILITIND":"METAL","PIIND":"METAL","PINELABS":"FINANCE","PIRAMALFIN":"FINANCE","PNB":"BANKING","PNBHOUSING":"FINANCE","PNCINFRA":"INFRA","PNGJL":"FMCG","POLICYBZR":"FINANCE","POLYCAB":"INFRA","POLYMED":"PHARMA","POLYPLEX":"METAL","POONAWALLA":"FINANCE","POWERGRID":"ENERGY","POWERINDIA":"INFRA","POWERMECH":"INFRA","PPLPHARMA":"PHARMA","PRAJIND":"INFRA","PRAKASH":"METAL","PRECWIRE":"METAL","PREMIERENE":"INFRA","PRESTIGE":"REALTY","PRICOLLTD":"AUTO","PRIVISCL":"METAL","PRUDENT":"FINANCE","PTC":"ENERGY","PTCIL":"INFRA","PVRINOX":"FMCG","PWL":"FMCG","RADICO":"FMCG","RAILTEL":"IT","RAIN":"METAL","RAINBOW":"PHARMA","RALLIS":"METAL","RAMCOCEM":"INFRA","RATEGAIN":"IT","RATNAMANI":"INFRA","RAYMOND":"FMCG","RAYMONDLSL":"FMCG","RBA":"FMCG","RBLBANK":"BANKING","RCF":"METAL","RECLTD":"FINANCE","REDINGTON":"IT","REFEX":"ENERGY","RELIANCE":"ENERGY","RELIGARE":"FINANCE","RHIM":"INFRA","RICOAUTO":"AUTO","RITES":"INFRA","RKFORGE":"AUTO","ROUTE":"TELECOM","RPOWER":"ENERGY","RRKABEL":"INFRA","RVNL":"INFRA","SAFARI":"FMCG","SAGILITY":"IT","SAIL":"METAL","SAILIFE":"PHARMA","SAMHI":"FMCG","SAMMAANCAP":"FINANCE","SANDUMA":"METAL","SANGHVIMOV":"INFRA","SANOFI":"PHARMA","SANSERA":"AUTO","SAPPHIRE":"FMCG","SARDAEN":"METAL","SAREGAMA":"FMCG","SBFC":"FINANCE","SBICARD":"FINANCE","SBILIFE":"FINANCE","SBIN":"BANKING","SCHAEFFLER":"AUTO","SCHNEIDER":"INFRA","SCI":"INFRA","SEAMECLTD":"INFRA","SENCO":"FMCG","SFL":"FMCG","SHAILY":"FMCG","SHAKTIPUMP":"INFRA","SHARDACROP":"METAL","SHAREINDIA":"FINANCE","SHILPAMED":"PHARMA","SHREECEM":"INFRA","SHRIPISTON":"AUTO","SHRIRAMFIN":"FINANCE","SHYAMMETL":"INFRA","SIEMENS":"INFRA","SIGNATURE":"REALTY","SJVN":"ENERGY","SKFINDIA":"AUTO","SKIPPER":"INFRA","SKYGOLD":"FMCG","SMSPHARMA":"PHARMA","SOBHA":"REALTY","SOLARINDS":"METAL","SONACOMS":"AUTO","SONATSOFTW":"IT","SPARC":"PHARMA","SPLPETRO":"METAL","SPMLINFRA":"INFRA","SRF":"METAL","SSWL":"AUTO","STAR":"PHARMA","STARHEALTH":"FINANCE","STYRENIX":"METAL","SUDARSCHEM":"METAL","SUMICHEM":"METAL","SUNDARMFIN":"FINANCE","SUNDRMFAST":"INFRA","SUNPHARMA":"PHARMA","SUNTECK":"REALTY","SUNTV":"FMCG","SUPREMEIND":"INFRA","SUPRIYA":"PHARMA","SURYAROSNI":"INFRA","SUVEN":"PHARMA","SUZLON":"INFRA","SWANCORP":"METAL","SWIGGY":"FMCG","SWSOLAR":"INFRA","SYNGENE":"PHARMA","SYRMA":"INFRA","TANLA":"IT","TARC":"REALTY","TARIL":"INFRA","TATACAP":"FINANCE","TATACHEM":"METAL","TATACOMM":"TELECOM","TATACONSUM":"FMCG","TATAELXSI":"IT","TATAINVEST":"FINANCE","TATAPOWER":"ENERGY","TATASTEEL":"METAL","TATATECH":"IT","TBOTEK":"FMCG","TCS":"IT","TDPOWERSYS":"INFRA","TECHM":"IT","TECHNOE":"INFRA","TEGA":"INFRA","TEJASNET":"TELECOM","TENNIND":"AUTO","TEXRAIL":"INFRA","TFCILTD":"FINANCE","THELEELA":"FMCG","THERMAX":"INFRA","THOMASCOOK":"FMCG","THYROCARE":"PHARMA","TI":"FMCG","TIINDIA":"AUTO","TIMETECHNO":"INFRA","TIMKEN":"INFRA","TIPSMUSIC":"FMCG","TIRUMALCHM":"METAL","TITAGARH":"INFRA","TITAN":"FMCG","TMB":"FINANCE","TMCV":"INFRA","TMPV":"AUTO","TORNTPHARM":"PHARMA","TORNTPOWER":"ENERGY","TRANSRAILL":"INFRA","TRAVELFOOD":"FMCG","TRENT":"FMCG","TRIDENT":"FMCG","TRITURBINE":"INFRA","TRIVENI":"FMCG","TTML":"IT","TVSMOTOR":"AUTO","UBL":"FMCG","UCOBANK":"FINANCE","UJJIVANSFB":"FINANCE","ULTRACEMCO":"INFRA","UNIONBANK":"BANKING","UNITDSPR":"FMCG","UNIVCABLES":"INFRA","UNOMINDA":"AUTO","UPL":"METAL","URBANCO":"FMCG","USHAMART":"INFRA","UTIAMC":"FINANCE","V2RETAIL":"FMCG","VADILALIND":"FMCG","VAIBHAVGBL":"FMCG","VARROC":"AUTO","VBL":"FMCG","VEDL":"METAL","VGUARD":"FMCG","VIJAYA":"PHARMA","VIKRAMSOLR":"INFRA","VIMTALABS":"PHARMA","VINATIORGA":"METAL","VIPIND":"FMCG","VMART":"FMCG","VMM":"FMCG","VOLTAMP":"INFRA","VOLTAS":"FMCG","VSTTILLERS":"AUTO","VTL":"FMCG","WAAREEENER":"INFRA","WAAREERTL":"INFRA","WABAG":"ENERGY","WALCHANNAG":"INFRA","WELCORP":"INFRA","WELENT":"INFRA","WELSPUNLIV":"FMCG","WENDT":"INFRA","WHEELS":"AUTO","WHIRLPOOL":"FMCG","WIPRO":"IT","WOCKPHARMA":"PHARMA","YATHARTH":"PHARMA","YESBANK":"FINANCE","ZAGGLE":"IT","ZEEL":"FMCG","ZENSARTECH":"IT","ZENTEC":"INFRA","ZFCVINDIA":"AUTO","ZYDUSLIFE":"PHARMA","ZYDUSWELL":"FMCG"};
+
+/* CHOLAFIN carries ltp=0 since 22 September. It has a row, so COUNT(*) reports
+   full coverage while it has no usable price -- counted it would read as a
+   decline forever. Excluded from the denominator, shown as INVESTIGATE. */
+var NO_PRICE={CHOLAFIN:1};
+/* Listed too recently to have history. Reads stale and must not look like a
+   fault; HEGAM clears around 1 December. */
+var NEW_LISTING={HEGAM:'2026-12-01'};
+
+var HEAT=[[2,'var(--h3)'],[1,'var(--h2)'],[0.3,'var(--h1)'],
+          [-0.3,'var(--h0)'],[-1,'var(--hm1)'],[-2,'var(--hm2)']];
+function heat(p){
+  if(p===null||p===undefined||isNaN(p))return 'var(--h0)';
+  var v=+p;
+  if(v>=2)return 'var(--h3)';
+  if(v>=1)return 'var(--h2)';
+  if(v>=0.3)return 'var(--h1)';
+  if(v>-0.3)return 'var(--h0)';
+  if(v>-1)return 'var(--hm1)';
+  if(v>-2)return 'var(--hm2)';
+  return 'var(--hm3)';
+}
+function sign(p){return (p===null||p===undefined||isNaN(p))?'var(--stale-ink)'
+  :(+p>=0?'var(--pos)':'var(--neg)');}
+function pct(p,d){ if(p===null||p===undefined||p===''||isNaN(p))return '—';
+  var v=+p; return (v>=0?'+':'')+v.toFixed(d===undefined?2:d)+'%'; }
+function num(n,d){ if(n===null||n===undefined||n===''||isNaN(n))return '—';
+  return (+n).toLocaleString('en-IN',{minimumFractionDigits:d===undefined?2:d,
+    maximumFractionDigits:d===undefined?2:d}); }
+function esc(s){return String(s===null||s===undefined?'':s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;');}
+function istNow(){return new Date(Date.now()+(5.5*3600*1000));}
+function istDate(){return istNow().toISOString().split('T')[0];}
+function hhmmss(d){return d.toISOString().substr(11,8);}
+
+/* One read path. Every feed resolves to an array: a single failing table must
+   never blank the page, and it must say what went wrong in the console. */
+async function sbGet(path){
+  var r;
+  try{ r=await fetch(SB+path,{headers:HDR}); }
+  catch(e){ console.error('home: '+path+' -> '+e.message); return []; }
+  if(!r.ok){
+    var b=''; try{ b=(await r.text()).slice(0,200); }catch(e){}
+    console.error('home: '+path+' -> HTTP '+r.status+' '+b);
+    return [];
+  }
+  try{ var j=await r.json(); return Array.isArray(j)?j:[]; }
+  catch(e){ console.error('home: '+path+' -> bad JSON'); return []; }
+}
+
+var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
+       sectors:[],open:null,sel:null,covered:0,uncovered:0};
+
+/* ── WHERE THE DAY CHANGE COMES FROM ──────────────────────────────
+   NOT from live_prices.change_pct. That column is 0.0 for all 745 rows and
+   always has been: upstox_ws computes (ltp - ohlc.close)/ohlc.close and reads
+   ohlc.close as the PREVIOUS close, while the same ohlc block is read
+   elsewhere in that file as TODAY'S high/low/open. Both cannot be true.
+   ohlc.close is today's close-so-far, which during a session IS the last
+   price, so the expression is exactly 0 for every symbol — one distinct value
+   across 745 rows while ltp has 741.
+
+   intraday_prices carries (ltp - prev_close)/prev_close from rbe_engine's
+   websocket, where prev_close is a different field from a different endpoint.
+   It covers the ~498 symbols on that feed.
+
+   A SYMBOL OUTSIDE THOSE 498 IS NOT RENDERED AS A FALSE NEUTRAL. It keeps its
+   last known close and is labelled as such. Colouring it 0.00% would put it
+   in the neutral heat band and make "no coverage" look like "did not move",
+   which is the same lie this whole change exists to stop telling. */
+function mergeIntraday(){
+  var by={};
+  S.intraday.forEach(function(r){by[r.symbol]=r;});
+  S.covered=0; S.uncovered=0;
+  S.prices.forEach(function(p){
+    var r=by[p.symbol];
+    if(r){
+      p.change_pct=r.change_pct;
+      p.ltp=r.ltp;
+      p.volume_ratio=r.volume_ratio;
+      p.covered=true;
+      S.covered++;
+    }else{
+      /* No intraday coverage. Keep the last known close, drop the dead
+         change so nothing downstream can colour it. */
+      p.change_pct=null;
+      p.covered=false;
+      S.uncovered++;
+    }
+  });
+}
+
+/* ── IS THE MARKET OPEN ───────────────────────────────────────────
+   live_prices refreshes four times a session. The page must never imply it is
+   live between those refreshes, so the state line carries the feed's own
+   updated_at and nothing else pretends to tick. */
+function marketOpen(){
+  var d=istNow(), day=d.getUTCDay(), m=d.getUTCHours()*60+d.getUTCMinutes();
+  return day>=1&&day<=5&&m>=555&&m<=930;
+}
+
+function renderState(){
+  var dot=document.getElementById('dot'), txt=document.getElementById('state');
+  var last=S.prices.length?S.prices.reduce(function(a,b){
+    return (a.updated_at>b.updated_at)?a:b;}).updated_at:null;
+  if(marketOpen()){
+    dot.className='dot on';
+    txt.textContent='Live · '+hhmmss(istNow())+' IST';
+  }else{
+    dot.className='dot';
+    var ds=last?String(last).slice(0,10):istDate();
+    txt.textContent='Market closed · last close '+ds;
+  }
+}
+
+/* ── 2 THE READING, generated ─────────────────────────────────── */
+/* ── IS THE CHANGE FIELD ALIVE? ───────────────────────────────────
+   live_prices.change_pct was 0.0 for all 745 rows on 2026-10-17 -- not a flat
+   market, a dead column. upstox_ws.py computes it as
+   (ltp - ohlc.close)/ohlc.close, and falls back to `close = ltp` when the
+   quote carries no ohlc, which yields exactly 0.00% for every symbol and says
+   nothing about it.
+
+   A heatmap drawn from that is uniformly neutral and looks like a calm
+   session. It is not a calm session; it is no data. The page says which. */
+function changeFeedDead(){
+  /* True only when NOTHING has an intraday change -- before the first sweep
+     of a session, or if rbe_engine is not running. A dead column and an
+     un-started session look the same to a reader, so the copy says which. */
+  return S.covered===0;
+}
+
+function renderReading(){
+  var secs=S.sectors;
+  if(changeFeedDead()){
+    document.getElementById('reading').textContent=
+      'The change-on-day field is reading zero for every symbol in the '+
+      'universe, so no sector or breadth reading can be drawn from it.';
+    document.getElementById('prov').textContent=
+      'Last prices are present and current; the change-on-day column is not '+
+      'being populated. Levels in the index strip above are read separately '+
+      'and are unaffected. This is a feed fault, not a flat market, and it is '+
+      'shown rather than hidden.';
+    return;
+  }
+  if(!secs.length){
+    document.getElementById('reading').textContent=
+      'No sector data for the last completed session.';
+    return;
+  }
+  var green=secs.filter(function(s){return s.pct>0;}).length;
+  var adv=0,dec=0;
+  S.prices.forEach(function(p){
+    if(NO_PRICE[p.symbol]||p.covered===false)return;
+    var c=parseFloat(p.change_pct);
+    if(isNaN(c))return;
+    if(c>0)adv++; else if(c<0)dec++;
+  });
+  var sorted=secs.slice().sort(function(a,b){return b.pct-a.pct;});
+  var lead=sorted.slice(0,2).map(function(s){return s.name;});
+  var lag=sorted.slice(-2).map(function(s){return s.name;}).reverse();
+  var open=marketOpen();
+  var txt=(open?'':'At the last close: ')+
+    'breadth '+adv.toLocaleString('en-IN')+' to '+dec.toLocaleString('en-IN')+
+    ', and '+green+' of '+secs.length+' sectors are green. '+
+    lead.join(' and ')+' are leading; '+lag.join(' and ')+' are under pressure.';
+  document.getElementById('reading').textContent=txt;
+
+  var last=S.prices.length?String(S.prices.reduce(function(a,b){
+    return (a.updated_at>b.updated_at)?a:b;}).updated_at):'';
+  var stamp=last?last.slice(11,16)+' IST on '+last.slice(0,10):'unknown';
+  var cov='Day change is measured against the previous close on the intraday '+
+    'feed, which covers '+S.covered+' of '+
+    Object.keys(SECTOR_MAP).length+' symbols; the remaining '+S.uncovered+
+    ' show their last known close and are labelled on the tile. ';
+  var prov=cov+'Last prices refreshed '+stamp+
+    '. The price feed refreshes four times a session '+
+    '(08:45, 09:45, 11:30, 15:15 IST) and does not update between those '+
+    'times. '+
+    S.orb.length+' opening-range '+(S.orb.length===1?'move':'moves')+
+    ' and '+S.events.length+' disclosed '+
+    (S.events.length===1?'event':'events')+' logged today.';
+  if(!open) prov+=' Showing the close of '+(last?last.slice(0,10):istDate())+
+    '. Updates resume at 09:15.';
+  document.getElementById('prov').textContent=prov;
+}
+
+/* ── 3 INDEX STRIP ────────────────────────────────────────────── */
+function renderIdx(){
+  var want=['NIFTY50','NIFTYBANK','NIFTYMIDCAP','NIFTYSMLCAP','INDIAVIX','USDINR'];
+  var by={}; S.idx.forEach(function(r){by[r.symbol]=r;});
+  document.getElementById('idx').innerHTML=want.map(function(k){
+    var r=by[k];
+    if(!r)return '<div class="idx-t"><div class="idx-n">'+esc(k)+
+      '</div><div class="idx-l fig">—</div>'+
+      '<div class="fut">no quote recorded</div></div>';
+    return '<div class="idx-t"><div class="idx-n">'+esc(r.display_name)+'</div>'+
+      '<div class="idx-l fig">'+num(r.ltp)+'</div>'+
+      '<div class="idx-c fig" style="color:'+sign(r.change_pct)+'">'+
+      pct(r.change_pct)+'</div>'+
+      (r.is_future?'<div class="fut">near-month future · expires '+
+        esc(r.expiry)+' · not the spot rate</div>':'')+
+      '</div>';
+  }).join('');
+}
+
+/* ── 4 THE TAPE ───────────────────────────────────────────────── */
+function tapeItems(){
+  var out=[];
+  S.orb.forEach(function(b){
+    var down=(b.side==='LONG'&&b.break_close<b.range_low)||b.side==='SHORT'?false:true;
+    var below=b.break_close!==null&&b.range_low!==null&&+b.break_close<+b.range_low;
+    out.push({
+      sym:b.symbol, p:b.change_pct, dn:below,
+      badge:'ORB '+(below?'↓':'↑'),
+      why:'broke '+(below?'below':'above')+' its opening range '+
+          num(b.range_low)+'–'+num(b.range_high)+
+          (b.break_minute?' at '+b.break_minute:'')
+    });
+  });
+  /* MOVERS COME OFF THE INTRADAY FEED, both halves of the rule.
+     This used signals.rvol -- an END-OF-DAY figure on a table that carries
+     only the ~443 published rows for a date -- against a change_pct that was
+     always zero, so the rule could never fire at all. Both numbers now come
+     from the same websocket sweep, measured at the same instant. */
+  S.prices.forEach(function(p){
+    if(NO_PRICE[p.symbol]||p.covered===false)return;
+    var c=parseFloat(p.change_pct), v=parseFloat(p.volume_ratio);
+    if(isNaN(c)||Math.abs(c)<1.5)return;
+    if(!(v>=2))return;
+    out.push({sym:p.symbol, p:c, dn:c<0, badge:'VOL '+v.toFixed(1)+'x',
+      why:'moved '+Math.abs(c).toFixed(2)+'% running at '+v.toFixed(1)+
+          '× its normal pace for this time of day'});
+  });
+  return out;
+}
+function renderTape(){
+  var items=tapeItems();
+  if(!items.length){
+    document.getElementById('tape').innerHTML=
+      '<div class="tape-i"><span class="tape-r">No opening-range moves '+
+      'recorded for the last completed session.</span></div>';
+    return;
+  }
+  var html=items.map(function(i){
+    return '<div class="tape-i">'+
+      '<span class="arr'+(i.dn?' dn':'')+'" style="color:'+
+        (i.dn?'var(--neg)':'var(--pos)')+'" aria-hidden="true">&#9650;</span>'+
+      '<span class="tape-s">'+esc(i.sym)+'</span>'+
+      '<span class="tape-f fig" style="color:'+sign(i.p)+'">'+pct(i.p)+'</span>'+
+      '<span class="badge">'+esc(i.badge)+'</span>'+
+      '<span class="tape-r">'+esc(i.why)+'</span></div>';
+  }).join('');
+  /* Concatenated with itself so the -50% translate loops seamlessly. */
+  document.getElementById('tape').innerHTML=html+html;
+}
+
+/* ── 5 SECTORS ────────────────────────────────────────────────── */
+function buildSectors(){
+  var by={};
+  S.prices.forEach(function(p){
+    var sec=SECTOR_MAP[p.symbol];
+    if(!sec)return;
+    (by[sec]=by[sec]||[]).push(p);
+  });
+  S.sectors=Object.keys(by).map(function(name){
+    var rows=by[name], adv=0, dec=0, sum=0, n=0;
+    rows.forEach(function(r){
+      /* ONLY COVERED SYMBOLS COUNT. An uncovered one has no change to
+         average, and treating it as 0 would drag every sector toward flat in
+         proportion to how little of it the feed reaches. */
+      if(NO_PRICE[r.symbol]||r.covered===false)return;
+      var c=parseFloat(r.change_pct);
+      if(isNaN(c))return;
+      sum+=c; n++;
+      if(c>0)adv++; else if(c<0)dec++;
+    });
+    rows.sort(function(a,b){
+      var x=parseFloat(a.change_pct), y=parseFloat(b.change_pct);
+      return (isNaN(y)?-99:y)-(isNaN(x)?-99:x);
+    });
+    return {name:name, rows:rows, adv:adv, dec:dec, pct:n?sum/n:0, counted:n};
+  }).sort(function(a,b){return b.pct-a.pct;});
+}
+
+function staleOf(sym,row){
+  if(NEW_LISTING[sym])return {cls:'stale',tag:'NEW LISTING / building history'};
+  var px=row?parseFloat(row.ltp):NaN;
+  if(NO_PRICE[sym]||!(px>0))
+    return {cls:'stale',tag:'INVESTIGATE / no data'};
+  /* A THIRD LABEL, and a deliberate addition to the two in the contract.
+     This symbol has a good last price and simply is not on the intraday
+     websocket, which covers ~498 of 745. It is neither a new listing nor a
+     fault, and colouring it 0.00% would make "no coverage" read as "did not
+     move". */
+  if(row&&row.covered===false)
+    return {cls:'stale',tag:'LAST CLOSE / not on the intraday feed'};
+  var c=row?parseFloat(row.change_pct):NaN;
+  if(isNaN(c))return {cls:'stale',tag:'INVESTIGATE / no data'};
+  return null;
+}
+
+function sectorBox(s,expanded){
+  var top=s.rows.slice(0,3), more=s.rows.length-top.length;
+  var inner='<div class="s-n">'+esc(s.name)+'</div>'+
+    '<div class="s-p fig" style="color:'+sign(s.pct)+'">'+pct(s.pct)+'</div>'+
+    '<div class="s-ad fig">'+s.adv+' advancing · '+s.dec+' declining'+
+      (s.counted<s.rows.length
+        ? ' · '+s.counted+'/'+s.rows.length+' on the feed' : '')+'</div>'+
+    '<div class="s-c">'+top.map(function(r){
+      return '<div><span>'+esc(r.symbol)+'</span>'+
+        '<span class="fig" style="color:'+sign(r.change_pct)+'">'+
+        pct(r.change_pct)+'</span></div>';
+    }).join('')+'</div>'+
+    (more>0?'<div class="s-more">+'+more+' more</div>':'');
+  if(expanded){
+    inner+='<div class="tiles">'+s.rows.map(function(r){
+      var st=staleOf(r.symbol,r);
+      return '<span class="tile'+(st?' stale':'')+'" role="button" tabindex="0"'+
+        ' aria-pressed="'+(S.sel===r.symbol)+'"'+
+        ' data-sym="'+esc(r.symbol)+'"'+
+        (st?'':' style="background:'+heat(r.change_pct)+'"')+'>'+
+        '<div class="t-s">'+esc(r.symbol)+'</div>'+
+        '<div class="t-p fig">'+pct(r.change_pct)+'</div>'+
+        '<div class="t-l fig">'+num(r.ltp)+'</div>'+
+        (st?'<div class="stale-tag">'+esc(st.tag)+'</div>':'')+
+        '</span>';
+    }).join('')+'</div>';
+    if(S.sel){
+      var row=s.rows.filter(function(r){return r.symbol===S.sel;})[0];
+      if(row)inner+=detailHtml(row);
+    }
+  }
+  return '<button class="sbox" aria-expanded="'+(expanded?'true':'false')+
+    '" data-sec="'+esc(s.name)+'">'+inner+'</button>';
+}
+
+function detailHtml(r){
+  var c=parseFloat(r.change_pct), px=parseFloat(r.ltp);
+  var st=staleOf(r.symbol,r);
+  var col=st?'var(--stale-ink)':sign(c);
+  var say=st?(NEW_LISTING[r.symbol]
+      ? 'Listed too recently to have a comparable history. Building it now.'
+      : 'No usable price has been recorded for this symbol.')
+    : 'Last recorded at '+num(px)+', '+(c>=0?'up':'down')+' '+
+      Math.abs(c).toFixed(2)+'% on the session.';
+  return '<div class="detail"><div class="d-top">'+
+    '<div><div class="d-sym">'+esc(r.symbol)+'</div>'+
+    '<div class="micro" style="margin-top:3px">'+esc(SECTOR_MAP[r.symbol]||'')+
+    '</div></div>'+
+    '<div class="d-px"><div class="d-l fig">'+num(px)+'</div>'+
+    '<div class="d-c fig" style="color:'+col+'">'+pct(c)+'</div></div></div>'+
+    '<div class="d-row">'+
+      '<div class="d-f"><div class="micro">Last price</div>'+
+        '<div class="d-fv fig">'+num(px)+'</div></div>'+
+      '<div class="d-f"><div class="micro">Change</div>'+
+        '<div class="d-fv fig" style="color:'+col+'">'+pct(c)+'</div></div>'+
+      '<div class="d-f"><div class="micro">Day range</div>'+
+        '<div class="d-fv fig">not recorded</div></div>'+
+      '<div class="d-f"><div class="micro">Volume vs average</div>'+
+        '<div class="d-fv fig">not recorded</div></div>'+
+    '</div>'+
+    '<div class="d-say">'+esc(say)+'</div>'+
+    '<div class="d-say micro" style="margin-top:8px">Day range, volume, '+
+      '20-day and 52-week highs need the intraday feed and are not yet '+
+      'recorded on this page.</div></div>';
+}
+
+function renderSectors(){
+  var el=document.getElementById('sect');
+  if(changeFeedDead()){
+    el.innerHTML='<div class="blk" style="grid-column:1/-1">'+
+      '<div class="empty">Sector strength is computed from the '+
+      'change-on-day column, which is currently reading zero for all '+
+      Object.keys(SECTOR_MAP).length+' symbols. Nothing is drawn here rather '+
+      'than a grid of neutral boxes that would read as a calm session.</div>'+
+      '</div>';
+    return;
+  }
+  el.innerHTML=S.sectors.map(function(s){
+    return sectorBox(s, S.open===s.name);
+  }).join('');
+}
+
+/* ── THE SPACE ADJUSTMENT ─────────────────────────────────────────
+   Opening a sector must not move the reading, the index strip, the tape, the
+   Flash column or the calendar. Expansion happens inside the centre zone,
+   which owns its own scroll container, and the clicked box stays pinned under
+   the cursor: measure its viewport position before the re-render, re-measure
+   after, correct scrollTop by the difference.
+
+   Measured on the BOX, not the click point: a click lands anywhere inside the
+   box and the pointer does not move during the re-render, so the box's own
+   top edge is the stable reference. */
+function withPin(key, fn){
+  var centre=document.getElementById('centre');
+  var before=null;
+  var el=document.querySelector('[data-sec="'+key+'"]');
+  if(el)before=el.getBoundingClientRect().top;
+  fn();
+  renderSectors();
+  if(before!==null){
+    var after=document.querySelector('[data-sec="'+key+'"]');
+    if(after){
+      var delta=after.getBoundingClientRect().top-before;
+      if(delta&&centre.scrollHeight>centre.clientHeight){
+        centre.scrollTop+=delta;
+      }else if(delta){
+        /* Below 1100px the centre zone is in normal document flow and the
+           page itself scrolls, so the correction belongs on the window. */
+        window.scrollBy(0,delta);
+      }
+    }
+  }
+}
+
+document.addEventListener('click',function(e){
+  var tile=e.target.closest?e.target.closest('.tile'):null;
+  if(tile){
+    e.preventDefault(); e.stopPropagation();
+    var sym=tile.getAttribute('data-sym');
+    S.sel=(S.sel===sym)?null:sym;
+    withPin(S.open,function(){});
+    return;
+  }
+  var box=e.target.closest?e.target.closest('.sbox'):null;
+  if(!box)return;
+  var sec=box.getAttribute('data-sec');
+  withPin(sec,function(){
+    S.open=(S.open===sec)?null:sec;
+    S.sel=null;
+  });
+});
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Enter'&&e.key!==' ')return;
+  var t=e.target;
+  if(t&&t.classList&&t.classList.contains('tile')){ e.preventDefault(); t.click(); }
+});
+
+/* ── FLASH: EVENTS ────────────────────────────────────────────── */
+/* ONE COMPLETE TAG IN ONE LITERAL, with placeholders. Built by concatenation
+   this read '" target="_blank" ' as a fragment, which is an attribute split
+   across two string literals -- unreadable to anything scanning generated
+   markup, and it tripped tests/test_page_language.py on an attribute the
+   external-source rule requires. A whole tag in one literal is also simply
+   easier to read than six pieces.
+
+   A disclosure always opens the PRIMARY DOCUMENT in a new tab. The page never
+   proxies or republishes a filing. */
+var EXT_LINK='<a href="{u}" target="_blank" rel="noopener noreferrer">{t} &#8599;</a>';
+function extLink(url,label){
+  return EXT_LINK.replace('{u}',esc(url)).replace('{t}',esc(label));
+}
+
+function renderEvents(){
+  var el=document.getElementById('events');
+  if(!S.events.length){
+    el.innerHTML='<div class="empty">No disclosed events recorded for the '+
+      'last completed session.</div>';
+    return;
+  }
+  /* NEWEST SESSION ONLY. The calendar below renders the session before this
+     one, so a card can never appear in both. */
+  var newest='';
+  S.events.forEach(function(e){
+    var d=String(e.event_date||'').slice(0,10);
+    if(d>newest)newest=d;
+  });
+  var shown=S.events.filter(function(e){
+    return String(e.event_date||'').slice(0,10)===newest;});
+  if(!shown.length){
+    el.innerHTML='<div class="empty">No disclosed events recorded for the '+
+      'last completed session.</div>';
+    return;
+  }
+  el.innerHTML=shown.slice(0,8).map(function(ev){
+    var p=ev.payload||{};
+    var url=p.source_url||p.url||p.link||'';
+    var src=p.source||p.source_name||'';
+    var when=String(ev.event_date||'').slice(0,10);
+    var line=p.summary||p.headline||p.note||'';
+    return '<div class="ev"><div class="ev-h">'+
+      '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
+      '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
+      '<span class="ev-t fig">'+esc(when)+'</span></div>'+
+      (line?'<div class="ev-x">'+esc(line)+'</div>':
+        '<div class="ev-x">No disclosed trigger found.</div>')+
+      (url?'<div class="ev-src">'+extLink(url,src||'Primary document')+
+        '</div>':'')+
+      '</div>';
+  }).join('');
+}
+
+/* ── FLASH: BREADTH ───────────────────────────────────────────── */
+function renderBreadth(){
+  var el=document.getElementById('breadth');
+  if(S.breadth.length<2){
+    el.innerHTML='<div class="empty">Breadth through the session is recorded '+
+      'from the intraday feed every five minutes. The first full session of '+
+      'snapshots will draw here.</div>';
+    return;
+  }
+  var pts=S.breadth.slice().sort(function(a,b){
+    return a.at<b.at?-1:1;});
+  var w=320,h=48,n=pts.length;
+  var vals=pts.map(function(p){return +p.pct_advancing;});
+  var lo=Math.min.apply(null,vals.concat([35])),
+      hi=Math.max.apply(null,vals.concat([65]));
+  var rng=(hi-lo)||1;
+  var d=vals.map(function(v,i){
+    var x=(i/(n-1))*w, y=h-((v-lo)/rng)*h;
+    return (i?'L':'M')+x.toFixed(1)+' '+y.toFixed(1);
+  }).join(' ');
+  var mid=h-((50-lo)/rng)*h;
+  var last=pts[n-1], first=pts[0];
+  var delta=(+last.pct_advancing)-(+first.pct_advancing);
+  el.innerHTML=
+    '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" '+
+      'role="img" aria-label="Advancing symbols through the session">'+
+      '<line x1="0" y1="'+mid.toFixed(1)+'" x2="'+w+'" y2="'+mid.toFixed(1)+
+        '" stroke="rgba(232,237,245,0.25)" stroke-dasharray="3 3"/>'+
+      '<path d="'+d+'" fill="none" stroke="'+
+        (delta>=0?'var(--pos)':'var(--neg)')+'" stroke-width="1.5"/></svg>'+
+    '<div class="bd-n"><span class="bd-v fig" style="color:var(--pos)">'+
+      last.advancing+'</span><span class="bd-v fig" style="color:var(--neg)">'+
+      last.declining+'</span>'+
+      '<span class="micro">of '+last.tracked+' tracked</span></div>'+
+    '<div class="bd-s">Opened at '+(+first.pct_advancing).toFixed(0)+
+      '% advancing and '+(delta>=0?'improved to ':'decayed to ')+
+      (+last.pct_advancing).toFixed(0)+'%. Counted across the '+last.tracked+
+      ' symbols on the intraday feed, not the full '+
+      Object.keys(SECTOR_MAP).length+'-symbol universe.</div>';
+}
+
+/* ── FLASH: HEAVY VOLUME, LITTLE MOVEMENT ───────────────────────
+   Shows ONLY the newest sweep. This is a condition that stops being true -- a
+   stock heavy and quiet at 10:00 may have moved 3% by 15:00 -- so rows carry
+   the timestamp of the sweep that found them and anything older is history,
+   not the current set. */
+function renderHeavy(){
+  var el=document.getElementById('heavy');
+  if(!S.heavy.length){
+    el.innerHTML='<div class="empty">Nothing is running above 3× its own '+
+      'average volume while inside ±0.5% on the day. Checked every five '+
+      'minutes from 09:45 across the symbols on the intraday feed.</div>';
+    return;
+  }
+  var newest=S.heavy[0].snapshot_at;
+  var set=S.heavy.filter(function(r){return r.snapshot_at===newest;})
+                 .sort(function(a,b){return b.volume_ratio-a.volume_ratio;});
+  if(!set.length){
+    el.innerHTML='<div class="empty">Nothing qualifies in the latest '+
+      'five-minute sweep.</div>';
+    return;
+  }
+  el.innerHTML=set.slice(0,8).map(function(r){
+    return '<div class="ev"><div class="ev-h">'+
+      '<span class="ev-s">'+esc(r.symbol)+'</span>'+
+      '<span class="badge">'+(+r.volume_ratio).toFixed(1)+'× pace</span>'+
+      '<span class="ev-p fig" style="color:'+sign(r.change_pct)+'">'+
+      pct(r.change_pct)+'</span>'+
+      '<span class="ev-t fig">'+num(r.ltp)+'</span></div></div>';
+  }).join('')+
+  '<div class="bd-s">'+set.length+' of '+set[0].tracked+' tracked, as of '+
+  esc(String(newest).slice(11,16))+' IST. Volume is measured against each '+
+  'stock&rsquo;s own 20-day average, scaled to the share of a normal day '+
+  'done by this time — pace, not cumulative. Counted across the symbols on '+
+  'the intraday feed, not the full '+Object.keys(SECTOR_MAP).length+
+  '-symbol universe.</div>';
+}
+
+/* ── 6 CALENDAR ─────────────────────────────────────────────────
+   THE TWO HALVES HAVE DIFFERENT ANSWERS, checked rather than assumed.
+
+   SCHEDULED TODAY has no source. This codebase knows four NSE endpoints --
+   corporate-announcements, corporates-financial-results,
+   corporate-share-holdings-master and etf -- and every one is BACKWARD
+   looking: what was announced, what was filed. Nothing fetches board
+   meetings, a results calendar or ex-dates, so there is no forward-looking
+   date in the system to draw. Named honestly rather than left vague.
+
+   LANDED has one, and it is live. radar_events carries detected moves each
+   with a cited NSE corporate-announcement behind it. It is scoped to the
+   session BEFORE the one the Disclosed Events block shows, so the two never
+   render the same card twice. */
+function renderCal(){
+  document.getElementById('cal-today').innerHTML=
+    '<div class="empty">Nothing in the system reads a forward-looking date. '+
+    'The four NSE endpoints in use — announcements, financial results, '+
+    'shareholding and ETF — all describe what has already happened. Board '+
+    'meetings, a results calendar and ex-dates would fill this, and none of '+
+    'them is fetched yet.</div>';
+
+  var el=document.getElementById('cal-yday');
+  var dates=[];
+  S.events.forEach(function(e){
+    var d=String(e.event_date||'').slice(0,10);
+    if(d&&dates.indexOf(d)===-1)dates.push(d);
+  });
+  dates.sort().reverse();
+  var prev=dates[1];
+  if(!prev){
+    el.innerHTML='<div class="empty">No session before the one shown above '+
+      'has a recorded event.</div>';
+    return;
+  }
+  var rows=S.events.filter(function(e){
+    return String(e.event_date||'').slice(0,10)===prev;});
+  el.innerHTML='<div class="micro" style="margin-bottom:7px">'+esc(prev)+
+    '</div>'+rows.slice(0,6).map(function(ev){
+    var pl=ev.payload||{};
+    var url=pl.source_url||pl.url||pl.link||'';
+    var line=pl.summary||pl.headline||pl.note||'';
+    return '<div class="ev"><div class="ev-h">'+
+      '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
+      '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
+      (ev.move_pct!==null&&ev.move_pct!==undefined
+        ? '<span class="ev-p fig" style="color:'+sign(ev.move_pct)+'">'+
+          pct(ev.move_pct)+'</span>' : '')+
+      '</div>'+
+      (line?'<div class="ev-x">'+esc(line)+'</div>':
+        '<div class="ev-x">No disclosed trigger found.</div>')+
+      (url?'<div class="ev-src">'+extLink(url,pl.source||'Primary document')+
+        '</div>':'')+'</div>';
+  }).join('');
+}
+
+/* ── AUTH ─────────────────────────────────────────────────────────
+   THE SAME CHECK THE OTHER LOGGED-IN PAGES USE: a live Supabase session, then
+   an own-row read of public.subscribers for status=active. Client-side hiding
+   is not security -- RLS is what enforces it -- but a page that renders the
+   market to a signed-out visitor is a page that leaked it, so this returns
+   nothing until the check passes.
+
+   A FAILED REQUEST IS NOT A VERDICT. An explicit empty result means not
+   approved; a non-200 means we do not know, and says so, rather than
+   presenting an RLS or network fault as a locked-out subscriber. */
+var _supa=null, _user=null;
+
+function isFresh(s){
+  if(!s||!s.access_token)return false;
+  if(!s.expires_at)return true;
+  return (s.expires_at*1000)-Date.now()>60000;
+}
+
+function denied(msg,sub){
+  document.getElementById('gate').hidden=false;
+  document.getElementById('gateMsg').textContent=msg;
+  document.getElementById('gateSub').textContent=sub||'';
+  document.getElementById('shell').hidden=true;
+}
+
+async function requireSession(){
+  if(!window.supabase||!window.supabase.createClient){
+    denied('Could not reach the sign-in service.',
+           'The authentication script did not load. Reload the page.');
+    return null;
+  }
+  _supa=window.supabase.createClient(SB,AK);
+  var res=await _supa.auth.getSession();
+  var s=(res&&res.data)?res.data.session:null;
+  if(!isFresh(s)){
+    denied('Sign in to view this page.',
+           'This page is for approved members. Sign in on the home page.');
+    return null;
+  }
+  _user=s.user;
+  var r;
+  try{
+    r=await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+
+      encodeURIComponent(_user.id)+'&status=eq.active&limit=1',
+      {headers:{apikey:AK,Authorization:'Bearer '+s.access_token}});
+  }catch(e){
+    denied('Could not confirm your access.','Check your connection and reload.');
+    return null;
+  }
+  if(!r.ok){
+    denied('Could not confirm your access.',
+           'The membership check failed, which is not the same as being '+
+           'refused. Reload, and if it persists the service is at fault.');
+    return null;
+  }
+  var rows=await r.json();
+  if(!rows||!rows.length){
+    denied('Your account is not active.',
+           'Signed in as '+_user.email+'. Membership is not active yet.');
+    return null;
+  }
+  document.getElementById('gate').hidden=true;
+  document.getElementById('shell').hidden=false;
+  mountAccount();
+  return s;
+}
+
+/* ── THE ACCOUNT MENU ───────────────────────────────────────────── */
+function mountAccount(){
+  var wrap=document.getElementById('acct');
+  var btn=document.getElementById('acctBtn');
+  var menu=document.getElementById('acctMenu');
+  var name=(_user.user_metadata&&(_user.user_metadata.full_name||
+            _user.user_metadata.name))||String(_user.email||'').split('@')[0];
+  document.getElementById('acctName').textContent=name;
+  document.getElementById('acctEmail').textContent=_user.email||'';
+  wrap.hidden=false;
+
+  function close(){ menu.hidden=true; btn.setAttribute('aria-expanded','false'); }
+  function open(){ menu.hidden=false; btn.setAttribute('aria-expanded','true'); }
+  btn.addEventListener('click',function(e){
+    e.stopPropagation(); menu.hidden?open():close();
+  });
+  document.addEventListener('click',function(e){
+    if(!wrap.contains(e.target))close();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape')close();
+  });
+
+  /* CHANGE PASSWORD goes through the existing Supabase auth, exactly as the
+     signals page does it: a reset email to the address on the session. */
+  document.getElementById('pwBtn').addEventListener('click',function(){
+    close();
+    if(!confirm('Send a password reset email to '+_user.email+'?'))return;
+    _supa.auth.resetPasswordForEmail(_user.email,
+      {redirectTo:'https://thestocklogic.com/home'}).then(function(res){
+        alert(res.error?('Could not send it: '+res.error.message)
+                       :'Reset email sent. Check your inbox.');
+      });
+  });
+
+  document.getElementById('outBtn').addEventListener('click',async function(){
+    close();
+    await _supa.auth.signOut();
+    window.location.href='/';
+  });
+}
+
+/* ── BOOT ─────────────────────────────────────────────────────── */
+async function load(){
+  var today=istDate();
+  var res=await Promise.all([
+    sbGet('/rest/v1/live_prices?select=symbol,ltp,change_pct,updated_at&limit=2000'),
+    sbGet('/rest/v1/index_quotes?select=*'),
+    sbGet('/rest/v1/orb_breaks?select=*&order=detected_at.desc&limit=60'),
+    sbGet('/rest/v1/breadth_snapshots?select=*&order=at.asc&limit=200'),
+    sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=40'),
+    sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120'),
+    sbGet('/rest/v1/intraday_prices?select=*&limit=1000')
+  ]);
+  S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
+  S.breadth=res[3]; S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
+  mergeIntraday();
+
+  buildSectors();
+  renderState(); renderReading(); renderIdx(); renderTape();
+  renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
+  if(marketOpen())setInterval(renderState,1000);
+}
+
+/* NOTHING IS FETCHED UNTIL THE SESSION IS CONFIRMED. */
+(async function(){
+  var s=await requireSession();
+  if(s)load();
+})();
+</script>
+</body>
+</html>

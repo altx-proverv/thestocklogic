@@ -112,6 +112,25 @@ td.sym{font-weight:700;color:var(--ink)}
 .err{color:var(--orange);font-size:11px;margin-top:10px;min-height:15px}
 
 .foot{text-align:center;padding:28px 0 44px;color:var(--faint);font-size:9.5px;letter-spacing:1.2px;line-height:1.9}
+
+/* THE ACCOUNT MENU. Same three items as /home, in this page's palette.
+   Hidden until a session is confirmed, so a signed-out visitor never sees a
+   control that would do nothing. */
+.acct{position:relative}
+.acct-btn{display:flex;align-items:center;gap:5px;font:inherit;font-size:10px;
+  letter-spacing:2px;color:var(--muted);background:none;cursor:pointer;
+  padding:5px 8px;border:1px solid var(--line);border-radius:6px;min-height:30px}
+.acct-btn:hover{color:var(--white);border-color:var(--sky)}
+.acct-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:210px;
+  background:var(--s1);border:1px solid var(--line);border-radius:8px;padding:6px;
+  z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.acct-menu button{display:block;width:100%;text-align:left;font:inherit;
+  font-size:12px;letter-spacing:0;color:var(--white);background:none;border:none;
+  cursor:pointer;padding:8px 9px;border-radius:5px;min-height:34px}
+.acct-menu button:hover{background:var(--s3)}
+.acct-who{font-size:10.5px;color:var(--muted2);padding:6px 9px 8px;
+  border-bottom:1px solid var(--line);margin-bottom:5px;
+  overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -127,8 +146,19 @@ td.sym{font-weight:700;color:var(--ink)}
     <div id="modeChip" class="chip c-shadow"><span class="dot"></span><span id="modeText">LOADING</span></div>
     <div id="regimeChip" class="chip c-regime"><span id="regimeText">—</span></div>
     <div class="navlinks">
-      <a href="/dashboard">Signals</a>
-      <a href="/tsl-dashboard">Performance</a>
+      <a href="/home">HOME</a>
+      <a href="/atlas" aria-current="page">ATLAS</a>
+      <div class="acct" id="acct" hidden>
+        <button class="acct-btn" id="acctBtn" aria-haspopup="true"
+                aria-expanded="false" aria-controls="acctMenu">
+          <span id="acctName">&mdash;</span><span aria-hidden="true">&#9662;</span>
+        </button>
+        <div class="acct-menu" id="acctMenu" role="menu" hidden>
+          <div class="acct-who" id="acctEmail"></div>
+          <button role="menuitem" id="pwBtn">Change password</button>
+          <button role="menuitem" id="outBtn">Log out</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -324,6 +354,50 @@ async function sbGet(path){
     r=await fetch(SB+path,{headers:hdr()});
   }
   return r;
+}
+
+/* ── THE ACCOUNT MENU ─────────────────────────────────────────────
+   Driven by the session loadSession() already resolved -- this page has a
+   supabase client and a session, so the menu reuses both rather than
+   standing up a second client that could disagree with the first. */
+function mountAccount(session){
+  if(!session||!session.user)return;
+  var u=session.user;
+  var wrap=document.getElementById('acct');
+  var btn=document.getElementById('acctBtn');
+  var menu=document.getElementById('acctMenu');
+  if(!wrap||!btn||!menu)return;
+  var name=(u.user_metadata&&(u.user_metadata.full_name||u.user_metadata.name))
+           ||String(u.email||'').split('@')[0];
+  document.getElementById('acctName').textContent=name;
+  document.getElementById('acctEmail').textContent=u.email||'';
+  wrap.hidden=false;
+
+  function close(){menu.hidden=true;btn.setAttribute('aria-expanded','false');}
+  function open(){menu.hidden=false;btn.setAttribute('aria-expanded','true');}
+  btn.addEventListener('click',function(e){
+    e.stopPropagation(); menu.hidden?open():close();
+  });
+  document.addEventListener('click',function(e){
+    if(!wrap.contains(e.target))close();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape')close();
+  });
+  document.getElementById('pwBtn').addEventListener('click',function(){
+    close();
+    if(!confirm('Send a password reset email to '+u.email+'?'))return;
+    _supa.auth.resetPasswordForEmail(u.email,
+      {redirectTo:'https://thestocklogic.com/atlas'}).then(function(res){
+        alert(res.error?('Could not send it: '+res.error.message)
+                       :'Reset email sent. Check your inbox.');
+      });
+  });
+  document.getElementById('outBtn').addEventListener('click',async function(){
+    close();
+    try{ await _supa.auth.signOut(); }catch(e){}
+    window.location.href='/';
+  });
 }
 
 async function fetchTrades(){
@@ -613,6 +687,7 @@ async function load(){
   try{
     _sessionStale=false;
     _session=await loadSession();
+    mountAccount(_session);
     _trades=await fetchTrades();
     /* Prices are fetched for OPEN symbols only. Nothing else on this page is
        marked to market. */
