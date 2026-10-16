@@ -48,6 +48,30 @@ RANGE_MAP_FILE  = Path("data/processed/rbe/range_map.json")
 # Breadth snapshot cadence, and the one symbol excluded from the denominator.
 BREADTH_INTERVAL_SECONDS = 300
 BREADTH_EXCLUDE = {"CHOLAFIN"}
+
+# ── HEAVY VOLUME, LITTLE MOVEMENT ─────────────────────────────────
+#
+# Above 3x its own average volume while inside +/-0.5% on the day. Both halves
+# come from this process and nowhere else:
+#
+#   volume   volume_traded on the tick, against avg_vol_20d in the range map
+#   change   ltp against prev_close in the range map -- NOT
+#            live_prices.change_pct, which reads 0.0 for all 745 rows
+#
+# THE RATIO IS PACE, NOT CUMULATIVE, and that is a real decision rather than a
+# detail. "3x average volume" is ambiguous intraday: raw cumulative volume
+# cannot reach 3x a full day's average until very late in the session, so a
+# raw test leaves this block empty every morning and then fills it near the
+# close -- which reads as broken rather than as information. The
+# time-normalised ratio asks "is this running at 3x its normal pace for this
+# time of day", which is what the phrase means to a reader and is the same
+# quantity rbe_engine already computes for its breakout filter.
+HEAVY_VOL_RATIO = 3.0
+QUIET_MOVE_PCT = 0.5
+# Before 09:45 volume_bucket is working off an assumed 5% floor or a single
+# curve point, so the ratio divides by a number nobody measured. Two curve
+# points in, it means something.
+HEAVY_QUIET_FROM = (9, 45)
 BREAKOUT_BUFFER = 0.002   # 0.2% beyond range boundary
 RVOL_MIN        = 1.5
 MARKET_OPEN     = (9, 15)
@@ -107,6 +131,7 @@ class RBEngine:
         # symbols on the websocket; the universe is larger. Reporting it as
         # full-universe breadth would be a bigger number and a false one.
         self.last_px = {}
+        self.last_vol = {}
         self.breadth_last_write = 0.0
         log.info(f"Range map loaded: {len(self.ranges)} stocks | "
                  f"generated {self.generated_at or 'unknown'} | "
@@ -148,6 +173,7 @@ class RBEngine:
         # early -- a symbol that never breaks out still counts as advancing or
         # declining, and most of them never break out.
         self.last_px[sym] = ltp
+        self.last_vol[sym] = vol
         self._maybe_write_breadth()
 
         r = self.ranges[sym]
@@ -205,6 +231,7 @@ class RBEngine:
         tracked = adv + dec + unch
         if not tracked:
             return
+        self._write_heavy_quiet(tracked)
         row = {"session_date": now_ist().date().isoformat(),
                "at": now_ist().replace(microsecond=0).isoformat(),
                "advancing": adv, "declining": dec, "unchanged": unch,
@@ -225,6 +252,61 @@ class RBEngine:
         except Exception as e:
             # A failed snapshot must never take the breakout scanner down.
             log.warning(f"breadth snapshot failed: {e}")
+
+    def _write_heavy_quiet(self, tracked: int) -> None:
+        """The CURRENT heavy-but-quiet set, every 5 minutes. Never raises.
+
+        A SHARED snapshot_at across the sweep is what lets the page show only
+        the latest set. This is a condition that stops being true -- a stock
+        heavy and quiet at 10:00 may have moved 3% by 15:00 -- and a one-way
+        publisher cannot delete. So every row carries the timestamp of the
+        sweep that found it, the page reads only the newest, and a symbol that
+        stops qualifying simply stops being in it.
+        """
+        now = now_ist()
+        if (now.hour, now.minute) < HEAVY_QUIET_FROM:
+            return
+        frac = volume_bucket(self.curve)
+        stamp = now.replace(microsecond=0).isoformat()
+        rows = []
+        for sym, px in self.last_px.items():
+            if sym in BREADTH_EXCLUDE:
+                continue
+            r = self.ranges.get(sym) or {}
+            prev, avg = r.get("prev_close"), r.get("avg_vol_20d")
+            vol = self.last_vol.get(sym)
+            if not prev or not avg or not px or not vol:
+                continue
+            chg = (px - prev) / prev * 100.0
+            if abs(chg) > QUIET_MOVE_PCT:
+                continue
+            ratio = vol / (avg * frac)
+            if ratio < HEAVY_VOL_RATIO:
+                continue
+            rows.append({"session_date": now.date().isoformat(),
+                         "symbol": sym, "snapshot_at": stamp,
+                         "volume_ratio": round(ratio, 2),
+                         "change_pct": round(chg, 2),
+                         "ltp": round(float(px), 2), "tracked": tracked})
+        if not rows:
+            log.info(f"heavy/quiet: none of {tracked} tracked qualify")
+            return
+        try:
+            resp = requests.post(
+                f"{SUPABASE_URL}/rest/v1/heavy_quiet",
+                headers={**_headers(),
+                         "Prefer": "resolution=merge-duplicates"},
+                json=rows, timeout=10)
+            if resp.status_code not in (200, 201, 204):
+                log.warning(f"heavy/quiet rejected: HTTP {resp.status_code} "
+                            f"{resp.text[:120]}")
+            else:
+                log.info(f"heavy/quiet: {len(rows)} of {tracked} tracked "
+                         f"above {HEAVY_VOL_RATIO}x pace inside "
+                         f"+/-{QUIET_MOVE_PCT}%")
+        except Exception as e:
+            # Must never take the breakout scanner down.
+            log.warning(f"heavy/quiet write failed: {e}")
 
     def fire_signal(self, sym, direction, ltp, rh, rl, height, rvol):
         self.fired.add(f"{sym}:{direction}")

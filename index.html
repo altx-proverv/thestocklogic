@@ -329,7 +329,8 @@ async function sbGet(path){
   catch(e){ console.error('home: '+path+' -> bad JSON'); return []; }
 }
 
-var S={prices:[],idx:[],orb:[],breadth:[],events:[],sectors:[],open:null,sel:null};
+var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],
+       sectors:[],open:null,sel:null};
 
 /* ── IS THE MARKET OPEN ───────────────────────────────────────────
    live_prices refreshes four times a session. The page must never imply it is
@@ -741,13 +742,41 @@ function renderBreadth(){
       Object.keys(SECTOR_MAP).length+'-symbol universe.</div>';
 }
 
-/* ── FLASH: HEAVY VOLUME, LITTLE MOVEMENT ─────────────────────── */
+/* ── FLASH: HEAVY VOLUME, LITTLE MOVEMENT ───────────────────────
+   Shows ONLY the newest sweep. This is a condition that stops being true -- a
+   stock heavy and quiet at 10:00 may have moved 3% by 15:00 -- so rows carry
+   the timestamp of the sweep that found them and anything older is history,
+   not the current set. */
 function renderHeavy(){
-  document.getElementById('heavy').innerHTML=
-    '<div class="empty">Above 3× its own average volume while inside ±0.5% on '+
-    'the day. This needs volume recorded through the session; the intraday '+
-    'feed carries it but nothing stores it yet, so this block stays empty '+
-    'until that is written.</div>';
+  var el=document.getElementById('heavy');
+  if(!S.heavy.length){
+    el.innerHTML='<div class="empty">Nothing is running above 3× its own '+
+      'average volume while inside ±0.5% on the day. Checked every five '+
+      'minutes from 09:45 across the symbols on the intraday feed.</div>';
+    return;
+  }
+  var newest=S.heavy[0].snapshot_at;
+  var set=S.heavy.filter(function(r){return r.snapshot_at===newest;})
+                 .sort(function(a,b){return b.volume_ratio-a.volume_ratio;});
+  if(!set.length){
+    el.innerHTML='<div class="empty">Nothing qualifies in the latest '+
+      'five-minute sweep.</div>';
+    return;
+  }
+  el.innerHTML=set.slice(0,8).map(function(r){
+    return '<div class="ev"><div class="ev-h">'+
+      '<span class="ev-s">'+esc(r.symbol)+'</span>'+
+      '<span class="badge">'+(+r.volume_ratio).toFixed(1)+'× pace</span>'+
+      '<span class="ev-p fig" style="color:'+sign(r.change_pct)+'">'+
+      pct(r.change_pct)+'</span>'+
+      '<span class="ev-t fig">'+num(r.ltp)+'</span></div></div>';
+  }).join('')+
+  '<div class="bd-s">'+set.length+' of '+set[0].tracked+' tracked, as of '+
+  esc(String(newest).slice(11,16))+' IST. Volume is measured against each '+
+  'stock&rsquo;s own 20-day average, scaled to the share of a normal day '+
+  'done by this time — pace, not cumulative. Counted across the symbols on '+
+  'the intraday feed, not the full '+Object.keys(SECTOR_MAP).length+
+  '-symbol universe.</div>';
 }
 
 /* ── 6 CALENDAR ───────────────────────────────────────────────── */
@@ -768,10 +797,11 @@ async function load(){
     sbGet('/rest/v1/orb_breaks?select=*&order=detected_at.desc&limit=60'),
     sbGet('/rest/v1/breadth_snapshots?select=*&order=at.asc&limit=200'),
     sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=12'),
-    sbGet('/rest/v1/signals?select=symbol,rvol&order=signal_date.desc&limit=1000')
+    sbGet('/rest/v1/signals?select=symbol,rvol&order=signal_date.desc&limit=1000'),
+    sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120')
   ]);
   S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
-  S.breadth=res[3]; S.events=res[4]; S.rvol=res[5];
+  S.breadth=res[3]; S.events=res[4]; S.rvol=res[5]; S.heavy=res[6];
 
   buildSectors();
   renderState(); renderReading(); renderIdx(); renderTape();

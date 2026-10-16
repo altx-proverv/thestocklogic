@@ -98,8 +98,20 @@ def main() -> int:
           "Updates resume at 09:15" in html, True)
     check("the breadth block names its own denominator",
           "not the full" in html, True)
-    check("the empty heavy-volume block says what will fill it",
-          "nothing stores it yet" in html, True)
+    # THE HEAVY-VOLUME BLOCK IS REAL NOW, not an empty state. It was built
+    # empty on the brief's premise that no intraday volume exists; rbe_engine
+    # receives volume_traded on every tick and range_map carries avg_vol_20d,
+    # so it does. These assert the block is driven by that feed and is honest
+    # about which ratio it means and what it counted.
+    check("the heavy-volume block reads the real feed",
+          "heavy_quiet" in html, True)
+    check("  it says the ratio is pace, not cumulative",
+          "pace, not cumulative" in html, True)
+    check("  it names the sweep it is showing",
+          "as of " in html, True)
+    check("  and carries the same denominator caveat as breadth",
+          html.count("not the full") >= 2, True,
+          "breadth and heavy-volume both say it")
     check("the calendar empty state names Radar",
           "Radar" in html, True)
     check("a missing disclosure says so",
