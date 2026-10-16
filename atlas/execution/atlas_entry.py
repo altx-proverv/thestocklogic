@@ -288,8 +288,14 @@ def sentiment_state(ctx: dict) -> tuple:
     #
     # THE STAND-DOWN IS CHECKED FIRST and is the one thing that outlives a
     # single read: it blocks entries for the rest of the session once something
-    # fires it. NOTHING FIRES IT TODAY -- tomorrow's range-break check is the
-    # intended trigger. See atlas/execution/sentiment_window.py.
+    # fires it. THE MARKET RANGE BREAKER FIRES IT, live as of 2026-10-16 --
+    # range_breaker.market_check() calls SD.stand_down() when a one-minute
+    # close breaks the held side of the opening range. This comment said
+    # "NOTHING FIRES IT TODAY" for as long as BREAKER_OBSERVE_ONLY was True.
+    #
+    # IT IS EXEMPT FROM "ATLAS MUST NOT SWITCH ITSELF OFF" by Hemal's ruling:
+    # the reversal breakers are pre-authorised to pause trading. Everything
+    # else that used to stand the day down now only alerts.
     from atlas.execution import sentiment_window as SW
     sd = SW.state()
     if sd["stood_down"]:

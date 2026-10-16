@@ -232,8 +232,37 @@ def main() -> int:
           executable_source(ROOT / "atlas" / "execution" / "sentiment_window.py"),
           False)
     import atlas.config as CC
-    check("BREAKER_OBSERVE_ONLY is on", CC.BREAKER_OBSERVE_ONLY, True,
-          "today's session is evidence, not enforcement")
+    # ARMED 2026-10-16. This asserted BREAKER_OBSERVE_ONLY was True -- "today's
+    # session is evidence, not enforcement" -- and 2026-10-16 WAS that session:
+    # 23 distinct symbols broke their opening range floor, the market breaker
+    # fired nothing, and the 10 that closed lost Rs546 against Rs577 made by
+    # the symbols that did not break. The evidence was collected, so the flag
+    # is off.
+    # READ FROM THE SOURCE, NOT FROM THE MODULE. fresh() assigns
+    # C.BREAKER_OBSERVE_ONLY to drive the two branches below, so the imported
+    # attribute reflects the last fixture rather than what is committed -- and
+    # what is committed is the thing that decides whether Monday is armed.
+    cfg_src = (ROOT / "atlas" / "config.py").read_text(encoding="utf-8")
+    check("BREAKER_OBSERVE_ONLY is OFF — the breakers are armed",
+          "\nBREAKER_OBSERVE_ONLY = False" in cfg_src, True,
+          "exempt from Item 4 by ruling; the only self-inflicted stand-down")
+
+    # THE EXEMPTION, ASSERTED. Item 4 converted ten self-halt sites to
+    # alert-only, and the reversal breakers must NOT have been caught by it.
+    # Two things have to still be true: stand_down() must not route through
+    # breaker.halt() (which now only flags), and the entry gate must still
+    # honour the stand-down.
+    from atlas.risk import breaker as _BRK
+    sw_src = executable_source(ROOT / "atlas" / "execution" / "sentiment_window.py")
+    check("the breakers' stand-down does NOT route through breaker.halt",
+          "breaker.halt" in sw_src or "halt(" in sw_src, False,
+          "it has its own session-keyed file and alert, so Item 4 missed it")
+    check("  and breaker.flag exists, so halt was the thing converted",
+          callable(getattr(_BRK, "flag", None)), True)
+    entry_src = executable_source(ROOT / "atlas" / "execution" / "atlas_entry.py")
+    check("the entry gate still honours the stand-down",
+          "SW.state()" in entry_src and "sd['stood_down']" in entry_src, True,
+          "a stand-down nothing reads is inert")
 
     RB, SD = fresh()
     broke = candles("09:15", [(100.0, 90.0)] * 45 + [(89.0, 80.0)])

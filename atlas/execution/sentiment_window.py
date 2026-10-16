@@ -156,9 +156,17 @@ def state() -> dict:
 def stand_down(kind: str, detail: str) -> dict:
     """Stop entering for the rest of the session. Both sides. One-way.
 
-    NO CALLER TODAY. Tomorrow's range-break check is the intended one; see the
-    module docstring. Safe to call more than once -- the alert fires on the
-    first, and a second call does not re-stamp the time.
+    CALLED BY range_breaker.market_check(), live as of 2026-10-16. This said
+    "NO CALLER TODAY" while BREAKER_OBSERVE_ONLY was True.
+
+    THIS IS THE ONE SELF-INFLICTED STAND-DOWN LEFT IN ATLAS. Ten other sites
+    that used to halt the account now only alert (see breaker.flag), because
+    they were reacting to ATLAS's own machinery failing. This one is exempt by
+    ruling: a market-wide reversal is a fact about the market, it applies to
+    every symbol at once, and stopping is the right answer to it.
+
+    Safe to call more than once -- the alert fires on the first, and a second
+    call does not re-stamp the time.
     """
     st = _load()
     if st.get("stood_down"):

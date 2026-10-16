@@ -439,15 +439,31 @@ OPENING_RANGE_END   = "10:00"
 
 # ── OBSERVE-ONLY ──────────────────────────────────────────────────
 #
-# True: both breakers compute, log, alert and appear in the inventory, and
-# BLOCK NOTHING. Every would-be fire is recorded with its full detail so the
+# NOW FALSE -- see the arming note below. When True: both breakers compute,
+# log, alert and appear in the inventory, and BLOCK NOTHING. Every would-be fire is recorded with its full detail so the
 # operator can read a real session's evidence before this stops a trade.
 #
 # The inventory must not read as an all-clear while this is on -- a reader has
 # to be able to tell "nothing fired" from "something fired and was ignored" --
 # so an observed fire is persisted and surfaced as OBSERVING with what it
 # would have done.
-BREAKER_OBSERVE_ONLY = True
+# ARMED 2026-10-16. Hemal: the reversal breakers are EXEMPT from "ATLAS must
+# not switch itself off" -- he specified them himself and they are
+# pre-authorised to pause trading. This is the one stand-down in the system
+# that is not an operator action, and it is deliberate.
+#
+# WHY THE EXEMPTION IS COHERENT with the rest of Item 4. The ten converted
+# self-halt sites were all reacting to ATLAS's OWN machinery failing: a ledger
+# write, a broker refusal, a tick size. Standing the whole account down over
+# one of those is a blast radius mismatch. A market-wide reversal is the
+# opposite: it is a fact about the MARKET, it applies to every symbol at once,
+# and stopping is the correct response to it rather than an overreaction to a
+# local fault.
+#
+# IT STILL EXPIRES AT THE CLOSE. sentiment_window's file is keyed to the
+# session date and yesterday's is ignored, so a fresh morning re-arms. No
+# stand-down survives the session -- that half of Item 4 is untouched.
+BREAKER_OBSERVE_ONLY = False
 
 # The day's opening range, and any observed would-be fires, keyed to the
 # session date. A file carrying another date is discarded, same as the

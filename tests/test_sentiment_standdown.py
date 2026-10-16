@@ -131,7 +131,14 @@ def main() -> int:
         for q in (ROOT / d).rglob("*.py"):
             if q.name == "sentiment_window.py":
                 continue
-            t = q.read_text(encoding="utf-8", errors="ignore")
+            # EXECUTABLE SOURCE, NOT RAW TEXT. A COMMENT IS NOT A CALL: on
+            # 2026-10-16 a comment in atlas_entry.py explaining which module
+            # fires the stand-down made this report two callers. Stripping
+            # comments also means a real call can no longer hide behind one.
+            try:
+                t = executable_source(q)
+            except Exception:
+                t = q.read_text(encoding="utf-8", errors="ignore")
             if ".stand_down(" in t:
                 callers.append(q.relative_to(ROOT).as_posix())
     check("exactly one module calls stand_down()", sorted(set(callers)),
