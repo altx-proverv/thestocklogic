@@ -329,8 +329,47 @@ async function sbGet(path){
   catch(e){ console.error('home: '+path+' -> bad JSON'); return []; }
 }
 
-var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],
-       sectors:[],open:null,sel:null};
+var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
+       sectors:[],open:null,sel:null,covered:0,uncovered:0};
+
+/* ── WHERE THE DAY CHANGE COMES FROM ──────────────────────────────
+   NOT from live_prices.change_pct. That column is 0.0 for all 745 rows and
+   always has been: upstox_ws computes (ltp - ohlc.close)/ohlc.close and reads
+   ohlc.close as the PREVIOUS close, while the same ohlc block is read
+   elsewhere in that file as TODAY'S high/low/open. Both cannot be true.
+   ohlc.close is today's close-so-far, which during a session IS the last
+   price, so the expression is exactly 0 for every symbol — one distinct value
+   across 745 rows while ltp has 741.
+
+   intraday_prices carries (ltp - prev_close)/prev_close from rbe_engine's
+   websocket, where prev_close is a different field from a different endpoint.
+   It covers the ~498 symbols on that feed.
+
+   A SYMBOL OUTSIDE THOSE 498 IS NOT RENDERED AS A FALSE NEUTRAL. It keeps its
+   last known close and is labelled as such. Colouring it 0.00% would put it
+   in the neutral heat band and make "no coverage" look like "did not move",
+   which is the same lie this whole change exists to stop telling. */
+function mergeIntraday(){
+  var by={};
+  S.intraday.forEach(function(r){by[r.symbol]=r;});
+  S.covered=0; S.uncovered=0;
+  S.prices.forEach(function(p){
+    var r=by[p.symbol];
+    if(r){
+      p.change_pct=r.change_pct;
+      p.ltp=r.ltp;
+      p.volume_ratio=r.volume_ratio;
+      p.covered=true;
+      S.covered++;
+    }else{
+      /* No intraday coverage. Keep the last known close, drop the dead
+         change so nothing downstream can colour it. */
+      p.change_pct=null;
+      p.covered=false;
+      S.uncovered++;
+    }
+  });
+}
 
 /* ── IS THE MARKET OPEN ───────────────────────────────────────────
    live_prices refreshes four times a session. The page must never imply it is
@@ -366,13 +405,10 @@ function renderState(){
    A heatmap drawn from that is uniformly neutral and looks like a calm
    session. It is not a calm session; it is no data. The page says which. */
 function changeFeedDead(){
-  if(S.prices.length<50)return false;
-  var nz=0;
-  for(var i=0;i<S.prices.length;i++){
-    var c=parseFloat(S.prices[i].change_pct);
-    if(!isNaN(c)&&c!==0){nz++; if(nz>2)return false;}
-  }
-  return nz===0;
+  /* True only when NOTHING has an intraday change -- before the first sweep
+     of a session, or if rbe_engine is not running. A dead column and an
+     un-started session look the same to a reader, so the copy says which. */
+  return S.covered===0;
 }
 
 function renderReading(){
@@ -396,7 +432,7 @@ function renderReading(){
   var green=secs.filter(function(s){return s.pct>0;}).length;
   var adv=0,dec=0;
   S.prices.forEach(function(p){
-    if(NO_PRICE[p.symbol])return;
+    if(NO_PRICE[p.symbol]||p.covered===false)return;
     var c=parseFloat(p.change_pct);
     if(isNaN(c))return;
     if(c>0)adv++; else if(c<0)dec++;
@@ -414,7 +450,11 @@ function renderReading(){
   var last=S.prices.length?String(S.prices.reduce(function(a,b){
     return (a.updated_at>b.updated_at)?a:b;}).updated_at):'';
   var stamp=last?last.slice(11,16)+' IST on '+last.slice(0,10):'unknown';
-  var prov='Prices last refreshed '+stamp+
+  var cov='Day change is measured against the previous close on the intraday '+
+    'feed, which covers '+S.covered+' of '+
+    Object.keys(SECTOR_MAP).length+' symbols; the remaining '+S.uncovered+
+    ' show their last known close and are labelled on the tile. ';
+  var prov=cov+'Last prices refreshed '+stamp+
     '. The price feed refreshes four times a session '+
     '(08:45, 09:45, 11:30, 15:15 IST) and does not update between those '+
     'times. '+
@@ -459,15 +499,19 @@ function tapeItems(){
           (b.break_minute?' at '+b.break_minute:'')
     });
   });
-  var rv={}; (S.rvol||[]).forEach(function(r){rv[r.symbol]=parseFloat(r.rvol);});
+  /* MOVERS COME OFF THE INTRADAY FEED, both halves of the rule.
+     This used signals.rvol -- an END-OF-DAY figure on a table that carries
+     only the ~443 published rows for a date -- against a change_pct that was
+     always zero, so the rule could never fire at all. Both numbers now come
+     from the same websocket sweep, measured at the same instant. */
   S.prices.forEach(function(p){
-    if(NO_PRICE[p.symbol])return;
-    var c=parseFloat(p.change_pct), v=rv[p.symbol];
+    if(NO_PRICE[p.symbol]||p.covered===false)return;
+    var c=parseFloat(p.change_pct), v=parseFloat(p.volume_ratio);
     if(isNaN(c)||Math.abs(c)<1.5)return;
     if(!(v>=2))return;
     out.push({sym:p.symbol, p:c, dn:c<0, badge:'VOL '+v.toFixed(1)+'x',
-      why:'moved '+Math.abs(c).toFixed(2)+'% on '+v.toFixed(1)+
-          '× its own average volume'});
+      why:'moved '+Math.abs(c).toFixed(2)+'% running at '+v.toFixed(1)+
+          '× its normal pace for this time of day'});
   });
   return out;
 }
@@ -503,7 +547,10 @@ function buildSectors(){
   S.sectors=Object.keys(by).map(function(name){
     var rows=by[name], adv=0, dec=0, sum=0, n=0;
     rows.forEach(function(r){
-      if(NO_PRICE[r.symbol])return;
+      /* ONLY COVERED SYMBOLS COUNT. An uncovered one has no change to
+         average, and treating it as 0 would drag every sector toward flat in
+         proportion to how little of it the feed reaches. */
+      if(NO_PRICE[r.symbol]||r.covered===false)return;
       var c=parseFloat(r.change_pct);
       if(isNaN(c))return;
       sum+=c; n++;
@@ -519,10 +566,18 @@ function buildSectors(){
 
 function staleOf(sym,row){
   if(NEW_LISTING[sym])return {cls:'stale',tag:'NEW LISTING / building history'};
-  var c=row?parseFloat(row.change_pct):NaN;
   var px=row?parseFloat(row.ltp):NaN;
-  if(NO_PRICE[sym]||!(px>0)||isNaN(c))
+  if(NO_PRICE[sym]||!(px>0))
     return {cls:'stale',tag:'INVESTIGATE / no data'};
+  /* A THIRD LABEL, and a deliberate addition to the two in the contract.
+     This symbol has a good last price and simply is not on the intraday
+     websocket, which covers ~498 of 745. It is neither a new listing nor a
+     fault, and colouring it 0.00% would make "no coverage" read as "did not
+     move". */
+  if(row&&row.covered===false)
+    return {cls:'stale',tag:'LAST CLOSE / not on the intraday feed'};
+  var c=row?parseFloat(row.change_pct):NaN;
+  if(isNaN(c))return {cls:'stale',tag:'INVESTIGATE / no data'};
   return null;
 }
 
@@ -530,7 +585,9 @@ function sectorBox(s,expanded){
   var top=s.rows.slice(0,3), more=s.rows.length-top.length;
   var inner='<div class="s-n">'+esc(s.name)+'</div>'+
     '<div class="s-p fig" style="color:'+sign(s.pct)+'">'+pct(s.pct)+'</div>'+
-    '<div class="s-ad fig">'+s.adv+' advancing · '+s.dec+' declining</div>'+
+    '<div class="s-ad fig">'+s.adv+' advancing · '+s.dec+' declining'+
+      (s.counted<s.rows.length
+        ? ' · '+s.counted+'/'+s.rows.length+' on the feed' : '')+'</div>'+
     '<div class="s-c">'+top.map(function(r){
       return '<div><span>'+esc(r.symbol)+'</span>'+
         '<span class="fig" style="color:'+sign(r.change_pct)+'">'+
@@ -683,7 +740,21 @@ function renderEvents(){
       'last completed session.</div>';
     return;
   }
-  el.innerHTML=S.events.slice(0,8).map(function(ev){
+  /* NEWEST SESSION ONLY. The calendar below renders the session before this
+     one, so a card can never appear in both. */
+  var newest='';
+  S.events.forEach(function(e){
+    var d=String(e.event_date||'').slice(0,10);
+    if(d>newest)newest=d;
+  });
+  var shown=S.events.filter(function(e){
+    return String(e.event_date||'').slice(0,10)===newest;});
+  if(!shown.length){
+    el.innerHTML='<div class="empty">No disclosed events recorded for the '+
+      'last completed session.</div>';
+    return;
+  }
+  el.innerHTML=shown.slice(0,8).map(function(ev){
     var p=ev.payload||{};
     var url=p.source_url||p.url||p.link||'';
     var src=p.source||p.source_name||'';
@@ -779,13 +850,60 @@ function renderHeavy(){
   '-symbol universe.</div>';
 }
 
-/* ── 6 CALENDAR ───────────────────────────────────────────────── */
+/* ── 6 CALENDAR ─────────────────────────────────────────────────
+   THE TWO HALVES HAVE DIFFERENT ANSWERS, checked rather than assumed.
+
+   SCHEDULED TODAY has no source. This codebase knows four NSE endpoints --
+   corporate-announcements, corporates-financial-results,
+   corporate-share-holdings-master and etf -- and every one is BACKWARD
+   looking: what was announced, what was filed. Nothing fetches board
+   meetings, a results calendar or ex-dates, so there is no forward-looking
+   date in the system to draw. Named honestly rather than left vague.
+
+   LANDED has one, and it is live. radar_events carries detected moves each
+   with a cited NSE corporate-announcement behind it. It is scoped to the
+   session BEFORE the one the Disclosed Events block shows, so the two never
+   render the same card twice. */
 function renderCal(){
-  var msg='<div class="empty">Scheduled corporate and regulatory dates will '+
-    'be drawn from Radar&rsquo;s regulator feeds. That source is not built '+
-    'yet, so nothing is listed here rather than anything invented.</div>';
-  document.getElementById('cal-today').innerHTML=msg;
-  document.getElementById('cal-yday').innerHTML=msg;
+  document.getElementById('cal-today').innerHTML=
+    '<div class="empty">Nothing in the system reads a forward-looking date. '+
+    'The four NSE endpoints in use — announcements, financial results, '+
+    'shareholding and ETF — all describe what has already happened. Board '+
+    'meetings, a results calendar and ex-dates would fill this, and none of '+
+    'them is fetched yet.</div>';
+
+  var el=document.getElementById('cal-yday');
+  var dates=[];
+  S.events.forEach(function(e){
+    var d=String(e.event_date||'').slice(0,10);
+    if(d&&dates.indexOf(d)===-1)dates.push(d);
+  });
+  dates.sort().reverse();
+  var prev=dates[1];
+  if(!prev){
+    el.innerHTML='<div class="empty">No session before the one shown above '+
+      'has a recorded event.</div>';
+    return;
+  }
+  var rows=S.events.filter(function(e){
+    return String(e.event_date||'').slice(0,10)===prev;});
+  el.innerHTML='<div class="micro" style="margin-bottom:7px">'+esc(prev)+
+    '</div>'+rows.slice(0,6).map(function(ev){
+    var pl=ev.payload||{};
+    var url=pl.source_url||pl.url||pl.link||'';
+    var line=pl.summary||pl.headline||pl.note||'';
+    return '<div class="ev"><div class="ev-h">'+
+      '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
+      '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
+      (ev.move_pct!==null&&ev.move_pct!==undefined
+        ? '<span class="ev-p fig" style="color:'+sign(ev.move_pct)+'">'+
+          pct(ev.move_pct)+'</span>' : '')+
+      '</div>'+
+      (line?'<div class="ev-x">'+esc(line)+'</div>':
+        '<div class="ev-x">No disclosed trigger found.</div>')+
+      (url?'<div class="ev-src">'+extLink(url,pl.source||'Primary document')+
+        '</div>':'')+'</div>';
+  }).join('');
 }
 
 /* ── BOOT ─────────────────────────────────────────────────────── */
@@ -796,12 +914,13 @@ async function load(){
     sbGet('/rest/v1/index_quotes?select=*'),
     sbGet('/rest/v1/orb_breaks?select=*&order=detected_at.desc&limit=60'),
     sbGet('/rest/v1/breadth_snapshots?select=*&order=at.asc&limit=200'),
-    sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=12'),
-    sbGet('/rest/v1/signals?select=symbol,rvol&order=signal_date.desc&limit=1000'),
-    sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120')
+    sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=40'),
+    sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120'),
+    sbGet('/rest/v1/intraday_prices?select=*&limit=1000')
   ]);
   S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
-  S.breadth=res[3]; S.events=res[4]; S.rvol=res[5]; S.heavy=res[6];
+  S.breadth=res[3]; S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
+  mergeIntraday();
 
   buildSectors();
   renderState(); renderReading(); renderIdx(); renderTape();

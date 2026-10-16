@@ -103,6 +103,33 @@ def main() -> int:
     # receives volume_traded on every tick and range_map carries avg_vol_20d,
     # so it does. These assert the block is driven by that feed and is honest
     # about which ratio it means and what it counted.
+    print()
+    print("THE DAY CHANGE DOES NOT COME FROM THE DEAD COLUMN")
+    print("-" * 104)
+    # live_prices.change_pct is 0.0 for all 745 rows and always has been. If
+    # the page ever reads it for colour again, every tile goes neutral and
+    # nothing on the page says so.
+    check("the page merges an intraday source",
+          "intraday_prices" in html, True)
+    check("  and overwrites change_pct from it",
+          "p.change_pct=r.change_pct" in html.replace(" ", ""), True)
+    check("  uncovered symbols are marked, not zeroed",
+          "p.change_pct=null" in html.replace(" ", ""), True)
+    check("  they get their own tile label",
+          "LAST CLOSE / not on the intraday feed" in html, True)
+    check("  sector aggregates skip uncovered symbols",
+          "r.covered===false" in html.replace(" ", ""), True)
+    check("  and the page states the coverage",
+          "of 745 symbols" in html or "Object.keys(SECTOR_MAP).length" in html,
+          True)
+    check("the mover rule uses the intraday volume ratio",
+          "p.volume_ratio" in html, True)
+    check("  and no longer reads end-of-day signals.rvol",
+          "select=symbol,rvol" in html, False)
+
+    print()
+    print("THE HEAVY-VOLUME BLOCK")
+    print("-" * 104)
     check("the heavy-volume block reads the real feed",
           "heavy_quiet" in html, True)
     check("  it says the ratio is pace, not cumulative",
@@ -112,8 +139,18 @@ def main() -> int:
     check("  and carries the same denominator caveat as breadth",
           html.count("not the full") >= 2, True,
           "breadth and heavy-volume both say it")
-    check("the calendar empty state names Radar",
-          "Radar" in html, True)
+    # THE CALENDAR'S TWO HALVES HAVE DIFFERENT ANSWERS, and the page must not
+    # claim "no source" for the half that has one. Every NSE endpoint this
+    # codebase uses is backward-looking, so "scheduled" genuinely has nothing;
+    # "landed" is radar_events, which is live.
+    check("the scheduled half names what is actually missing",
+          "Board" in html and "ex-dates" in html, True)
+    check("  and does not claim Radar has no source",
+          "That source is not built yet" in html, False)
+    check("the landed half reads radar_events",
+          "cal-yday" in html and "dates[1]" in html.replace(" ", ""), True)
+    check("  scoped to a different session from the events block",
+          "newest" in html and "prev" in html, True)
     check("a missing disclosure says so",
           "No disclosed trigger found" in html, True)
     check("both stale labels exist",

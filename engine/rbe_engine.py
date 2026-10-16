@@ -232,6 +232,7 @@ class RBEngine:
         if not tracked:
             return
         self._write_heavy_quiet(tracked)
+        self._write_intraday_prices()
         row = {"session_date": now_ist().date().isoformat(),
                "at": now_ist().replace(microsecond=0).isoformat(),
                "advancing": adv, "declining": dec, "unchanged": unch,
@@ -252,6 +253,62 @@ class RBEngine:
         except Exception as e:
             # A failed snapshot must never take the breakout scanner down.
             log.warning(f"breadth snapshot failed: {e}")
+
+    def _write_intraday_prices(self) -> None:
+        """Day change for every symbol on the feed. Never raises.
+
+        WHY THIS EXISTS AT ALL. live_prices.change_pct is 0.0 for all 745 rows
+        and always has been: upstox_ws computes (ltp - ohlc.close)/ohlc.close
+        and reads ohlc.close as the PREVIOUS close, while the same ohlc block
+        is read elsewhere in that file as TODAY'S high/low/open. Both cannot be
+        true. ohlc.close is today's close-so-far, which during a session IS the
+        last price, so the expression is (ltp - ltp)/ltp = exactly 0 for every
+        symbol -- which is why the column has one distinct value across 745
+        rows while ltp has 741.
+
+        Here the previous close is prev_close from the range map, which is a
+        different field from a different endpoint and is unambiguous. Same
+        source as breadth and heavy/quiet, so all three agree by construction.
+
+        ONE ROW PER SYMBOL, upserted, exactly like live_prices: the table stays
+        at ~498 rows and the page's read is trivial. volume_ratio rides along
+        so the mover rule has a real intraday denominator instead of the
+        end-of-day rvol on the signals table.
+        """
+        now = now_ist()
+        frac = volume_bucket(self.curve)
+        stamp = now.replace(microsecond=0).isoformat()
+        rows = []
+        for sym, px in self.last_px.items():
+            if sym in BREADTH_EXCLUDE:
+                continue
+            r = self.ranges.get(sym) or {}
+            prev, avg = r.get("prev_close"), r.get("avg_vol_20d")
+            if not prev or not px:
+                continue
+            vol = self.last_vol.get(sym)
+            ratio = (round(vol / (avg * frac), 2)
+                     if (vol and avg and frac) else None)
+            rows.append({"symbol": sym, "ltp": round(float(px), 2),
+                         "prev_close": round(float(prev), 2),
+                         "change_pct": round((px - prev) / prev * 100.0, 2),
+                         "volume_ratio": ratio, "snapshot_at": stamp})
+        if not rows:
+            return
+        try:
+            resp = requests.post(
+                f"{SUPABASE_URL}/rest/v1/intraday_prices",
+                headers={**_headers(),
+                         "Prefer": "resolution=merge-duplicates"},
+                json=rows, timeout=20)
+            if resp.status_code not in (200, 201, 204):
+                log.warning(f"intraday_prices rejected: HTTP "
+                            f"{resp.status_code} {resp.text[:120]}")
+            else:
+                log.info(f"intraday prices: {len(rows)} symbol(s) written")
+        except Exception as e:
+            # Must never take the breakout scanner down.
+            log.warning(f"intraday_prices write failed: {e}")
 
     def _write_heavy_quiet(self, tracked: int) -> None:
         """The CURRENT heavy-but-quiet set, every 5 minutes. Never raises.
