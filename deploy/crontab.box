@@ -27,8 +27,8 @@
 #     grep -vE '^[A-Za-z_][A-Za-z0-9_]*=' deploy/crontab.box >> /tmp/ct.new
 #
 #     # 3. READ IT before applying -- confirm the variable count and the job count
-#     grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' /tmp/ct.new    # expect 39
-#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 39
+#     grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' /tmp/ct.new    # expect 40
+#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 40
 #     diff <(grep -E '^[0-9*@]' ~/crontab.before.*) <(grep -E '^[0-9*@]' /tmp/ct.new)
 #
 #     # 4. apply
@@ -335,3 +335,10 @@ MAILTO=""
 #
 # 03:00-10:55 UTC = 08:30-16:25 IST, which brackets the session at both ends.
 */5 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/publish_orb.py >> reports/home_page.log 2>&1
+# THE LAST SESSION'S CLOSES, for the page's out-of-hours view. Runs after the
+# nightly chain, which is what writes the parquet it reads. Without this the
+# home page falls back to nothing after the close and renders a grey grid of a
+# market that actually moved.
+#
+# 13:50 UTC = 19:20 IST, after the chain and before the nightly report.
+50 13 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/publish_closes.py >> reports/home_page.log 2>&1

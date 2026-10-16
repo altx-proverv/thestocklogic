@@ -93,6 +93,12 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   letter-spacing:-.012em; max-width:52ch}
 .gate-s{font-size:13px; color:var(--ink2); margin:0 0 8px; max-width:62ch}
 
+.tag{font-size:9px;font-weight:600;letter-spacing:.1em;padding:2px 6px;
+  border:1px solid var(--hair);border-radius:3px;color:var(--micro);
+  margin-left:8px;white-space:nowrap;vertical-align:middle}
+.tag-live{color:var(--brand);border-color:rgba(59,169,238,.5)}
+.blk h2,.micro{display:flex;align-items:center;flex-wrap:wrap;gap:0}
+
 /* 2 THE READING */
 .reading{padding-block:26px 18px}
 .reading p{
@@ -277,7 +283,7 @@ footer p{margin:0 0 6px; max-width:88ch}
   </section>
 
   <section aria-labelledby="ix-h">
-    <h2 class="micro" id="ix-h" style="margin:0 0 8px">Index levels</h2>
+    <h2 class="micro" id="ix-h" style="margin:0 0 8px">Index levels<span id="ix-tag"></span></h2>
     <div class="idx" id="idx"></div>
   </section>
 </div>
@@ -290,20 +296,20 @@ footer p{margin:0 0 6px; max-width:88ch}
 <div class="wrap">
   <section class="floor">
     <div class="centre" id="centre" aria-labelledby="sc-h">
-      <h2 class="micro" id="sc-h" style="margin:0 0 8px">Sector strength</h2>
+      <h2 class="micro" id="sc-h" style="margin:0 0 8px">Sector strength<span id="sc-tag"></span></h2>
       <div class="sect" id="sect"></div>
     </div>
     <aside class="flash" aria-label="Events and breadth">
-      <div class="blk"><h2>Disclosed events</h2><div id="events"></div></div>
-      <div class="blk"><h2>Breadth through the session</h2><div id="breadth"></div></div>
-      <div class="blk"><h2>Heavy volume, little movement</h2><div id="heavy"></div></div>
+      <div class="blk"><h2>Disclosed events<span id="ev-tag"></span></h2><div id="events"></div></div>
+      <div class="blk"><h2>Breadth through the session<span id="bd-tag"></span></h2><div id="breadth"></div></div>
+      <div class="blk"><h2>Heavy volume, little movement<span id="hv-tag"></span></h2><div id="heavy"></div></div>
     </aside>
   </section>
 
   <section class="cal" aria-labelledby="cl-h">
     <h2 class="micro" id="cl-h" style="grid-column:1/-1;margin:0">Calendar</h2>
     <div class="blk"><h2>Scheduled today</h2><div id="cal-today"></div></div>
-    <div class="blk"><h2>Landed yesterday</h2><div id="cal-yday"></div></div>
+    <div class="blk"><h2>Landed<span id="lb-tag"></span></h2><div id="cal-yday"></div></div>
   </section>
 </div>
 </main>
@@ -365,9 +371,17 @@ function hhmmss(d){return d.toISOString().substr(11,8);}
 
 /* One read path. Every feed resolves to an array: a single failing table must
    never blank the page, and it must say what went wrong in the console. */
-async function sbGet(path){
+/* useSession sends the signed-in user's token instead of the anon key.
+   RADAR NEEDS IT. radar_events and radar_card_versions are gated
+   authenticated + is_admin() + status/validation, deliberately -- and the
+   anon key ships inside this page, so reading them as anon would have meant
+   publishing validation-gated content to anyone who viewed source. Read as
+   the user; the existing policies then decide. */
+var _tok=null;
+async function sbGet(path,useSession){
+  var h=(useSession&&_tok)?{apikey:AK,Authorization:'Bearer '+_tok}:HDR;
   var r;
-  try{ r=await fetch(SB+path,{headers:HDR}); }
+  try{ r=await fetch(SB+path,{headers:h}); }
   catch(e){ console.error('home: '+path+' -> '+e.message); return []; }
   if(!r.ok){
     var b=''; try{ b=(await r.text()).slice(0,200); }catch(e){}
@@ -379,45 +393,87 @@ async function sbGet(path){
 }
 
 var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
-       sectors:[],open:null,sel:null,covered:0,uncovered:0};
+       closes:[],sectors:[],open:null,sel:null,covered:0,uncovered:0,
+       /* WHICH SESSION EACH BLOCK IS SHOWING. Resolved per block, so one
+          empty block never holds the rest of the page back: the grid can be
+          on Friday's close while the tape is on Friday's breaks and the
+          index strip is still waiting for its first write. */
+       src:{prices:null, priceDate:null, tape:null, events:null, landed:null}};
 
-/* ── WHERE THE DAY CHANGE COMES FROM ──────────────────────────────
-   NOT from live_prices.change_pct. That column is 0.0 for all 745 rows and
-   always has been: upstox_ws computes (ltp - ohlc.close)/ohlc.close and reads
-   ohlc.close as the PREVIOUS close, while the same ohlc block is read
-   elsewhere in that file as TODAY'S high/low/open. Both cannot be true.
-   ohlc.close is today's close-so-far, which during a session IS the last
-   price, so the expression is exactly 0 for every symbol — one distinct value
-   across 745 rows while ltp has 741.
+/* ── WHERE THE DAY CHANGE COMES FROM, IN ORDER ───────────────────
+   1. intraday_prices  — the websocket, ~498 symbols, live during a session
+   2. daily_closes     — the nightly chain, all 745, the last completed
+                         session's close-to-close
+   3. neither          — the tile is marked, never coloured
 
-   intraday_prices carries (ltp - prev_close)/prev_close from rbe_engine's
-   websocket, where prev_close is a different field from a different endpoint.
-   It covers the ~498 symbols on that feed.
+   THE PAGE MUST NOT BLANK OUT OF HOURS. Before this it fell to (3) for
+   everything the moment the websocket stopped writing, so a reader arriving
+   on a Saturday saw a grey grid of a market that had actually moved. The
+   close fallback covers MORE symbols than the live feed, not fewer, so the
+   out-of-hours view is the more complete one.
 
-   A SYMBOL OUTSIDE THOSE 498 IS NOT RENDERED AS A FALSE NEUTRAL. It keeps its
-   last known close and is labelled as such. Colouring it 0.00% would put it
-   in the neutral heat band and make "no coverage" look like "did not move",
-   which is the same lie this whole change exists to stop telling. */
-function mergeIntraday(){
-  var by={};
-  S.intraday.forEach(function(r){by[r.symbol]=r;});
-  S.covered=0; S.uncovered=0;
-  S.prices.forEach(function(p){
-    var r=by[p.symbol];
-    if(r){
-      p.change_pct=r.change_pct;
-      p.ltp=r.ltp;
-      p.volume_ratio=r.volume_ratio;
-      p.covered=true;
-      S.covered++;
-    }else{
-      /* No intraday coverage. Keep the last known close, drop the dead
-         change so nothing downstream can colour it. */
-      p.change_pct=null;
-      p.covered=false;
-      S.uncovered++;
-    }
+   NOT live_prices.change_pct, at any point: it is 0.0 for all 745 rows. */
+function resolvePrices(){
+  var intra={}, close={};
+  S.intraday.forEach(function(r){intra[r.symbol]=r;});
+
+  /* The newest session present, and only that one. */
+  var newest='';
+  S.closes.forEach(function(r){
+    var d=String(r.session_date||'').slice(0,10);
+    if(d>newest)newest=d;
   });
+  S.closes.forEach(function(r){
+    if(String(r.session_date||'').slice(0,10)===newest)close[r.symbol]=r;
+  });
+
+  var liveCount=0;
+  S.prices.forEach(function(p){
+    var i=intra[p.symbol];
+    if(i){
+      p.change_pct=i.change_pct; p.ltp=i.ltp;
+      p.volume_ratio=i.volume_ratio; p.covered=true; p.live=true;
+      liveCount++;
+      return;
+    }
+    var c=close[p.symbol];
+    if(c){
+      p.change_pct=c.change_pct; p.ltp=c.close;
+      p.volume_ratio=null; p.covered=true; p.live=false;
+      return;
+    }
+    p.change_pct=null; p.covered=false; p.live=false;
+  });
+
+  /* A handful of live rows is the session starting, not a live session. The
+     grid flips to live only when the feed is actually carrying the market. */
+  S.src.prices = liveCount>=50 ? 'live' : (newest ? 'close' : null);
+  S.src.priceDate = S.src.prices==='live' ? istDate() : (newest||null);
+  S.covered=S.prices.filter(function(p){return p.covered;}).length;
+  S.uncovered=S.prices.length-S.covered;
+}
+
+/* ── ONE PLACE THAT NAMES A SESSION ─────────────────────────────── */
+function dayName(iso){
+  /* PARSED FROM THE STRING'S OWN PARTS. Building a Date from an IST midnight
+     and then reading getUTCDate() moves it back to the previous day -- the
+     label said "Thu 15 Oct" for 2026-10-16. The date is already the date; it
+     does not need a timezone round trip. */
+  if(!iso)return '';
+  var p=String(iso).slice(0,10).split('-');
+  if(p.length!==3)return '';
+  var y=+p[0], m=+p[1], dd=+p[2];
+  var D=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][
+        new Date(Date.UTC(y,m-1,dd)).getUTCDay()];
+  var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1];
+  return D+' '+dd+' '+M;
+}
+/* The label every block carries, so a reader never has to guess whether a
+   number is live or a close. */
+function sessionTag(kind,iso){
+  if(kind==='live')return '<span class="tag tag-live">LIVE</span>';
+  if(!iso)return '';
+  return '<span class="tag">CLOSE &middot; '+esc(dayName(iso))+'</span>';
 }
 
 /* ── IS THE MARKET OPEN ───────────────────────────────────────────
@@ -431,16 +487,39 @@ function marketOpen(){
 
 function renderState(){
   var dot=document.getElementById('dot'), txt=document.getElementById('state');
-  var last=S.prices.length?S.prices.reduce(function(a,b){
-    return (a.updated_at>b.updated_at)?a:b;}).updated_at:null;
-  if(marketOpen()){
+  var live=S.src.prices==='live';
+  if(live){
     dot.className='dot on';
     txt.textContent='Live · '+hhmmss(istNow())+' IST';
   }else{
     dot.className='dot';
-    var ds=last?String(last).slice(0,10):istDate();
-    txt.textContent='Market closed · last close '+ds;
+    txt.textContent = S.src.priceDate
+      ? 'Market closed · showing the close of '+dayName(S.src.priceDate)
+      : 'Market closed';
   }
+}
+
+/* EVERY BLOCK SAYS WHICH SESSION IT IS SHOWING. A reader must never have to
+   work out whether a number is live or a close, and the blocks can disagree:
+   the grid may be on Friday's close while the index strip has no reading at
+   all yet. Each tag reflects its own block. */
+function renderTags(){
+  function set(id,html){
+    var e=document.getElementById(id); if(e)e.innerHTML=html||'';
+  }
+  set('sc-tag', S.src.prices
+      ? sessionTag(S.src.prices, S.src.priceDate) : '');
+  set('ix-tag', S.idx.length
+      ? sessionTag(marketOpen()?'live':'close',
+          S.idx.length?String(S.idx[0].updated_at||'').slice(0,10):null) : '');
+  set('bd-tag', S.breadth.length
+      ? sessionTag('close', String(S.breadth[0].session_date||'').slice(0,10))
+      : '');
+  set('hv-tag', S.heavy.length
+      ? sessionTag('close', String(S.heavy[0].session_date||'').slice(0,10))
+      : '');
+  set('ev-tag', S.src.events ? sessionTag('close', S.src.events) : '');
+  set('lb-tag', S.src.landed ? sessionTag('close', S.src.landed) : '');
 }
 
 /* ── 2 THE READING, generated ─────────────────────────────────── */
@@ -454,9 +533,8 @@ function renderState(){
    A heatmap drawn from that is uniformly neutral and looks like a calm
    session. It is not a calm session; it is no data. The page says which. */
 function changeFeedDead(){
-  /* True only when NOTHING has an intraday change -- before the first sweep
-     of a session, or if rbe_engine is not running. A dead column and an
-     un-started session look the same to a reader, so the copy says which. */
+  /* True only when neither the live feed nor the last session's closes have
+     anything -- a genuinely empty page, not an out-of-hours one. */
   return S.covered===0;
 }
 
@@ -464,18 +542,10 @@ function renderReading(){
   var secs=S.sectors;
   if(changeFeedDead()){
     document.getElementById('reading').textContent=
-      'The change-on-day field is reading zero for every symbol in the '+
-      'universe, so no sector or breadth reading can be drawn from it.';
+      'No price data is available for the market right now.';
     document.getElementById('prov').textContent=
-      'Last prices are present and current; the change-on-day column is not '+
-      'being populated. Levels in the index strip above are read separately '+
-      'and are unaffected. This is a feed fault, not a flat market, and it is '+
-      'shown rather than hidden.';
-    return;
-  }
-  if(!secs.length){
-    document.getElementById('reading').textContent=
-      'No sector data for the last completed session.';
+      'This should resolve on its own. If it has not by the next market '+
+      'open, something upstream needs looking at.';
     return;
   }
   var green=secs.filter(function(s){return s.pct>0;}).length;
@@ -489,29 +559,35 @@ function renderReading(){
   var sorted=secs.slice().sort(function(a,b){return b.pct-a.pct;});
   var lead=sorted.slice(0,2).map(function(s){return s.name;});
   var lag=sorted.slice(-2).map(function(s){return s.name;}).reverse();
-  var open=marketOpen();
-  var txt=(open?'':'At the last close: ')+
-    'breadth '+adv.toLocaleString('en-IN')+' to '+dec.toLocaleString('en-IN')+
-    ', and '+green+' of '+secs.length+' sectors are green. '+
-    lead.join(' and ')+' are leading; '+lag.join(' and ')+' are under pressure.';
+  /* THE READING DESCRIBES WHAT IS ON SCREEN, not the clock. If the grid is
+     showing Friday's close then this is about Friday, in the past tense,
+     with the date on it. */
+  var live=S.src.prices==='live';
+  var when=dayName(S.src.priceDate);
+  var txt = live
+    ? ('Breadth '+adv.toLocaleString('en-IN')+' to '+dec.toLocaleString('en-IN')+
+       ', and '+green+' of '+secs.length+' sectors are green. '+
+       lead.join(' and ')+' are leading; '+lag.join(' and ')+
+       ' are under pressure.')
+    : ('At the close on '+when+', breadth was '+adv.toLocaleString('en-IN')+
+       ' to '+dec.toLocaleString('en-IN')+', and '+green+' of '+secs.length+
+       ' sectors finished green. '+lead.join(' and ')+' led; '+
+       lag.join(' and ')+' lagged.');
   document.getElementById('reading').textContent=txt;
 
   var last=S.prices.length?String(S.prices.reduce(function(a,b){
     return (a.updated_at>b.updated_at)?a:b;}).updated_at):'';
   var stamp=last?last.slice(11,16)+' IST on '+last.slice(0,10):'unknown';
-  var cov='Day change is measured against the previous close on the intraday '+
-    'feed, which covers '+S.covered+' of '+
-    Object.keys(SECTOR_MAP).length+' symbols; the remaining '+S.uncovered+
-    ' show their last known close and are labelled on the tile. ';
-  var prov=cov+'Last prices refreshed '+stamp+
-    '. The price feed refreshes four times a session '+
-    '(08:45, 09:45, 11:30, 15:15 IST) and does not update between those '+
-    'times. '+
-    S.orb.length+' opening-range '+(S.orb.length===1?'move':'moves')+
-    ' and '+S.events.length+' disclosed '+
-    (S.events.length===1?'event':'events')+' logged today.';
-  if(!open) prov+=' Showing the close of '+(last?last.slice(0,10):istDate())+
-    '. Updates resume at 09:15.';
+  var prov = live
+    ? ('Live prices across '+S.covered+' of '+S.prices.length+' symbols. '+
+       S.orb.length+' opening-range '+(S.orb.length===1?'move':'moves')+
+       ' and '+S.events.length+' disclosed '+
+       (S.events.length===1?'event':'events')+' so far today.')
+    : ('Showing the close of '+when+' across '+S.covered+' of '+
+       S.prices.length+' symbols. '+S.orb.length+' opening-range '+
+       (S.orb.length===1?'move':'moves')+' and '+S.events.length+
+       ' disclosed '+(S.events.length===1?'event':'events')+
+       ' were logged that session. Live prices resume at 09:15.');
   document.getElementById('prov').textContent=prov;
 }
 
@@ -523,7 +599,7 @@ function renderIdx(){
     var r=by[k];
     if(!r)return '<div class="idx-t"><div class="idx-n">'+esc(k)+
       '</div><div class="idx-l fig">—</div>'+
-      '<div class="fut">no quote recorded</div></div>';
+      '<div class="fut">first reading at 08:45</div></div>';
     return '<div class="idx-t"><div class="idx-n">'+esc(r.display_name)+'</div>'+
       '<div class="idx-l fig">'+num(r.ltp)+'</div>'+
       '<div class="idx-c fig" style="color:'+sign(r.change_pct)+'">'+
@@ -537,9 +613,20 @@ function renderIdx(){
 /* ── 4 THE TAPE ───────────────────────────────────────────────── */
 function tapeItems(){
   var out=[];
+  /* THE TAPE HOLDS THE LAST SESSION'S CAPTURED STATE and does not blank out
+     of hours -- the spec is explicit. It resolves its OWN session: the newest
+     one that actually has breaks, independent of what the grid is showing. */
+  var newest='';
   S.orb.forEach(function(b){
-    var down=(b.side==='LONG'&&b.break_close<b.range_low)||b.side==='SHORT'?false:true;
-    var below=b.break_close!==null&&b.range_low!==null&&+b.break_close<+b.range_low;
+    var d=String(b.session_date||'').slice(0,10);
+    if(d>newest)newest=d;
+  });
+  S.src.tape = newest || null;
+  S.orb.filter(function(b){
+    return String(b.session_date||'').slice(0,10)===newest;
+  }).forEach(function(b){
+    var below=b.break_close!==null&&b.range_low!==null&&
+              +b.break_close<+b.range_low;
     out.push({
       sym:b.symbol, p:b.change_pct, dn:below,
       badge:'ORB '+(below?'↓':'↑'),
@@ -548,28 +635,38 @@ function tapeItems(){
           (b.break_minute?' at '+b.break_minute:'')
     });
   });
-  /* MOVERS COME OFF THE INTRADAY FEED, both halves of the rule.
-     This used signals.rvol -- an END-OF-DAY figure on a table that carries
-     only the ~443 published rows for a date -- against a change_pct that was
-     always zero, so the rule could never fire at all. Both numbers now come
-     from the same websocket sweep, measured at the same instant. */
+
+  /* MOVERS come from whatever the grid is showing. Live, that is the
+     websocket with its volume ratio. On a close, volume is not recorded per
+     symbol, so a mover is stated on the move alone and says so rather than
+     claiming a volume condition it cannot check. */
+  var live=S.src.prices==='live';
   S.prices.forEach(function(p){
     if(NO_PRICE[p.symbol]||p.covered===false)return;
-    var c=parseFloat(p.change_pct), v=parseFloat(p.volume_ratio);
+    var c=parseFloat(p.change_pct);
     if(isNaN(c)||Math.abs(c)<1.5)return;
-    if(!(v>=2))return;
-    out.push({sym:p.symbol, p:c, dn:c<0, badge:'VOL '+v.toFixed(1)+'x',
-      why:'moved '+Math.abs(c).toFixed(2)+'% running at '+v.toFixed(1)+
-          '× its normal pace for this time of day'});
+    if(live){
+      var v=parseFloat(p.volume_ratio);
+      if(!(v>=2))return;
+      out.push({sym:p.symbol, p:c, dn:c<0, badge:'VOL '+v.toFixed(1)+'x',
+        why:'moved '+Math.abs(c).toFixed(2)+'% running at '+v.toFixed(1)+
+            '× its normal pace for this time of day'});
+    }else{
+      if(Math.abs(c)<3)return;      /* a higher bar, with no volume to confirm */
+      out.push({sym:p.symbol, p:c, dn:c<0, badge:'CLOSE',
+        why:(c<0?'closed down ':'closed up ')+Math.abs(c).toFixed(2)+
+            '% on '+dayName(S.src.priceDate)});
+    }
   });
   return out;
 }
+
 function renderTape(){
   var items=tapeItems();
   if(!items.length){
     document.getElementById('tape').innerHTML=
-      '<div class="tape-i"><span class="tape-r">No opening-range moves '+
-      'recorded for the last completed session.</span></div>';
+      '<div class="tape-i"><span class="tape-r">Nothing has broken its '+
+      'opening range yet. Activity appears here from about 10:00.</span></div>';
     return;
   }
   var html=items.map(function(i){
@@ -636,7 +733,7 @@ function sectorBox(s,expanded){
     '<div class="s-p fig" style="color:'+sign(s.pct)+'">'+pct(s.pct)+'</div>'+
     '<div class="s-ad fig">'+s.adv+' advancing · '+s.dec+' declining'+
       (s.counted<s.rows.length
-        ? ' · '+s.counted+'/'+s.rows.length+' on the feed' : '')+'</div>'+
+        ? ' · '+s.counted+' of '+s.rows.length+' priced' : '')+'</div>'+
     '<div class="s-c">'+top.map(function(r){
       return '<div><span>'+esc(r.symbol)+'</span>'+
         '<span class="fig" style="color:'+sign(r.change_pct)+'">'+
@@ -767,67 +864,67 @@ document.addEventListener('keydown',function(e){
   if(t&&t.classList&&t.classList.contains('tile')){ e.preventDefault(); t.click(); }
 });
 
-/* ── FLASH: EVENTS ────────────────────────────────────────────── */
-/* ONE COMPLETE TAG IN ONE LITERAL, with placeholders. Built by concatenation
-   this read '" target="_blank" ' as a fragment, which is an attribute split
-   across two string literals -- unreadable to anything scanning generated
-   markup, and it tripped tests/test_page_language.py on an attribute the
-   external-source rule requires. A whole tag in one literal is also simply
-   easier to read than six pieces.
+/* ── FLASH: EVENTS ───────────────────────────────────────────────
+   RESOLVES ITS OWN SESSION: the newest date that actually has events, which
+   out of hours is the last session that had any. It does not wait on the
+   price feed and the price feed does not wait on it.
 
-   A disclosure always opens the PRIMARY DOCUMENT in a new tab. The page never
-   proxies or republishes a filing. */
+   WHY THIS WAS EMPTY, and it was not session scoping: anon had no SELECT on
+   v_radar_card_latest at all. The browser got 403, the read returned [], and
+   both this block and the calendar below rendered their empty states while 21
+   rows sat in the view. The grant is in
+   migrations/daily_closes_and_radar_read.sql. */
 var EXT_LINK='<a href="{u}" target="_blank" rel="noopener noreferrer">{t} &#8599;</a>';
 function extLink(url,label){
   return EXT_LINK.replace('{u}',esc(url)).replace('{t}',esc(label));
 }
 
-function renderEvents(){
-  var el=document.getElementById('events');
-  if(!S.events.length){
-    el.innerHTML='<div class="empty">No disclosed events recorded for the '+
-      'last completed session.</div>';
-    return;
-  }
-  /* NEWEST SESSION ONLY. The calendar below renders the session before this
-     one, so a card can never appear in both. */
-  var newest='';
+function eventSessions(){
+  var dates=[];
   S.events.forEach(function(e){
     var d=String(e.event_date||'').slice(0,10);
-    if(d>newest)newest=d;
+    if(d&&dates.indexOf(d)===-1)dates.push(d);
   });
-  var shown=S.events.filter(function(e){
-    return String(e.event_date||'').slice(0,10)===newest;});
-  if(!shown.length){
-    el.innerHTML='<div class="empty">No disclosed events recorded for the '+
-      'last completed session.</div>';
+  return dates.sort().reverse();
+}
+
+function eventCard(ev){
+  var pl=ev.payload||{};
+  var url=pl.source_url||pl.url||pl.link||'';
+  var line=pl.summary||pl.headline||pl.note||'';
+  return '<div class="ev"><div class="ev-h">'+
+    '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
+    '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
+    (ev.move_pct!==null&&ev.move_pct!==undefined
+      ? '<span class="ev-p fig" style="color:'+sign(ev.move_pct)+'">'+
+        pct(ev.move_pct)+'</span>' : '')+
+    '</div>'+
+    (line?'<div class="ev-x">'+esc(line)+'</div>':
+      '<div class="ev-x">No disclosed trigger found.</div>')+
+    (url?'<div class="ev-src">'+extLink(url,pl.source||'Primary document')+
+      '</div>':'')+'</div>';
+}
+
+function renderEvents(){
+  var el=document.getElementById('events');
+  var dates=eventSessions();
+  S.src.events=dates[0]||null;
+  if(!dates.length){
+    el.innerHTML='<div class="empty">Company announcements that moved a '+
+      'share price. Nothing has been logged yet.</div>';
     return;
   }
-  el.innerHTML=shown.slice(0,8).map(function(ev){
-    var p=ev.payload||{};
-    var url=p.source_url||p.url||p.link||'';
-    var src=p.source||p.source_name||'';
-    var when=String(ev.event_date||'').slice(0,10);
-    var line=p.summary||p.headline||p.note||'';
-    return '<div class="ev"><div class="ev-h">'+
-      '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
-      '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
-      '<span class="ev-t fig">'+esc(when)+'</span></div>'+
-      (line?'<div class="ev-x">'+esc(line)+'</div>':
-        '<div class="ev-x">No disclosed trigger found.</div>')+
-      (url?'<div class="ev-src">'+extLink(url,src||'Primary document')+
-        '</div>':'')+
-      '</div>';
-  }).join('');
+  var rows=S.events.filter(function(e){
+    return String(e.event_date||'').slice(0,10)===dates[0];});
+  el.innerHTML=rows.slice(0,8).map(eventCard).join('');
 }
 
 /* ── FLASH: BREADTH ───────────────────────────────────────────── */
 function renderBreadth(){
   var el=document.getElementById('breadth');
   if(S.breadth.length<2){
-    el.innerHTML='<div class="empty">Breadth through the session is recorded '+
-      'from the intraday feed every five minutes. The first full session of '+
-      'snapshots will draw here.</div>';
+    el.innerHTML='<div class="empty">How many stocks are rising against '+
+      'falling, tracked through the day. This starts filling at 09:45.</div>';
     return;
   }
   var pts=S.breadth.slice().sort(function(a,b){
@@ -858,8 +955,8 @@ function renderBreadth(){
     '<div class="bd-s">Opened at '+(+first.pct_advancing).toFixed(0)+
       '% advancing and '+(delta>=0?'improved to ':'decayed to ')+
       (+last.pct_advancing).toFixed(0)+'%. Counted across the '+last.tracked+
-      ' symbols on the intraday feed, not the full '+
-      Object.keys(SECTOR_MAP).length+'-symbol universe.</div>';
+      ' of the '+
+      Object.keys(SECTOR_MAP).length+' stocks followed.</div>';
 }
 
 /* ── FLASH: HEAVY VOLUME, LITTLE MOVEMENT ───────────────────────
@@ -870,17 +967,16 @@ function renderBreadth(){
 function renderHeavy(){
   var el=document.getElementById('heavy');
   if(!S.heavy.length){
-    el.innerHTML='<div class="empty">Nothing is running above 3× its own '+
-      'average volume while inside ±0.5% on the day. Checked every five '+
-      'minutes from 09:45 across the symbols on the intraday feed.</div>';
+    el.innerHTML='<div class="empty">Stocks trading on unusually heavy '+
+      'volume while barely moving. This starts filling at 09:45.</div>';
     return;
   }
   var newest=S.heavy[0].snapshot_at;
   var set=S.heavy.filter(function(r){return r.snapshot_at===newest;})
                  .sort(function(a,b){return b.volume_ratio-a.volume_ratio;});
   if(!set.length){
-    el.innerHTML='<div class="empty">Nothing qualifies in the latest '+
-      'five-minute sweep.</div>';
+    el.innerHTML='<div class="empty">Nothing is trading on unusual volume '+
+      'without moving right now.</div>';
     return;
   }
   el.innerHTML=set.slice(0,8).map(function(r){
@@ -894,65 +990,32 @@ function renderHeavy(){
   '<div class="bd-s">'+set.length+' of '+set[0].tracked+' tracked, as of '+
   esc(String(newest).slice(11,16))+' IST. Volume is measured against each '+
   'stock&rsquo;s own 20-day average, scaled to the share of a normal day '+
-  'done by this time — pace, not cumulative. Counted across the symbols on '+
-  'the intraday feed, not the full '+Object.keys(SECTOR_MAP).length+
-  '-symbol universe.</div>';
+  'done by this time — pace, not cumulative. Counted across '+set[0].tracked+
+  ' of the '+Object.keys(SECTOR_MAP).length+' stocks followed.</div>';
 }
 
 /* ── 6 CALENDAR ─────────────────────────────────────────────────
-   THE TWO HALVES HAVE DIFFERENT ANSWERS, checked rather than assumed.
-
-   SCHEDULED TODAY has no source. This codebase knows four NSE endpoints --
-   corporate-announcements, corporates-financial-results,
-   corporate-share-holdings-master and etf -- and every one is BACKWARD
-   looking: what was announced, what was filed. Nothing fetches board
-   meetings, a results calendar or ex-dates, so there is no forward-looking
-   date in the system to draw. Named honestly rather than left vague.
-
-   LANDED has one, and it is live. radar_events carries detected moves each
-   with a cited NSE corporate-announcement behind it. It is scoped to the
-   session BEFORE the one the Disclosed Events block shows, so the two never
-   render the same card twice. */
+   LANDED RESOLVES ITS OWN SESSION. It takes the newest session that has
+   events and is NOT the one the Flash block is already showing, so the two
+   never render the same card -- and if Flash is empty, this still finds the
+   last session that had anything rather than collapsing with it. */
 function renderCal(){
   document.getElementById('cal-today').innerHTML=
-    '<div class="empty">Nothing in the system reads a forward-looking date. '+
-    'The four NSE endpoints in use — announcements, financial results, '+
-    'shareholding and ETF — all describe what has already happened. Board '+
-    'meetings, a results calendar and ex-dates would fill this, and none of '+
-    'them is fetched yet.</div>';
+    '<div class="empty">Results dates, board meetings and ex-dividend dates. '+
+    'Not available yet.</div>';
 
   var el=document.getElementById('cal-yday');
-  var dates=[];
-  S.events.forEach(function(e){
-    var d=String(e.event_date||'').slice(0,10);
-    if(d&&dates.indexOf(d)===-1)dates.push(d);
-  });
-  dates.sort().reverse();
-  var prev=dates[1];
-  if(!prev){
-    el.innerHTML='<div class="empty">No session before the one shown above '+
-      'has a recorded event.</div>';
+  var dates=eventSessions();
+  var pick=dates.filter(function(d){return d!==S.src.events;})[0]||null;
+  S.src.landed=pick;
+  if(!pick){
+    el.innerHTML='<div class="empty">Announcements from the session before. '+
+      'Nothing logged yet.</div>';
     return;
   }
   var rows=S.events.filter(function(e){
-    return String(e.event_date||'').slice(0,10)===prev;});
-  el.innerHTML='<div class="micro" style="margin-bottom:7px">'+esc(prev)+
-    '</div>'+rows.slice(0,6).map(function(ev){
-    var pl=ev.payload||{};
-    var url=pl.source_url||pl.url||pl.link||'';
-    var line=pl.summary||pl.headline||pl.note||'';
-    return '<div class="ev"><div class="ev-h">'+
-      '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
-      '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
-      (ev.move_pct!==null&&ev.move_pct!==undefined
-        ? '<span class="ev-p fig" style="color:'+sign(ev.move_pct)+'">'+
-          pct(ev.move_pct)+'</span>' : '')+
-      '</div>'+
-      (line?'<div class="ev-x">'+esc(line)+'</div>':
-        '<div class="ev-x">No disclosed trigger found.</div>')+
-      (url?'<div class="ev-src">'+extLink(url,pl.source||'Primary document')+
-        '</div>':'')+'</div>';
-  }).join('');
+    return String(e.event_date||'').slice(0,10)===pick;});
+  el.innerHTML=rows.slice(0,6).map(eventCard).join('');
 }
 
 /* ── AUTH ─────────────────────────────────────────────────────────
@@ -994,7 +1057,7 @@ async function requireSession(){
            'This page is for approved members. Sign in on the home page.');
     return null;
   }
-  _user=s.user;
+  _user=s.user; _tok=s.access_token;
   var r;
   try{
     r=await fetch(SB+'/rest/v1/subscribers?user_id=eq.'+
@@ -1072,17 +1135,20 @@ async function load(){
     sbGet('/rest/v1/index_quotes?select=*'),
     sbGet('/rest/v1/orb_breaks?select=*&order=detected_at.desc&limit=60'),
     sbGet('/rest/v1/breadth_snapshots?select=*&order=at.asc&limit=200'),
-    sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=40'),
+    sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=40', true),
     sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120'),
-    sbGet('/rest/v1/intraday_prices?select=*&limit=1000')
+    sbGet('/rest/v1/intraday_prices?select=*&limit=1000'),
+    sbGet('/rest/v1/daily_closes?select=*&order=session_date.desc&limit=1600')
   ]);
   S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
   S.breadth=res[3]; S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
-  mergeIntraday();
+  S.closes=res[7];
+  resolvePrices();
 
   buildSectors();
   renderState(); renderReading(); renderIdx(); renderTape();
   renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
+  renderTags();
   if(marketOpen())setInterval(renderState,1000);
 }
 

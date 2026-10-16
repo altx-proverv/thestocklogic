@@ -94,12 +94,20 @@ def main() -> int:
     print("THE PAGE SAYS WHAT IT CANNOT KNOW")
     print("-" * 104)
     # Out of hours and between refreshes the page must not imply it is live.
-    check("it names the four refresh times",
-          "08:45, 09:45, 11:30, 15:15" in html, True)
-    check("it says updates resume at 09:15",
-          "Updates resume at 09:15" in html, True)
+    # THE PAGE SAYS WHICH SESSION IT IS SHOWING, which replaced a provenance
+    # line that recited the feed's refresh schedule. That was a note to
+    # ourselves on a page a member reads.
+    check("it names the session being shown",
+          "Showing the close of" in html, True)
+    check("it says when live prices come back",
+          "Live prices resume at 09:15" in html, True)
+    check("every block carries a session tag",
+          all(t in html for t in ("sc-tag", "ix-tag", "bd-tag", "hv-tag",
+                                  "ev-tag", "lb-tag")), True)
+    check("  and the header names the close it is showing",
+          "showing the close of" in html, True)
     check("the breadth block names its own denominator",
-          "not the full" in html, True)
+          "stocks followed" in html, True)
     # THE HEAVY-VOLUME BLOCK IS REAL NOW, not an empty state. It was built
     # empty on the brief's premise that no intraday volume exists; rbe_engine
     # receives volume_traded on every tick and range_map carries avg_vol_20d,
@@ -114,7 +122,7 @@ def main() -> int:
     check("the page merges an intraday source",
           "intraday_prices" in html, True)
     check("  and overwrites change_pct from it",
-          "p.change_pct=r.change_pct" in html.replace(" ", ""), True)
+          "p.change_pct=i.change_pct" in html.replace(" ", ""), True)
     check("  uncovered symbols are marked, not zeroed",
           "p.change_pct=null" in html.replace(" ", ""), True)
     check("  they get their own tile label",
@@ -138,21 +146,46 @@ def main() -> int:
           "pace, not cumulative" in html, True)
     check("  it names the sweep it is showing",
           "as of " in html, True)
+    # Both blocks still state their denominator; the wording moved out of
+    # jargon ("not the full 745-symbol universe") into reader language
+    # ("of the 745 stocks followed") when the empty states were rewritten.
     check("  and carries the same denominator caveat as breadth",
-          html.count("not the full") >= 2, True,
+          html.count("stocks followed") >= 2, True,
           "breadth and heavy-volume both say it")
     # THE CALENDAR'S TWO HALVES HAVE DIFFERENT ANSWERS, and the page must not
     # claim "no source" for the half that has one. Every NSE endpoint this
     # codebase uses is backward-looking, so "scheduled" genuinely has nothing;
     # "landed" is radar_events, which is live.
-    check("the scheduled half names what is actually missing",
-          "Board" in html and "ex-dates" in html, True)
-    check("  and does not claim Radar has no source",
-          "That source is not built yet" in html, False)
-    check("the landed half reads radar_events",
-          "cal-yday" in html and "dates[1]" in html.replace(" ", ""), True)
-    check("  scoped to a different session from the events block",
-          "newest" in html and "prev" in html, True)
+    check("the scheduled half says what will appear, plainly",
+          "board meetings" in html and "ex-dividend" in html, True)
+    check("  with no endpoint names or internal mechanics",
+          ("corporate-announcements" in html or "NSE endpoints" in html), False)
+    check("the landed half resolves its own session",
+          "eventSessions()" in html and "S.src.landed" in html, True)
+    check("  and never shows the session Flash is showing",
+          "d!==S.src.events" in html.replace(" ", ""), True)
+
+    print()
+    print("THE PAGE DOES NOT BLANK OUT OF HOURS")
+    print("-" * 104)
+    # The whole point of this pass. Out of hours the grid falls back to the
+    # last completed session's close-to-close for the FULL universe -- which
+    # covers more symbols than the live feed, not fewer.
+    check("the grid falls back to daily_closes",
+          "daily_closes" in html, True)
+    check("  per symbol, after the live feed",
+          "p.live=false" in html.replace(" ", ""), True)
+    check("  and the fallback still colours tiles",
+          "heat(" in html, True)
+    check("the tape resolves its own session",
+          "S.src.tape" in html, True)
+    check("  and does not blank out of hours",
+          "closed up " in html or "closed down " in html, True)
+    check("the reading switches to the past tense",
+          "At the close on" in html, True)
+    check("the three new tables say when they first fill",
+          ("first reading at 08:45" in html
+           and html.count("starts filling at 09:45") >= 2), True)
     check("a missing disclosure says so",
           "No disclosed trigger found" in html, True)
     check("both stale labels exist",
