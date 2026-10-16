@@ -44,6 +44,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 ZERODHA_API_KEY = os.environ.get("ZERODHA_API_KEY", "")
 
 RANGE_MAP_FILE  = Path("data/processed/rbe/range_map.json")
+
+# Breadth snapshot cadence, and the one symbol excluded from the denominator.
+BREADTH_INTERVAL_SECONDS = 300
+BREADTH_EXCLUDE = {"CHOLAFIN"}
 BREAKOUT_BUFFER = 0.002   # 0.2% beyond range boundary
 RVOL_MIN        = 1.5
 MARKET_OPEN     = (9, 15)
@@ -89,6 +93,21 @@ class RBEngine:
         self.generated_at = data.get("generated_at", "")
         self.fired  = self._load_fired_today()
         self.tick_count = 0
+        # ── BREADTH, SNAPSHOTTED ──────────────────────────────────
+        #
+        # WHY HERE AND NOT FROM live_prices. live_prices refreshes four times a
+        # session (08:45 / 09:45 / 11:30 / 15:15 IST) and is an upsert, so it
+        # keeps no history at all -- a breadth sparkline built on it is four
+        # points, three of them hours apart, and reads as a flat market. This
+        # process already receives last_price for every subscribed symbol all
+        # session, and the range map already carries prev_close, so advancing
+        # vs declining is a subtraction on data that is here anyway.
+        #
+        # THE DENOMINATOR IS ~498, NOT 745, and the page says so. These are the
+        # symbols on the websocket; the universe is larger. Reporting it as
+        # full-universe breadth would be a bigger number and a false one.
+        self.last_px = {}
+        self.breadth_last_write = 0.0
         log.info(f"Range map loaded: {len(self.ranges)} stocks | "
                  f"generated {self.generated_at or 'unknown'} | "
                  f"Already fired today: {len(self.fired)}")
@@ -125,6 +144,12 @@ class RBEngine:
         if not ltp:
             return
 
+        # EVERY TICK FEEDS BREADTH, before any breakout logic can return
+        # early -- a symbol that never breaks out still counts as advancing or
+        # declining, and most of them never break out.
+        self.last_px[sym] = ltp
+        self._maybe_write_breadth()
+
         r = self.ranges[sym]
         rh, rl = r["range_high"], r["range_low"]
         height = rh - rl
@@ -144,6 +169,62 @@ class RBEngine:
         if ltp < rl * (1 - BREAKOUT_BUFFER) and f"{sym}:SHORT" not in self.fired:
             if rvol >= RVOL_MIN and ltp < r["pdl"]:
                 self.fire_signal(sym, "SHORT", ltp, rh, rl, height, rvol)
+
+    def _maybe_write_breadth(self) -> None:
+        """One snapshot every BREADTH_INTERVAL_SECONDS. Never raises.
+
+        FIVE MINUTES: over 09:15-15:30 that is 75 points, which draws as a
+        sparkline without thinning and stores ~75 rows a day. One minute would
+        be 375 points for a line nobody can read at that width; fifteen would
+        miss the shape of a morning that turns at 10:30.
+
+        CHOLAFIN IS EXCLUDED. Its live_prices row has read ltp=0 since
+        22 September, so COUNT(*) reports full coverage while it has no usable
+        price. Counted here it would be a decline in every single snapshot.
+        """
+        now = time.time()
+        if now - self.breadth_last_write < BREADTH_INTERVAL_SECONDS:
+            return
+        if not market_is_open():
+            return
+        self.breadth_last_write = now
+
+        adv = dec = unch = 0
+        for sym, px in self.last_px.items():
+            if sym in BREADTH_EXCLUDE:
+                continue
+            prev = (self.ranges.get(sym) or {}).get("prev_close")
+            if not prev or not px:
+                continue
+            if px > prev:
+                adv += 1
+            elif px < prev:
+                dec += 1
+            else:
+                unch += 1
+        tracked = adv + dec + unch
+        if not tracked:
+            return
+        row = {"session_date": now_ist().date().isoformat(),
+               "at": now_ist().replace(microsecond=0).isoformat(),
+               "advancing": adv, "declining": dec, "unchanged": unch,
+               "tracked": tracked,
+               "pct_advancing": round(adv / tracked * 100.0, 2)}
+        try:
+            r = requests.post(
+                f"{SUPABASE_URL}/rest/v1/breadth_snapshots",
+                headers={**_headers(),
+                         "Prefer": "resolution=merge-duplicates"},
+                json=row, timeout=10)
+            if r.status_code not in (200, 201, 204):
+                log.warning(f"breadth snapshot rejected: HTTP "
+                            f"{r.status_code} {r.text[:120]}")
+            else:
+                log.info(f"breadth {adv}/{dec} of {tracked} tracked "
+                         f"({row['pct_advancing']}% advancing)")
+        except Exception as e:
+            # A failed snapshot must never take the breakout scanner down.
+            log.warning(f"breadth snapshot failed: {e}")
 
     def fire_signal(self, sym, direction, ltp, rh, rl, height, rvol):
         self.fired.add(f"{sym}:{direction}")

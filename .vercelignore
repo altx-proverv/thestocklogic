@@ -1,0 +1,32 @@
+# WHAT VERCEL MUST NOT SERVE.
+#
+# Everything in the repo root is served as a static file by default, so a file
+# being unreferenced is NOT the same as it being private -- it just means
+# nobody has found the URL yet.
+#
+# archive_merged.json is the signal archive: 62KB of rows carrying grade,
+# entry_ref, sl, target_1 and target_2. Nothing links to it, and it was
+# readable at /archive_merged.json by anyone who guessed the name. The route is
+# hidden here rather than the file deleted, exactly as instructed -- it stays
+# in git and in history, it simply stops being published.
+archive_merged.json
+outcomes.json
+
+# Never part of the site.
+atlas/
+engine/
+radar/
+meridian/
+backtest/
+tests/
+tools/
+scripts/
+migrations/
+deploy/
+docs/
+reports/
+data/
+venv/
+requirements*.txt
+check_js.sh
+index.html.bak

@@ -27,8 +27,8 @@
 #     grep -vE '^[A-Za-z_][A-Za-z0-9_]*=' deploy/crontab.box >> /tmp/ct.new
 #
 #     # 3. READ IT before applying -- confirm the variable count and the job count
-#     grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' /tmp/ct.new    # expect 19
-#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 34
+#     grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' /tmp/ct.new    # expect 39
+#     grep -cE '^[0-9*@]' /tmp/ct.new                    # expect 39
 #     diff <(grep -E '^[0-9*@]' ~/crontab.before.*) <(grep -E '^[0-9*@]' /tmp/ct.new)
 #
 #     # 4. apply
@@ -309,3 +309,29 @@ MAILTO=""
 0 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.session_report --slot 1530 >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
 # 10:20 UTC = 15:50 IST — day-end, after the 15:20 GTT handover
 20 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.reporting.session_report --slot dayend >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
+
+# ── THE PUBLIC HOME PAGE — ITS TWO FEEDS ──────────────────────────────────────
+#
+# Both are one-way producers: they read, and they write a table the browser can
+# only SELECT. Neither can be invoked from the page.
+#
+# INDEX TILES. Nothing wrote NIFTY 50 / NIFTY BANK / NIFTY MIDCAP 100 /
+# NIFTY SMLCAP 100 / INDIA VIX / USDINR before this; live_prices holds 745
+# equities and not one index. Aligned to the live_prices refreshes so the strip
+# and the heatmap are never from different moments. USDINR is resolved from the
+# instrument master on every run, never pinned — it is a CDS future and it
+# rolls; a pinned token goes stale on expiry and then dies.
+#
+# 03:15 UTC = 08:45 IST · 04:15 = 09:45 · 06:00 = 11:30 · 09:45 = 15:15
+15 3 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
+15 4 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
+0 6 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
+45 9 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
+#
+# THE TAPE. Opening-range breaks are the tape's primary content and they are
+# genuinely minute-level, unlike the price feed. Published every 5 minutes
+# across the session; the upsert key is (session_date, symbol) so re-publishing
+# updates a break rather than repeating it.
+#
+# 03:00-10:55 UTC = 08:30-16:25 IST, which brackets the session at both ends.
+*/5 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/publish_orb.py >> reports/home_page.log 2>&1
