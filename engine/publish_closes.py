@@ -60,6 +60,35 @@ def run(session_date: str = None) -> int:
     # describe the instrument, not the setup -- so the first is correct.
     day = day.drop_duplicates(subset=["symbol"], keep="first")
 
+    # ── THE 20-DAY WINDOW, from the per-symbol history ────────────
+    #
+    # NOT from all_rows: 03b writes that frame for the LATEST DATE ONLY, so a
+    # 20-session window computed there is one session wide and "at a one-month
+    # high" would be true of every stock that closed at its own day high. The
+    # real history is data/processed/stocks/<SYM>.parquet -- 745 files, ~925
+    # sessions each.
+    #
+    # INCLUDING TODAY, so the window and the close beside it cannot disagree.
+    STOCKS = ROOT / "data" / "processed" / "stocks"
+    hi20, lo20 = {}, {}
+    missing = 0
+    for sym in day["symbol"].astype(str):
+        f = STOCKS / f"{sym}.parquet"
+        if not f.exists():
+            missing += 1
+            continue
+        try:
+            h = pd.read_parquet(f, columns=["date", "high", "low"])
+            h["date"] = pd.to_datetime(h["date"])
+            w = h[h["date"] <= pd.Timestamp(stamp)].tail(20)
+            if len(w) >= 10:        # too short a window is not a month
+                hi20[sym] = float(w["high"].max())
+                lo20[sym] = float(w["low"].min())
+        except Exception:
+            missing += 1
+    log.info(f"20-day window built for {len(hi20)} symbol(s)"
+             + (f"; {missing} without usable history" if missing else ""))
+
     rows = []
     skipped = 0
     for _, r in day.iterrows():
@@ -72,9 +101,26 @@ def run(session_date: str = None) -> int:
         if not (c > 0 and p > 0):
             skipped += 1
             continue
-        rows.append({"session_date": stamp, "symbol": str(r["symbol"]),
+        sym = str(r["symbol"])
+
+        def _n(v, nd=2):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return None if f != f else round(f, nd)   # NaN-safe
+
+        rows.append({"session_date": stamp, "symbol": sym,
                      "close": round(c, 2), "prev_close": round(p, 2),
-                     "change_pct": round((c - p) / p * 100.0, 2)})
+                     "change_pct": round((c - p) / p * 100.0, 2),
+                     "high": _n(r.get("high")), "low": _n(r.get("low")),
+                     "volume": (int(r["volume"])
+                                if str(r.get("volume", "")).replace(".", "").isdigit()
+                                else None),
+                     "rvol": _n(r.get("rvol")),
+                     "high_20d": _n(hi20.get(sym)),
+                     "low_20d": _n(lo20.get(sym)),
+                     "high_52w": _n(r.get("high_52w"))})
 
     if not rows:
         log.error("nothing publishable")

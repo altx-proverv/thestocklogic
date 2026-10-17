@@ -119,6 +119,17 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   cursor:default; user-select:none;   /* a label, not a control */
 }
 
+/* THE SESSION TAG on a block heading. Deleted once by an edit that replaced
+   the span ending at this marker, which is why tests/test_home_page.py now
+   asserts the rule exists: without it the tag rendered as bare inline text
+   jammed against the heading -- "SECTOR STRENGTHCLOSE · FRI 16 OCT". */
+.tag{display:inline-block; font-size:9px; font-weight:600; letter-spacing:.1em;
+  padding:2px 6px; border:1px solid var(--hair,rgba(232,237,245,0.1));
+  border-radius:3px; color:var(--micro,#7D8FA8);
+  margin-left:8px; white-space:nowrap; vertical-align:middle;
+  text-transform:uppercase}
+.tag-live{color:var(--brand,#3BA9EE); border-color:rgba(59,169,238,.5)}
+
 /* 2 THE READING */
 .reading{padding-block:26px 18px}
 .reading p{
@@ -468,7 +479,10 @@ function resolvePrices(){
     var c=close[p.symbol];
     if(c){
       p.change_pct=c.change_pct; p.ltp=c.close;
-      p.volume_ratio=null; p.covered=true; p.live=false;
+      p.volume_ratio=(c.rvol===null||c.rvol===undefined)?null:+c.rvol;
+      p.high=c.high; p.low=c.low;
+      p.high_20d=c.high_20d; p.low_20d=c.low_20d; p.high_52w=c.high_52w;
+      p.covered=true; p.live=false;
       return;
     }
     p.change_pct=null; p.covered=false; p.live=false;
@@ -640,53 +654,120 @@ function renderIdx(){
 }
 
 /* ── 4 THE TAPE ───────────────────────────────────────────────── */
+/* ── WHAT EARNS A PLACE ON THE TAPE ──────────────────────────────
+   THE PERCENTAGE IS WHAT HAPPENED. The reason has to be the thing the
+   percentage cannot tell you -- the context that changes how the number
+   reads. "AEGISLOG -3.11% · closed down on Fri 16 Oct" spent eleven
+   characters restating the figure beside it.
+
+   So a stock is on the tape when it MOVED and a SECOND FACT is true of it.
+   That fact IS the reason text: one decision, stated once. If nothing is true
+   beyond the percentage, the stock is not news and does not appear.
+
+   THE MOVE BAR IS 2.5%, and it is LOWER than the 3% it replaces on purpose.
+   The fact is the filter now, not the figure: a stock at a 52-week high on a
+   1.8% move is more worth seeing than a 3% move with nothing behind it, and
+   raising the percentage would screen out the first to exclude the second.
+   On 2026-10-16: 89 symbols moved 2.5%, 42 of them had a second fact. */
+var TAPE_MOVE_PCT = 2.5;
+
+/* The reasons, in the order they are worth saying. Every one names something
+   that happened; none restates the percentage and none grades the stock. */
+function tapeReason(p, brk, secOf){
+  var live = S.src.prices==='live';
+
+  /* 1 STRUCTURAL -- the strongest, because it is an event with a time. */
+  if(brk){
+    var below = brk.break_close!==null && brk.range_low!==null &&
+                +brk.break_close < +brk.range_low;
+    var phrase = below ? 'gave up its morning low' : 'took out its morning high';
+    /* THE MINUTE ONLY WHILE IT IS LIVE. On a finished session "at 10:04" is
+       noise -- the day is over and the time changes nothing about the fact. */
+    return {text: phrase + (live && brk.break_minute
+                            ? ' at '+brk.break_minute : ''),
+            down: below};
+  }
+
+  var c = parseFloat(p.change_pct);
+  var px = parseFloat(p.ltp);
+
+  /* 2 LEVEL -- where the price now sits against its own history. */
+  if(p.high_52w && px >= +p.high_52w*0.999) return {text:'at a 52-week high'};
+  if(p.high_20d && px >= +p.high_20d*0.999) return {text:'at a one-month high'};
+  if(p.low_20d  && px <= +p.low_20d*1.001)  return {text:'at a one-month low'};
+
+  /* 3 VOLUME -- how much conviction was behind it. */
+  var v = parseFloat(p.volume_ratio);
+  if(v>=3) return {text:'on '+(v>=10?Math.round(v):v.toFixed(1))+
+                        '\u00d7 normal volume'};
+  if(v>0 && v<=0.5) return {text:'on light volume'};
+
+  /* 4 FINISHED -- where in the day's range it ended. */
+  var hi=parseFloat(p.high), lo=parseFloat(p.low);
+  if(hi>lo){
+    var pos=(px-lo)/(hi-lo);
+    if(pos>=0.9) return {text:'closed on its highs'};
+    if(pos<=0.1) return {text:'closed on its lows'};
+  }
+
+  /* 5 ISOLATION -- alone against its own sector. */
+  var sec = secOf[SECTOR_MAP[p.symbol]];
+  if(sec && sec.counted>=5 && !isNaN(c)){
+    if(c>0 && sec.pct<0) return {text:'one of the few up in a sector that fell'};
+    if(c<0 && sec.pct>0) return {text:'one of the few down in a sector that rose'};
+  }
+  return null;
+}
+
 function tapeItems(){
-  var out=[];
-  /* THE TAPE HOLDS THE LAST SESSION'S CAPTURED STATE and does not blank out
-     of hours -- the spec is explicit. It resolves its OWN session: the newest
-     one that actually has breaks, independent of what the grid is showing. */
+  var out=[], secOf={};
+  (S.sectors||[]).forEach(function(x){secOf[x.name]=x;});
+
+  /* The newest session that actually has breaks -- the tape resolves its own. */
   var newest='';
   S.orb.forEach(function(b){
     var d=String(b.session_date||'').slice(0,10);
     if(d>newest)newest=d;
   });
   S.src.tape = newest || null;
-  S.orb.filter(function(b){
-    return String(b.session_date||'').slice(0,10)===newest;
-  }).forEach(function(b){
-    var below=b.break_close!==null&&b.range_low!==null&&
-              +b.break_close<+b.range_low;
-    out.push({
-      sym:b.symbol, p:b.change_pct, dn:below,
-      badge:'ORB '+(below?'↓':'↑'),
-      /* THE FACT AND THE TIME, not the range arithmetic. This read "broke
-         below its opening range 1,879.00-1,906.90 at 10:04" -- nineteen
-         words of which two carry the observation. The levels are on the
-         stock's own tile; the tape is for noticing, not for reading. */
-      why:'broke its opening range '+(below?'low':'high')+
-          (b.break_minute?' at '+b.break_minute:'')
-    });
+  var brkOf={};
+  S.orb.forEach(function(b){
+    if(String(b.session_date||'').slice(0,10)===newest)brkOf[b.symbol]=b;
   });
 
-  /* MOVERS come from whatever the grid is showing. Live, that is the
-     websocket with its volume ratio. On a close, volume is not recorded per
-     symbol, so a mover is stated on the move alone and says so rather than
-     claiming a volume condition it cannot check. */
-  var live=S.src.prices==='live';
+  var by={};
+  S.prices.forEach(function(p){by[p.symbol]=p;});
+
+  function add(p, brk){
+    var r = tapeReason(p, brk, secOf);
+    if(!r) return;
+    var c = parseFloat(p.change_pct);
+    out.push({
+      sym: p.symbol,
+      /* NO PERCENTAGE RATHER THAN 0.00%. The break rows used to read the dead
+         live_prices column and every one of them showed +0.00%. */
+      p: (p.covered && !isNaN(c)) ? c : null,
+      /* THE ARROW IS THE EVENT'S, not the day change's. A stock can give up
+         its morning low and still finish up; both are true and they are
+         different facts, and the old arrow reported the wrong one. */
+      dn: (r.down!==undefined) ? r.down : (c<0),
+      why: r.text
+    });
+  }
+
+  /* A break is an event in itself -- it needs no move threshold. */
+  Object.keys(brkOf).forEach(function(sym){
+    var p=by[sym];
+    if(p)add(p, brkOf[sym]);
+  });
+
+  /* Everything else: moved AND a second fact. */
   S.prices.forEach(function(p){
-    if(NO_PRICE[p.symbol]||p.covered===false)return;
+    if(brkOf[p.symbol]) return;
+    if(NO_PRICE[p.symbol]||p.covered===false) return;
     var c=parseFloat(p.change_pct);
-    if(isNaN(c)||Math.abs(c)<1.5)return;
-    if(live){
-      var v=parseFloat(p.volume_ratio);
-      if(!(v>=2))return;
-      out.push({sym:p.symbol, p:c, dn:c<0, badge:'VOL '+v.toFixed(1)+'x',
-        why:'on '+v.toFixed(1)+'× normal volume'});
-    }else{
-      if(Math.abs(c)<3)return;      /* a higher bar, with no volume to confirm */
-      out.push({sym:p.symbol, p:c, dn:c<0, badge:'CLOSE',
-        why:'closed '+(c<0?'down':'up')+' on '+dayName(S.src.priceDate)});
-    }
+    if(isNaN(c)||Math.abs(c)<TAPE_MOVE_PCT) return;
+    add(p, null);
   });
   return out;
 }
@@ -696,16 +777,23 @@ function renderTape(){
   if(!items.length){
     document.getElementById('tape').innerHTML=
       '<div class="tape-i"><span class="tape-r">Nothing has broken its '+
-      'opening range yet. Activity appears here from about 10:00.</span></div>';
+      'morning range yet. Activity appears here from about 10:00.</span></div>';
     return;
   }
+  /* NO PER-ITEM SESSION TAG. The header already says which session is on
+     screen, and a tag on every row repeats it 40 times. It earns its place
+     when blocks can disagree -- when part of the page is live and part is
+     not -- and can come back then.
+
+     NO BADGES EITHER. "ORB" was jargon and "VOL 4.7x" said what the reason
+     beside it already said. */
   var html=items.map(function(i){
     return '<div class="tape-i">'+
       '<span class="arr'+(i.dn?' dn':'')+'" style="color:'+
         (i.dn?'var(--neg)':'var(--pos)')+'" aria-hidden="true">&#9650;</span>'+
       '<span class="tape-s">'+esc(i.sym)+'</span>'+
-      '<span class="tape-f fig" style="color:'+sign(i.p)+'">'+pct(i.p)+'</span>'+
-      '<span class="badge">'+esc(i.badge)+'</span>'+
+      (i.p===null?'':'<span class="tape-f fig" style="color:'+sign(i.p)+'">'+
+        pct(i.p)+'</span>')+
       '<span class="tape-r">'+esc(i.why)+'</span></div>';
   }).join('');
   /* Concatenated with itself so the -50% translate loops seamlessly. */
@@ -714,13 +802,13 @@ function renderTape(){
   setTapeSpeed(el);
 }
 
-/* 70 PIXELS PER SECOND. Slow enough to read a six-word reason as it passes --
+/* 70 PIXELS PER SECOND. Slow enough to read a short reason as it passes --
    about three seconds for a typical item at 1440 -- and brisk enough that a
    quiet day does not look frozen. The duration covers HALF the track, because
    the keyframe translates -50% across the doubled list.
 
    Measured, not assumed: scrollWidth is read after the items are in the DOM,
-   so the rate holds whether the day produced eight items or eighty. */
+   so the rate holds whatever the day produced. */
 var TAPE_PX_PER_SEC=70;
 function setTapeSpeed(el){
   var half=el.scrollWidth/2;

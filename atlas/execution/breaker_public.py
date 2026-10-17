@@ -94,14 +94,22 @@ def breaks(include_observed: bool = True) -> list:
     import re
     d = _read(RANGE_FILE)
     rows, seen = [], set()
-    for o in reversed(d.get("observed") or []):
+    # OLDEST FIRST, so the row kept per symbol is the FIRST break.
+    #
+    # This iterated reversed() with a comment claiming it kept the first. It
+    # kept the LAST: `observed` is appended chronologically, so newest-first
+    # iteration keeps the newest. The visible symptom was eleven symbols all
+    # published with break_minute 15:18 -- the final sweep's minute, stamped
+    # on everything still outside its range -- while GRINDWELL, which broke at
+    # 10:04, was published as 15:12.
+    for o in (d.get("observed") or []):
         scope = str(o.get("scope") or "")
         detail = str(o.get("detail") or "")
         sym = scope.split(":")[-1] if scope != "market" else "MARKET"
         if sym in seen:
-            # One row per symbol: the breaker re-records the same symbol each
+            # One row per symbol: the breaker re-records the same symbol every
             # cycle with a newer close, and the tape wants the break, not a
-            # tick stream. reversed() above means this keeps the FIRST break.
+            # tick stream.
             continue
         side = "LONG" if " LONG" in detail else ("SHORT" if " SHORT" in detail
                                                  else "")

@@ -101,6 +101,13 @@ def main() -> int:
           "Showing the close of" in html, True)
     check("it says when live prices come back",
           "Live prices resume at 09:15" in html, True)
+    # THE RULE ITSELF, not just the markup. The .tag CSS was deleted once by
+    # a region rewrite and the tags kept rendering -- as bare inline text
+    # jammed against the heading. Markup without its style is a silent defect.
+    check("the session tag has a style rule",
+          ".tag{" in html.replace(" ", "").replace("\n", ""), True)
+    check("  and it separates itself from the heading",
+          "margin-left:8px" in html.replace(" ", ""), True)
     check("every block carries a session tag",
           all(t in html for t in ("sc-tag", "ix-tag", "bd-tag", "hv-tag",
                                   "ev-tag", "lb-tag")), True)
@@ -180,8 +187,39 @@ def main() -> int:
     check("the tape resolves its own session",
           "S.src.tape" in html, True)
     check("  and does not blank out of hours",
-          "'closed'+(c<0?'down':'up')" in html.replace(" ", ""), True,
-          "the close-mode mover item still exists after the text was shortened")
+          "TAPE_MOVE_PCT" in html and "tapeReason(" in html, True,
+          "items are included by move + a second fact")
+
+    print()
+    print("THE TAPE'S REASON IS NOT THE PERCENTAGE RESTATED")
+    print("-" * 104)
+    # CODE, NOT COMMENTS. The comments in home.html quote the banned phrasings
+    # to explain why they went -- "AEGISLOG -3.11% closed down on Fri 16 Oct"
+    # is in the file as the example being argued against. A ban that fires on
+    # its own rationale gets the rationale deleted, which is the wrong fix.
+    code = re.sub(r"/\*.*?\*/", " ", html, flags=re.S)
+    code = re.sub(r"(?m)^\s*//.*$", " ", code)
+    code = re.sub(r"<!--.*?-->", " ", code, flags=re.S)
+    # The rule: the percentage is WHAT happened; the reason must be what the
+    # percentage cannot tell you. These phrasings restate it and are banned.
+    for banned in ("closed down", "closed up", "moved up", "moved down",
+                   "'moved '"):
+        check(f"  no {banned!r}", banned in code, False)
+    # And bare quality words rank a stock instead of naming an event.
+    for banned in ("strong", "weak", "looks good", "attractive"):
+        check(f"  no quality word {banned!r}",
+              re.search(r"\b" + banned + r"\b", html, re.I) is not None, False)
+    # Word boundary: EUREKAFORB is a real symbol in the embedded map.
+    check("  ORB is gone from the tape",
+          re.search(r"\\bORB\\b", code) is not None, False)
+    check("  it says morning range, not opening range",
+          "morning range" in html, True)
+    check("  break rows never render a 0.00% placeholder",
+          "i.p===null?''" in html.replace(" ", ""), True)
+    check("  the arrow comes from the event, not the day change",
+          "r.down!==undefined" in html.replace(" ", ""), True)
+    check("  the per-item session tag is gone",
+          "badge\">'+esc(i.badge)" in html, False)
     check("the reading switches to the past tense",
           "At the close on" in html, True)
     check("the three new tables say when they first fill",
