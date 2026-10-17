@@ -20,6 +20,7 @@ nav{height:52px;display:flex;align-items:center;justify-content:space-between;pa
 .stat-n{font-size:24px;font-weight:700;margin-bottom:2px}
 .stat-l{font-size:10px;color:var(--muted);letter-spacing:1px}
 .section-title{font-size:10px;letter-spacing:3px;color:var(--muted);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.tbl-wrap{overflow:hidden;overflow-x:auto}
 .table{width:100%;border-collapse:collapse;margin-bottom:28px}
 .table th{font-size:9px;letter-spacing:2px;color:var(--muted);padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
 .table td{padding:10px 10px;border-bottom:1px solid var(--line2);font-size:12px;vertical-align:middle}
@@ -63,7 +64,7 @@ input:focus{border-color:rgba(77,184,255,.4)}
 
 <div style="max-width:1100px;margin:0 auto;padding:14px 16px 0"><a href="/home" class="logo" aria-label="The Stock Logic"><img src="/logo.svg" alt="The Stock Logic"><span class="logo-name">THE STOCK LOGIC</span></a></div>
 <div id="loginView">
-  <nav><div class="logo">TSL ADMIN</div></div>
+  <nav><div class="logo">TSL ADMIN</div></nav>
   <div class="login-box">
     <h2>ADMIN LOGIN</h2>
     <p>Restricted to approved administrators only</p>
@@ -193,7 +194,7 @@ async function loadDashboard() {
 function renderPending(list) {
   var el = document.getElementById('pendingList');
   if (!list.length) { el.innerHTML = '<div class="empty">No pending approvals</div>'; return; }
-  el.innerHTML = '<table class="table"><thead><tr>'+
+  el.innerHTML = '<div class="tbl-wrap"><table class="table"><thead><tr>'+
     '<th>NAME</th><th>EMAIL</th><th>EXPERIENCE</th><th>APPLIED</th><th>ACTION</th>'+
     '</tr></thead><tbody>'+
     list.map(function(w){
@@ -209,13 +210,13 @@ function renderPending(list) {
         '</td>'+
       '</tr>';
     }).join('')+
-    '</tbody></table>';
+    '</tbody></table></div>';
 }
 
 function renderApproved(list) {
   var el = document.getElementById('approvedList');
   if (!list.length) { el.innerHTML = '<div class="empty">No approved users yet</div>'; return; }
-  el.innerHTML = '<table class="table"><thead><tr>'+
+  el.innerHTML = '<div class="tbl-wrap"><table class="table"><thead><tr>'+
     '<th>NAME</th><th>EMAIL</th><th>EXPERIENCE</th><th>APPROVED</th><th>STATUS</th>'+
     '</tr></thead><tbody>'+
     list.map(function(w){
@@ -228,7 +229,7 @@ function renderApproved(list) {
         '<td><span class="badge badge-approved">APPROVED</span></td>'+
       '</tr>';
     }).join('')+
-    '</tbody></table>';
+    '</tbody></table></div>';
 }
 
 async function adminError(what, res) {

@@ -39,7 +39,7 @@ nav{position:sticky;top:0;z-index:100;background:rgba(27,58,107,0.92);backdrop-f
 .logo img{height:26px;width:auto;display:block}
 .logo-name{margin-left:11px;padding-left:11px;border-left:1px solid rgba(255,255,255,.18);font-family:var(--font);font-size:10px;letter-spacing:3px;color:var(--text-2);white-space:nowrap;line-height:1}
 @media(max-width:560px){.logo-name{display:none}}
-.nav-right{display:flex;align-items:center;gap:20px;font-size:10px;letter-spacing:2px;color:var(--muted)}
+.nav-right{display:flex;align-items:center;gap:20px;font-size:10px;letter-spacing:2px;color:var(--muted);min-width:0}
 .live-dot{display:flex;align-items:center;gap:6px;color:var(--sky);font-size:10px}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--sky);box-shadow:0 0 8px var(--sky);animation:blink 2s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
@@ -284,8 +284,10 @@ table.det tbody tr:hover td{background:rgba(255,255,255,0.025)}
 .gate-btn.secondary{background:transparent;border-color:var(--line);color:var(--muted)}
 .gate-btn.secondary:hover{color:var(--white);border-color:rgba(255,255,255,.2)}
 .blurred{filter:blur(6px);pointer-events:none;user-select:none;opacity:.4}
-.user-dropdown{position:relative;display:inline-block}
-.user-dropdown-btn{font-size:10px;color:var(--muted);background:none;border:1px solid var(--line);padding:4px 10px;cursor:pointer;font-family:var(--font);letter-spacing:1px;display:flex;align-items:center;gap:6px}
+#navAuth{min-width:0}
+.user-dropdown{position:relative;display:flex;min-width:0;max-width:100%}
+.user-dropdown-btn{font-size:10px;color:var(--muted);background:none;border:1px solid var(--line);padding:4px 10px;cursor:pointer;font-family:var(--font);letter-spacing:1px;display:flex;align-items:center;gap:6px;max-width:100%;min-width:0}
+.user-dropdown-btn .u-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .user-dropdown-btn:hover{border-color:rgba(255,255,255,.2);color:var(--white)}
 .user-dropdown-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);background:var(--s1);border:1px solid var(--line);min-width:160px;z-index:200}
 .user-dropdown-menu.open{display:block}
@@ -1669,7 +1671,7 @@ function updateNavAuth() {
   if (_user) {
     var name = _user.email.split('@')[0].toUpperCase();
     navAuth.innerHTML = '<div class="user-dropdown" id="userDropdown">'+
-      '<button class="user-dropdown-btn" onclick="toggleDropdown()">'+name+' ▾</button>'+
+      '<button class="user-dropdown-btn" onclick="toggleDropdown()"><span class="u-name">'+name+'</span>▾</button>'+
       '<div class="user-dropdown-menu" id="userDropdownMenu">'+
         '<span style="font-size:10px;color:var(--muted2);padding:8px 14px;display:block;border-bottom:1px solid var(--line2)">'+_user.email+'</span>'+
         '<a href="/tsl-dashboard" style="display:block;padding:8px 14px;font-size:11px;color:var(--sky);text-decoration:none;border-bottom:1px solid var(--line2)">TSL DASHBOARD</a>'+
