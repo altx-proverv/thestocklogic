@@ -59,14 +59,11 @@ a{color:var(--accent);text-decoration:none}
 
 .banner{border-radius:8px;padding:11px 15px;margin:16px 0;display:none;align-items:center;gap:10px;font-size:12px}
 .banner.show{display:flex}
-.b-risk{background:rgba(245,132,69,.10);border:1px solid rgba(245,132,69,.42);color:var(--orange)}
 .b-stale{background:rgba(245,211,61,.08);border:1px solid rgba(245,211,61,.3);color:#ffd9a8}
 /* All protected: quiet and factual. A green shout for the normal case trains
    the eye to ignore this row, which is the row that must be read on the day
    it is not green. */
-.b-ok{background:rgba(0,214,143,.07);border:1px solid rgba(0,214,143,.26);color:#9fe7cd}
 /* Cannot say. Not a warning about the positions -- a warning about the check. */
-.b-unknown{background:rgba(255,255,255,.04);border:1px solid var(--line,rgba(255,255,255,.12));color:var(--text-2,rgba(255,255,255,.6))}
 
 .cap-note{margin-top:12px;font-size:12px;line-height:1.5;opacity:.65}
 
@@ -119,6 +116,48 @@ td.sym{font-weight:700;color:var(--ink)}
 
 .foot{text-align:center;padding:28px 0 44px;color:var(--faint);font-size:9.5px;letter-spacing:1.2px;line-height:1.9}
 
+
+/* ==== TAB BAR / SHARED BLOCK ======================================
+   KEEP BYTE-IDENTICAL IN home.html AND atlas.html.
+   tests/test_tab_bar_shared.py compares both copies and fails on any
+   difference.
+
+   620px ONLY, deliberately not (hover:none) as the losers/gainers list is.
+   This bar drives view switching that exists only below 620, so on a
+   hover-less tablet it would render four tabs, three of which would do
+   nothing. The bar has to share the condition of the thing it controls.
+
+   Every colour carries a hex fallback, which is what lets one block serve
+   two pages: atlas.html defines --sky but not --header, --hair or --micro,
+   so those resolve to the literals -- and the literals are the brand values
+   home.html's tokens hold. ==== */
+.tabs{display:none}
+@media (max-width:620px){
+  .tabs{position:fixed; left:0; right:0; bottom:0; z-index:40;
+    display:grid; grid-template-columns:repeat(4,1fr);
+    background:var(--header,#16294A);
+    border-top:1px solid var(--hair,rgba(255,255,255,0.10));
+    padding-bottom:env(safe-area-inset-bottom,0px)}
+  .tab{min-height:56px; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:3px; font-size:12px; letter-spacing:.07em;
+    text-transform:uppercase; color:var(--micro,#8CA3C4);
+    text-decoration:none; text-align:center; padding:0 2px}
+  .tab:hover{text-decoration:none}
+  .tab-i{font-size:15px; line-height:1}
+  .tab-lg{letter-spacing:0; font-size:12px}
+  .tab[aria-current="page"]{color:var(--sky,#3BA9EE);
+    box-shadow:inset 0 2px 0 var(--sky,#3BA9EE)}
+}
+/* ==== END TAB BAR ==== */
+
+/* The desktop HOME/ATLAS links duplicate the tab bar below the breakpoint,
+   so they give way to it -- home.html hides its own .hdr nav at 620 for the
+   same reason. Deliberately outside the shared block: .navlinks exists only
+   in this file. */
+@media (max-width:620px){
+  .navlinks{display:none}
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+}
 </style>
 </head>
 <body>
@@ -142,22 +181,15 @@ td.sym{font-weight:700;color:var(--ink)}
 
 <div class="wrap">
 
-  <!-- PROTECTION STATE, READ FROM THE BROKER. This used to read "MANUAL RISK
-       REQUIRED - N open position(s). ATLAS does not place stop-losses" while
-       every open position had a confirmed GTT resting. Acting on it would
-       have put a second stop on shares that already had one, and whichever
-       fired first would leave the other trying to sell stock that was gone.
-       The text is now set from position_protection, which is read back from
-       orders() and get_gtts() and never from the recorded exit_legs column. -->
-  <div id="riskBanner" class="banner">
-    <span id="riskIcon">&#9888;</span>
-    <span id="riskText"></span>
-  </div>
-
-  <div id="markBanner" class="banner b-stale">
-    <span>&#9888;</span>
-    <span id="markBannerText"></span>
-  </div>
+  <!-- THE PROTECTION AND PRICE-MARK BANNERS WERE REMOVED on 18 Oct 2026.
+       Removed outright rather than hidden behind a condition. Note what went
+       with them: #riskBanner also carried MANUAL STOP NEEDED, which named the
+       positions with no stop resting at the broker, and #markBanner carried
+       NO PRICE MARK and "N position(s) unmarked". The open positions table
+       has no protection column, so nothing on this page states protection
+       per position any more. position_protection is still fetched into
+       _protection, left in place because that is the data a per-position
+       column would read. -->
 
   <div id="sessionBanner" class="banner b-stale">
     <span>&#9888;</span>
@@ -340,62 +372,6 @@ async function sbGet(path){
   return r;
 }
 
-/* ── PROTECTION, FROM THE BROKER ─────────────────────────────────
-   Three states and no fourth, matching what the publisher recorded:
-
-     CONFIRMED  read back from orders()/get_gtts()
-     NONE       the broker answered and nothing is resting -- loud, and it
-                names the symbols, because only those need a manual stop
-     UNKNOWN    the broker could not be read -- report NEITHER state. "I
-                cannot tell you" is a different sentence from "you are
-                unprotected", and printing the second when the first is true
-                is how a banner gets acted on wrongly. */
-function renderProtection(open){
-  var rb=document.getElementById('riskBanner');
-  var icon=document.getElementById('riskIcon');
-  var txt=document.getElementById('riskText');
-  rb.classList.remove('show','b-risk','b-ok','b-unknown');
-  if(!open.length) return;
-
-  var rows=_protection||[];
-  if(!rows.length){
-    rb.classList.add('show','b-unknown');
-    icon.innerHTML='&#9888;';
-    txt.innerHTML='<b>PROTECTION NOT CHECKED</b> &mdash; '+open.length+
-      ' open position(s). No broker check has been recorded, so this page '+
-      'cannot say whether they are protected.';
-    return;
-  }
-
-  var when=String(rows[0].checked_at||'').slice(11,16);
-  if(rows.some(function(r){return r.broker_ok===false;})){
-    rb.classList.add('show','b-unknown');
-    icon.innerHTML='&#9888;';
-    txt.innerHTML='<b>BROKER UNREADABLE</b> &mdash; the last check at '+
-      esc(when)+' IST could not reach the broker, so the protection state of '+
-      'these '+open.length+' position(s) is unknown. Neither protected nor '+
-      'unprotected is being claimed.';
-    return;
-  }
-
-  var naked=rows.filter(function(r){return r.stop_state!=='CONFIRMED';});
-  if(naked.length){
-    rb.classList.add('show','b-risk');
-    icon.innerHTML='&#9888;';
-    txt.innerHTML='<b>MANUAL STOP NEEDED</b> &mdash; '+naked.length+' of '+
-      rows.length+' open position(s) have no stop at the broker: <b>'+
-      naked.map(function(r){return esc(r.symbol);}).join(', ')+
-      '</b>. The others are protected and need nothing. Checked '+esc(when)+
-      ' IST.';
-    return;
-  }
-
-  rb.classList.add('show','b-ok');
-  icon.innerHTML='&#10003;';
-  txt.innerHTML='<b>'+rows.length+' open position'+(rows.length===1?'':'s')+
-    ', all protected at the broker.</b> Stops are resting as GTTs; nothing '+
-    'needs placing by hand. Checked '+esc(when)+' IST.';
-}
 
 async function fetchProtection(){
   try{
@@ -575,30 +551,7 @@ function render(){
            (x.s?'<div class="s">'+x.s+'</div>':'')+'</div>';
   }).join('');
 
-  renderProtection(open);
-
-  /* Say what the mark actually is. The number is always shown; the banner is
-     what stops it being mistaken for a live one. */
-  var parts=[];
-  if(open.length && !marked){
-    parts.push('<b>NO PRICE MARK</b> &mdash; no price of any age was found for the '+
-      'open positions, so unrealised P&amp;L is not computed. Entry, stop and risk below are still exact.');
-  } else if(open.length){
-    if(asOf!==todayIST()){
-      parts.push('<b>NOT A LIVE PRICE</b> &mdash; unrealised P&amp;L is marked against the '+
-        esc(fmtDay(asOf))+(asOfSrc==='LTP'?' feed update':' close')+
-        ', the most recent price available. Nothing newer exists.');
-    }
-    if(marked<open.length){
-      parts.push('<b>'+(open.length-marked)+' position(s) unmarked</b> &mdash; no price was found '+
-        'for them, so they contribute nothing to the unrealised total.');
-    }
-  }
   document.getElementById('sessionBanner').classList.toggle('show', _sessionStale);
-
-  var mb=document.getElementById('markBanner');
-  if(parts.length){ mb.classList.add('show'); document.getElementById('markBannerText').innerHTML=parts.join(' '); }
-  else mb.classList.remove('show');
 
   document.getElementById('cntOpen').textContent=open.length;
   document.getElementById('cntClosed').textContent=closed.length;
@@ -713,6 +666,36 @@ async function load(){
 document.getElementById('exitModal').addEventListener('click',function(e){ if(e.target===this) closeExit(); });
 load();
 setInterval(load,60000);
+</script>
+<!-- ==== TAB BAR / SHARED BLOCK ====================================
+     KEEP BYTE-IDENTICAL IN home.html AND atlas.html.
+     tests/test_tab_bar_shared.py compares both copies and fails on any
+     difference. Duplication is accepted here; silent drift is not, and this
+     file and atlas.html have drifted apart three times already.
+     Every tab is an anchor so the two copies can be literally the same
+     markup: home.html intercepts the three view links and lets /atlas
+     navigate, atlas.html lets all four navigate. The active tab is set by
+     each page's own script, never in the markup. ==== -->
+<nav class="tabs" id="tabs" aria-label="Sections">
+  <a class="tab" href="/home#market" data-view="market">
+    <span class="tab-i" aria-hidden="true">&#9638;</span><span>Market</span></a>
+  <a class="tab" href="/home#tape" data-view="tape">
+    <span class="tab-i" aria-hidden="true">&#9776;</span><span class="tab-lg">Losers/Gainers</span></a>
+  <a class="tab" href="/home#sectors" data-view="sectors">
+    <span class="tab-i" aria-hidden="true">&#9783;</span><span>Sectors</span></a>
+  <a class="tab" href="/atlas" data-view="atlas">
+    <span class="tab-i" aria-hidden="true">&#9650;</span><span>ATLAS</span></a>
+</nav>
+<!-- ==== END TAB BAR ==== -->
+
+<script>
+/* THE TAB BAR'S ACTIVE STATE. Set here rather than in the markup so the
+   markup stays byte-identical with home.html, which tests/test_tab_bar_shared.py
+   asserts. The other three tabs are plain links to /home#view and navigate. */
+(function(){
+  var t=document.querySelector('.tab[data-view="atlas"]');
+  if(t) t.setAttribute('aria-current','page');
+})();
 </script>
 </body>
 </html>

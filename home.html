@@ -349,6 +349,39 @@ footer p{margin:0 0 6px; max-width:88ch}
 
 .m-only{display:none}
 
+/* ==== TAB BAR / SHARED BLOCK ======================================
+   KEEP BYTE-IDENTICAL IN home.html AND atlas.html.
+   tests/test_tab_bar_shared.py compares both copies and fails on any
+   difference.
+
+   620px ONLY, deliberately not (hover:none) as the losers/gainers list is.
+   This bar drives view switching that exists only below 620, so on a
+   hover-less tablet it would render four tabs, three of which would do
+   nothing. The bar has to share the condition of the thing it controls.
+
+   Every colour carries a hex fallback, which is what lets one block serve
+   two pages: atlas.html defines --sky but not --header, --hair or --micro,
+   so those resolve to the literals -- and the literals are the brand values
+   home.html's tokens hold. ==== */
+.tabs{display:none}
+@media (max-width:620px){
+  .tabs{position:fixed; left:0; right:0; bottom:0; z-index:40;
+    display:grid; grid-template-columns:repeat(4,1fr);
+    background:var(--header,#16294A);
+    border-top:1px solid var(--hair,rgba(255,255,255,0.10));
+    padding-bottom:env(safe-area-inset-bottom,0px)}
+  .tab{min-height:56px; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:3px; font-size:12px; letter-spacing:.07em;
+    text-transform:uppercase; color:var(--micro,#8CA3C4);
+    text-decoration:none; text-align:center; padding:0 2px}
+  .tab:hover{text-decoration:none}
+  .tab-i{font-size:15px; line-height:1}
+  .tab-lg{letter-spacing:0; font-size:12px}
+  .tab[aria-current="page"]{color:var(--sky,#3BA9EE);
+    box-shadow:inset 0 2px 0 var(--sky,#3BA9EE)}
+}
+/* ==== END TAB BAR ==== */
+
 /* ── THE TAPE STOPS CRAWLING WHERE IT CANNOT BE PAUSED ──────────────
    Pause is :hover and :focus-within. A touch device has neither: there is no
    hover, and the tape's items are plain divs with nothing focusable inside
@@ -491,24 +524,6 @@ footer p{margin:0 0 6px; max-width:88ch}
   .sv-rank{font-family:'Crimson Pro',Georgia,serif; font-style:italic;
     font-size:15px; color:var(--ink3,#D6E2F2); margin-top:12px}
   #svTiles .tiles{margin-top:12px}
-
-  /* 6 THE TAB BAR */
-  .tabs{position:fixed; left:0; right:0; bottom:0; z-index:40;
-    display:grid; grid-template-columns:repeat(4,1fr);
-    background:var(--header,#16294A);
-    border-top:1px solid var(--hair,rgba(255,255,255,0.10));
-    padding-bottom:env(safe-area-inset-bottom,0px)}
-  .tab{min-height:56px; display:flex; flex-direction:column; align-items:center;
-    justify-content:center; gap:3px; font-size:12px; letter-spacing:.07em;
-    text-transform:uppercase; color:var(--micro,#8CA3C4);
-    text-decoration:none; text-align:center; padding:0 2px}
-  .tab:hover{text-decoration:none}
-  /* "Losers/Gainers" is the longest label; it loses the tracking rather than
-     the type size, which stays at the 12px floor. */
-  .tab-lg{letter-spacing:0; font-size:12px}
-  .tab-i{font-size:15px; line-height:1}
-  .tab[aria-current="page"]{color:var(--sky,#3BA9EE);
-    box-shadow:inset 0 2px 0 var(--sky,#3BA9EE)}
 
   /* VIEW SWITCHING. One DOM; each view shows its own sections.
      Every hide and every show is one class or one attribute deep, so the
@@ -671,20 +686,26 @@ footer p{margin:0 0 6px; max-width:88ch}
 </div>
 </main>
 
-<!-- THE TAB BAR. ATLAS had no entry at all on a phone, which made the whole
-     page unreachable from here. Events is gone as a tab: its blocks are not
-     deleted, they now sit at the foot of Market, where they were anyway on
-     desktop. -->
-<nav class="tabs m-only" id="tabs" aria-label="Sections">
-  <button class="tab" data-view="market" type="button" aria-current="page">
-    <span class="tab-i" aria-hidden="true">&#9638;</span><span>Market</span></button>
-  <button class="tab" data-view="tape" type="button">
-    <span class="tab-i" aria-hidden="true">&#9776;</span><span class="tab-lg">Losers/Gainers</span></button>
-  <button class="tab" data-view="sectors" type="button">
-    <span class="tab-i" aria-hidden="true">&#9783;</span><span>Sectors</span></button>
-  <a class="tab" href="/atlas">
+<!-- ==== TAB BAR / SHARED BLOCK ====================================
+     KEEP BYTE-IDENTICAL IN home.html AND atlas.html.
+     tests/test_tab_bar_shared.py compares both copies and fails on any
+     difference. Duplication is accepted here; silent drift is not, and this
+     file and atlas.html have drifted apart three times already.
+     Every tab is an anchor so the two copies can be literally the same
+     markup: home.html intercepts the three view links and lets /atlas
+     navigate, atlas.html lets all four navigate. The active tab is set by
+     each page's own script, never in the markup. ==== -->
+<nav class="tabs" id="tabs" aria-label="Sections">
+  <a class="tab" href="/home#market" data-view="market">
+    <span class="tab-i" aria-hidden="true">&#9638;</span><span>Market</span></a>
+  <a class="tab" href="/home#tape" data-view="tape">
+    <span class="tab-i" aria-hidden="true">&#9776;</span><span class="tab-lg">Losers/Gainers</span></a>
+  <a class="tab" href="/home#sectors" data-view="sectors">
+    <span class="tab-i" aria-hidden="true">&#9783;</span><span>Sectors</span></a>
+  <a class="tab" href="/atlas" data-view="atlas">
     <span class="tab-i" aria-hidden="true">&#9650;</span><span>ATLAS</span></a>
 </nav>
+<!-- ==== END TAB BAR ==== -->
 
 <footer><div class="wrap">
   <p>This page is market data, published for information only. The Stock Logic is
@@ -1755,6 +1776,9 @@ function setView(v){
     if(b.getAttribute('data-view')===v) b.setAttribute('aria-current','page');
     else b.removeAttribute('aria-current');
   });
+  if(location.hash!=='#'+v){
+    try{ history.replaceState(null,'','#'+v); }catch(e){}
+  }
   window.scrollTo(0,0);
 }
 
@@ -1922,10 +1946,13 @@ document.addEventListener('click', function(e){
   var c=e.target.closest?e.target:null;
   if(!c) return;
 
-  /* ATLAS is an anchor, not a view; let the browser follow it. */
+  /* Every tab is an anchor so the markup can be byte-identical with
+     atlas.html. The three view tabs are intercepted here; ATLAS is left to
+     navigate, which is the whole point of it. */
   var tab=e.target.closest?e.target.closest('.tab'):null;
   if(tab){
-    if(tab.hasAttribute('data-view')) setView(tab.getAttribute('data-view'));
+    var dv=tab.getAttribute('data-view');
+    if(dv && dv!=='atlas'){ e.preventDefault(); setView(dv); }
     return;
   }
 
@@ -2008,7 +2035,10 @@ async function load(){
   renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
   renderTags();
   renderPhone();
-  setView(S.view||'market');
+  /* A tab on /atlas links to /home#view, so the hash decides which view
+     opens. Anything else in the hash is ignored rather than trusted. */
+  var want=(location.hash||'').replace('#','');
+  setView(['market','tape','sectors'].indexOf(want)>=0 ? want : (S.view||'market'));
   if(marketOpen())setInterval(renderState,1000);
 
   /* The track width changes with the viewport, so the duration has to be

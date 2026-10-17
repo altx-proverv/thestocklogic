@@ -130,6 +130,7 @@ SUITES = [
     ("home page",       [sys.executable, "tests/test_home_page.py"]),
     ("page language",   [sys.executable, "tests/test_page_language.py"]),
     ("tape vocabulary", [sys.executable, "tests/test_tape_vocabulary.py"]),
+    ("tab bar shared", [sys.executable, "tests/test_tab_bar_shared.py"]),
     ("gates intact",    [sys.executable, "tests/test_gates_intact.py"]),
     ("page cannot write breaker",
                         [sys.executable, "tests/test_page_cannot_write_breaker.py"]),
