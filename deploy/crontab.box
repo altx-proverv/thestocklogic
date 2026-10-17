@@ -183,6 +183,15 @@ MAILTO=""
 # credentials. Without it market_flash takes its template path, which is permanent
 # infrastructure rather than a fallback: the page always has a flash and it is never
 # yesterday's prose.
+# THE INSTALLED LINE STILL CARRIES `set -a && . /etc/atlas.env && set +a &&`
+# AND IS THEREFORE DEAD. Verified 17 Oct 2026: /etc/atlas.env is -rw------- root
+# root, cron runs as ubuntu, the source fails with Permission denied, the &&
+# chain short-circuits and python never runs -- reports/market_flash.log does
+# not exist at all. Syslog shows it firing 14, 15 and 16 Oct and leaving no
+# trace. The wrapper is also pointless: all 8 variables in /etc/atlas.env are
+# already crontab variables, and market_flash's own requirement is
+# ANTHROPIC_API_KEY, which is a crontab variable and is NOT in that file.
+# This file holds the corrected line; the box needs it applied.
 20 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.market_flash >> /home/ubuntu/thestocklogic/reports/market_flash.log 2>&1
 # 19:00 IST — the negative class: 10 rejected stock-days per qualifying one, from
 # all_rows_v2.parquet which 03b writes for the latest date only
@@ -323,10 +332,10 @@ MAILTO=""
 # rolls; a pinned token goes stale on expiry and then dies.
 #
 # 03:15 UTC = 08:45 IST · 04:15 = 09:45 · 06:00 = 11:30 · 09:45 = 15:15
-15 3 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
-15 4 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
-0 6 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
-45 9 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/index_quotes.py >> reports/home_page.log 2>&1
+15 3 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/index_quotes.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
+15 4 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/index_quotes.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
+0 6 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/index_quotes.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
+45 9 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/index_quotes.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
 #
 # THE TAPE. Opening-range breaks are the tape's primary content and they are
 # genuinely minute-level, unlike the price feed. Published every 5 minutes
@@ -334,14 +343,14 @@ MAILTO=""
 # updates a break rather than repeating it.
 #
 # 03:00-10:55 UTC = 08:30-16:25 IST, which brackets the session at both ends.
-*/5 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/publish_orb.py >> reports/home_page.log 2>&1
+*/5 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/publish_orb.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
 # THE LAST SESSION'S CLOSES, for the page's out-of-hours view. Runs after the
 # nightly chain, which is what writes the parquet it reads. Without this the
 # home page falls back to nothing after the close and renders a grey grid of a
 # market that actually moved.
 #
 # 13:50 UTC = 19:20 IST, after the chain and before the nightly report.
-50 13 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/publish_closes.py >> reports/home_page.log 2>&1
+50 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/publish_closes.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
 # WHAT THE BROKER ACTUALLY HOLDS against each open position, for the /atlas
 # banner. That banner said "ATLAS does not place stop-losses" while every open
 # position had a confirmed GTT resting; acting on it would have doubled up a
@@ -351,4 +360,4 @@ MAILTO=""
 # the overnight state is recorded.
 #
 # 03:00-10:55 UTC = 08:30-16:25 IST
-*/15 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && ./venv/bin/python3 engine/publish_protection.py >> reports/home_page.log 2>&1
+*/15 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/publish_protection.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
