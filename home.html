@@ -72,32 +72,52 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
 .state-txt{font-size:11px; color:var(--ink2); white-space:nowrap}
 
 /* THE ACCOUNT MENU. Hidden until a session is confirmed, so a signed-out
-   visitor never sees a control that would do nothing. */
+   visitor never sees a control that would do nothing.
+
+   EVERY COLOUR CARRIES A HEX FALLBACK, for the reason atlas.html learned the
+   hard way: this block was copied there with home's token names, none of
+   which that page defines, and the panel rendered fully transparent. A var()
+   that does not resolve fails silently; a fallback makes it a wrong shade
+   rather than no shade. */
 .acct{position:relative; flex:0 0 auto}
 .acct-btn{display:flex; align-items:center; gap:5px; font-size:11px;
-  color:var(--ink2); padding:5px 8px; border:1px solid var(--hair);
+  color:var(--ink2,#8A9BB4); padding:5px 8px;
+  border:1px solid var(--hair,rgba(232,237,245,0.1));
   border-radius:6px; min-height:30px}
-.acct-btn:hover{color:var(--ink); border-color:rgba(232,237,245,.28)}
-.acct-menu{position:absolute; right:0; top:calc(100% + 6px); min-width:210px;
-  background:var(--card); border:1px solid var(--hair); border-radius:8px;
-  padding:6px; z-index:50; box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.acct-btn:hover{color:var(--ink,#E8EDF5);
+  border-color:rgba(232,237,245,.28)}
+.acct-menu{
+  position:absolute;
+  top:calc(100% + 6px);
+  right:0;                       /* right edge to the button's right edge */
+  left:auto;
+  min-width:210px;
+  max-width:min(260px, calc(100vw - 32px));    /* never leaves the viewport */
+  background:var(--card,#0D1829);              /* SOLID, with a fallback */
+  border:1px solid var(--hair,rgba(232,237,245,0.16));
+  border-radius:8px;
+  padding:6px;
+  z-index:300;                   /* above the sticky header and the page */
+  box-shadow:0 14px 36px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+  text-transform:none;
+  letter-spacing:normal;
+  text-align:left;
+}
 .acct-menu button{display:block; width:100%; text-align:left; font-size:12px;
-  color:var(--ink); padding:8px 9px; border-radius:5px; min-height:34px}
-.acct-menu button:hover{background:var(--rail-label)}
-.acct-who{font-size:10.5px; color:var(--micro); padding:6px 9px 8px;
-  border-bottom:1px solid var(--hair); margin-bottom:5px;
-  overflow:hidden; text-overflow:ellipsis}
-
-.gate{padding-block:70px 90px}
-.gate-h{font-size:clamp(19px,2.2vw,27px); font-weight:600; margin:0 0 10px;
-  letter-spacing:-.012em; max-width:52ch}
-.gate-s{font-size:13px; color:var(--ink2); margin:0 0 8px; max-width:62ch}
-
-.tag{font-size:9px;font-weight:600;letter-spacing:.1em;padding:2px 6px;
-  border:1px solid var(--hair);border-radius:3px;color:var(--micro);
-  margin-left:8px;white-space:nowrap;vertical-align:middle}
-.tag-live{color:var(--brand);border-color:rgba(59,169,238,.5)}
-.blk h2,.micro{display:flex;align-items:center;flex-wrap:wrap;gap:0}
+  color:var(--ink,#E8EDF5);
+  background:transparent;         /* identical resting state on both items */
+  padding:9px; border-radius:5px; min-height:40px;
+  text-transform:none; letter-spacing:normal}
+.acct-menu button:hover,
+.acct-menu button:focus-visible{background:var(--rail-label,#101E33)}
+.acct-who{display:block; font-size:10px; line-height:1.4;
+  color:var(--micro,#7D8FA8);
+  text-transform:none; letter-spacing:normal;
+  padding:7px 9px 9px; margin-bottom:5px;
+  border-bottom:1px solid var(--hair,rgba(232,237,245,0.1));
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  cursor:default; user-select:none;   /* a label, not a control */
+}
 
 /* 2 THE READING */
 .reading{padding-block:26px 18px}

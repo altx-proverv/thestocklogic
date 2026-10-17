@@ -113,24 +113,57 @@ td.sym{font-weight:700;color:var(--ink)}
 
 .foot{text-align:center;padding:28px 0 44px;color:var(--faint);font-size:9.5px;letter-spacing:1.2px;line-height:1.9}
 
-/* THE ACCOUNT MENU. Same three items as /home, in this page's palette.
+/* THE ACCOUNT MENU. Same three items as /home, in THIS page's palette.
    Hidden until a session is confirmed, so a signed-out visitor never sees a
-   control that would do nothing. */
+   control that would do nothing.
+
+   EVERY COLOUR CARRIES A HEX FALLBACK. The first version of this block used
+   --s1, --s3 and --muted2, which are home.html's token names and are NOT
+   defined here -- so background, hover and the email colour all resolved to
+   nothing and the panel rendered fully transparent with the page showing
+   through it. A var() that does not resolve fails silently and invisibly;
+   a fallback turns that into a wrong shade instead of no shade.
+
+   text-transform is reset because .navlinks sets uppercase and the menu
+   inherits it -- which is what made the email read as a third clickable row. */
 .acct{position:relative}
 .acct-btn{display:flex;align-items:center;gap:5px;font:inherit;font-size:10px;
-  letter-spacing:2px;color:var(--muted);background:none;cursor:pointer;
-  padding:5px 8px;border:1px solid var(--line);border-radius:6px;min-height:30px}
-.acct-btn:hover{color:var(--white);border-color:var(--sky)}
-.acct-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:210px;
-  background:var(--s1);border:1px solid var(--line);border-radius:8px;padding:6px;
-  z-index:60;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  letter-spacing:2px;color:var(--text-2,rgba(255,255,255,.6));background:none;
+  cursor:pointer;padding:5px 8px;border:1px solid var(--line,rgba(255,255,255,.10));
+  border-radius:6px;min-height:30px}
+.acct-btn:hover{color:var(--white,#FFF);border-color:var(--sky,#3BA9EE)}
+.acct-menu{
+  position:absolute;
+  top:calc(100% + 6px);
+  right:0;                      /* right edge to the button's right edge */
+  left:auto;
+  min-width:210px;
+  max-width:min(260px, calc(100vw - 32px));   /* never leaves the viewport */
+  background:var(--panel,#16294A);            /* SOLID, with a fallback */
+  border:1px solid var(--line,rgba(255,255,255,.14));
+  border-radius:8px;
+  padding:6px;
+  z-index:300;                  /* above the status bar and the page */
+  box-shadow:0 14px 36px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+  text-transform:none;          /* .navlinks sets uppercase; the menu is text */
+  letter-spacing:normal;
+  text-align:left;
+}
 .acct-menu button{display:block;width:100%;text-align:left;font:inherit;
-  font-size:12px;letter-spacing:0;color:var(--white);background:none;border:none;
-  cursor:pointer;padding:8px 9px;border-radius:5px;min-height:34px}
-.acct-menu button:hover{background:var(--s3)}
-.acct-who{font-size:10.5px;color:var(--muted2);padding:6px 9px 8px;
-  border-bottom:1px solid var(--line);margin-bottom:5px;
-  overflow:hidden;text-overflow:ellipsis}
+  font-size:12px;letter-spacing:0;text-transform:none;
+  color:var(--white,#FFF);
+  background:transparent;        /* identical resting state on both items */
+  border:none;cursor:pointer;padding:9px;border-radius:5px;min-height:40px}
+.acct-menu button:hover,
+.acct-menu button:focus-visible{background:rgba(255,255,255,.10)}
+.acct-who{display:block;font-size:10px;line-height:1.4;
+  color:var(--text-3,rgba(255,255,255,.45));
+  text-transform:none;letter-spacing:normal;
+  padding:7px 9px 9px;margin-bottom:5px;
+  border-bottom:1px solid var(--line,rgba(255,255,255,.14));
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  cursor:default;user-select:none;   /* a label, not a control */
+}
 </style>
 </head>
 <body>
