@@ -183,15 +183,21 @@ MAILTO=""
 # credentials. Without it market_flash takes its template path, which is permanent
 # infrastructure rather than a fallback: the page always has a flash and it is never
 # yesterday's prose.
-# THE INSTALLED LINE STILL CARRIES `set -a && . /etc/atlas.env && set +a &&`
-# AND IS THEREFORE DEAD. Verified 17 Oct 2026: /etc/atlas.env is -rw------- root
-# root, cron runs as ubuntu, the source fails with Permission denied, the &&
-# chain short-circuits and python never runs -- reports/market_flash.log does
-# not exist at all. Syslog shows it firing 14, 15 and 16 Oct and leaving no
-# trace. The wrapper is also pointless: all 8 variables in /etc/atlas.env are
-# already crontab variables, and market_flash's own requirement is
-# ANTHROPIC_API_KEY, which is a crontab variable and is NOT in that file.
-# This file holds the corrected line; the box needs it applied.
+# NO `set -a && . /etc/atlas.env && set +a &&` HERE, AND NEVER AGAIN. The
+# installed line carried that prefix until 17 Oct 2026 and was dead the whole
+# time: /etc/atlas.env is -rw------- root root, cron runs as ubuntu, the source
+# failed with Permission denied, the && chain short-circuited and python never
+# ran. Because the failure happened BEFORE the redirect, no log file was ever
+# created -- reports/market_flash.log did not exist, and the market_flash table
+# held zero rows. Syslog showed the job firing on 14, 15 and 16 Oct and leaving
+# no trace of any kind. That is the worst way for a scheduled job to fail, and
+# tests/test_crontab.py asserts "no job sources /etc/atlas.env" to keep it from
+# coming back.
+#
+# The wrapper was pointless as well as fatal: all 8 variables in /etc/atlas.env
+# are already crontab variables, and market_flash's own requirement is
+# ANTHROPIC_API_KEY -- a crontab variable that is NOT in that file. Cron exports
+# the variable block to every job; nothing needs to source anything.
 20 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.market_flash >> /home/ubuntu/thestocklogic/reports/market_flash.log 2>&1
 # 19:00 IST — the negative class: 10 rejected stock-days per qualifying one, from
 # all_rows_v2.parquet which 03b writes for the latest date only
