@@ -129,6 +129,7 @@ SUITES = [
     ("unprotected entry", [sys.executable, "tests/test_unprotected_entry.py"]),
     ("home page",       [sys.executable, "tests/test_home_page.py"]),
     ("page language",   [sys.executable, "tests/test_page_language.py"]),
+    ("tape vocabulary", [sys.executable, "tests/test_tape_vocabulary.py"]),
     ("gates intact",    [sys.executable, "tests/test_gates_intact.py"]),
     ("page cannot write breaker",
                         [sys.executable, "tests/test_page_cannot_write_breaker.py"]),

@@ -70,7 +70,7 @@ def run(session_date: str = None) -> int:
     #
     # INCLUDING TODAY, so the window and the close beside it cannot disagree.
     STOCKS = ROOT / "data" / "processed" / "stocks"
-    hi20, lo20 = {}, {}
+    hi20, lo20, hist = {}, {}, {}
     missing = 0
     for sym in day["symbol"].astype(str):
         f = STOCKS / f"{sym}.parquet"
@@ -80,7 +80,11 @@ def run(session_date: str = None) -> int:
         try:
             h = pd.read_parquet(f, columns=["date", "high", "low"])
             h["date"] = pd.to_datetime(h["date"])
-            w = h[h["date"] <= pd.Timestamp(stamp)].tail(20)
+            upto = h[h["date"] <= pd.Timestamp(stamp)]
+            # HOW MUCH HISTORY EXISTS AT ALL, which is what guards the level
+            # phrases: "a one-month high" needs more than a month behind it.
+            hist[sym] = int(len(upto))
+            w = upto.tail(20)
             if len(w) >= 10:        # too short a window is not a month
                 hi20[sym] = float(w["high"].max())
                 lo20[sym] = float(w["low"].min())
@@ -120,7 +124,8 @@ def run(session_date: str = None) -> int:
                      "rvol": _n(r.get("rvol")),
                      "high_20d": _n(hi20.get(sym)),
                      "low_20d": _n(lo20.get(sym)),
-                     "high_52w": _n(r.get("high_52w"))})
+                     "high_52w": _n(r.get("high_52w")),
+                     "history_sessions": hist.get(sym)})
 
     if not rows:
         log.error("nothing publishable")
@@ -141,6 +146,8 @@ def run(session_date: str = None) -> int:
             return 1
         sent += len(chunk)
 
+    log_vocabulary_gaps(stamp, rows)
+
     adv = sum(1 for r in rows if r["change_pct"] > 0)
     dec = sum(1 for r in rows if r["change_pct"] < 0)
     print(f"session {stamp}: published {sent} symbol(s) "
@@ -148,6 +155,102 @@ def run(session_date: str = None) -> int:
           + (f", {skipped} skipped for a missing close" if skipped else "")
           + ")")
     return 0
+
+
+
+
+# ── THE VOCABULARY GAP LOG ────────────────────────────────────────
+#
+# Every time a fact clears its bar and tape-vocabulary.json has no phrase for
+# it, the page still shows it -- the catch-all states the measurement plainly,
+# because a silently dropped stock is one the reader never learns about. This
+# records the gap so that in a month there is an evidence-based list of what
+# the vocabulary is missing, drawn from what the market did rather than from
+# imagining cases.
+#
+# EVALUATED HERE, AGAINST THE SAME FILE THE PAGE READS. The thresholds live in
+# that JSON and both sides read them, so the two cannot drift on a number. The
+# page cannot write anything -- by design, it holds only a read key -- so the
+# log belongs on this side.
+
+def log_vocabulary_gaps(stamp: str, rows: list) -> int:
+    """-> how many gaps were recorded for this session."""
+    import json
+
+    vf = ROOT / "tape-vocabulary.json"
+    try:
+        vocab = json.loads(vf.read_text())
+    except Exception as e:
+        log.error(f"cannot read {vf.name} ({e}) — no gap check this run")
+        return 0
+
+    phrases = vocab.get("phrases") or {}
+    th = vocab.get("thresholds") or {}
+
+    def t(name, default):
+        v = th.get(name)
+        return default if v is None else v
+
+    gaps = []
+    for r in rows:
+        px, vol = r.get("close"), r.get("volume")
+        if not px or not vol or px * vol < t("min_turnover_inr", 20000000):
+            continue
+        hsess = r.get("history_sessions") or 0
+        facts = []
+
+        if (r.get("high_52w") and px >= r["high_52w"] * 0.999
+                and hsess >= t("min_history_for_year", 200)):
+            facts.append(("high_52w", f"{r['high_52w']}"))
+        elif (r.get("high_20d") and px >= r["high_20d"] * 0.999
+                and hsess >= t("min_history_for_month", 60)):
+            facts.append(("high_20d", f"{r['high_20d']}"))
+        elif (r.get("low_20d") and px <= r["low_20d"] * 1.001
+                and hsess >= t("min_history_for_month", 60)):
+            facts.append(("low_20d", f"{r['low_20d']}"))
+
+        rv = r.get("rvol")
+        if rv and rv >= t("heavy_volume_x", 3.0):
+            facts.append(("heavy_volume", f"{rv}x"))
+        elif rv and 0 < rv <= t("light_volume_x", 0.5):
+            facts.append(("light_volume", f"{rv}x"))
+
+        hi, lo = r.get("high"), r.get("low")
+        edge = t("range_edge_pct", 0.1)
+        if hi and lo and hi > lo:
+            pos = (px - lo) / (hi - lo)
+            if pos >= 1 - edge:
+                facts.append(("closed_high", f"{pos:.2f} of range"))
+            elif pos <= edge:
+                facts.append(("closed_low", f"{pos:.2f} of range"))
+
+        for fact, measure in facts:
+            if not phrases.get(fact):
+                gaps.append({"session_date": stamp, "symbol": r["symbol"],
+                             "fact": fact, "measurement": measure,
+                             "change_pct": r.get("change_pct")})
+
+    if not gaps:
+        print("vocabulary: every qualifying fact had a phrase")
+        return 0
+
+    try:
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/tape_vocabulary_gaps",
+            headers=_headers(), json=gaps, timeout=30)
+        if resp.status_code not in (200, 201, 204):
+            log.error(f"gap log rejected: HTTP {resp.status_code} "
+                      f"{resp.text[:160]}")
+            return 0
+    except Exception as e:
+        log.error(f"gap log failed: {type(e).__name__}: {e}")
+        return 0
+
+    from collections import Counter
+    by = Counter(g["fact"] for g in gaps)
+    print(f"vocabulary: {len(gaps)} fact(s) with no phrase — "
+          + ", ".join(f"{k} x{v}" for k, v in by.most_common()))
+    return len(gaps)
 
 
 if __name__ == "__main__":

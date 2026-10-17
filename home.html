@@ -438,6 +438,7 @@ var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
           empty block never holds the rest of the page back: the grid can be
           on Friday's close while the tape is on Friday's breaks and the
           index strip is still waiting for its first write. */
+       vocabGaps:[],
        src:{prices:null, priceDate:null, tape:null, events:null, landed:null}};
 
 /* ── WHERE THE DAY CHANGE COMES FROM, IN ORDER ───────────────────
@@ -480,8 +481,9 @@ function resolvePrices(){
     if(c){
       p.change_pct=c.change_pct; p.ltp=c.close;
       p.volume_ratio=(c.rvol===null||c.rvol===undefined)?null:+c.rvol;
-      p.high=c.high; p.low=c.low;
+      p.high=c.high; p.low=c.low; p.volume=c.volume;
       p.high_20d=c.high_20d; p.low_20d=c.low_20d; p.high_52w=c.high_52w;
+      p.history_sessions=c.history_sessions;
       p.covered=true; p.live=false;
       return;
     }
@@ -656,71 +658,159 @@ function renderIdx(){
 /* ── 4 THE TAPE ───────────────────────────────────────────────── */
 /* ── WHAT EARNS A PLACE ON THE TAPE ──────────────────────────────
    THE PERCENTAGE IS WHAT HAPPENED. The reason has to be the thing the
-   percentage cannot tell you -- the context that changes how the number
-   reads. "AEGISLOG -3.11% · closed down on Fri 16 Oct" spent eleven
-   characters restating the figure beside it.
+   percentage cannot tell you. "AEGISLOG -3.11% · closed down on Fri 16 Oct"
+   spent its whole reason restating the figure beside it.
 
-   So a stock is on the tape when it MOVED and a SECOND FACT is true of it.
-   That fact IS the reason text: one decision, stated once. If nothing is true
-   beyond the percentage, the stock is not news and does not appear.
+   A stock is on the tape when it MOVED and a SECOND FACT is true of it. That
+   fact IS the reason text: one decision, stated once.
 
-   THE MOVE BAR IS 2.5%, and it is LOWER than the 3% it replaces on purpose.
-   The fact is the filter now, not the figure: a stock at a 52-week high on a
-   1.8% move is more worth seeing than a 3% move with nothing behind it, and
-   raising the percentage would screen out the first to exclude the second.
-   On 2026-10-16: 89 symbols moved 2.5%, 42 of them had a second fact. */
-var TAPE_MOVE_PCT = 2.5;
+   EVERY SENTENCE LIVES IN tape-vocabulary.json, not here. This function
+   decides WHICH fact is true; the file decides what that fact is called. The
+   voice is editable without touching logic, and the language test scans the
+   file in one pass instead of hunting phrases through render code. */
+var VOCAB = null;          /* loaded in load(); the tape waits for it */
 
-/* The reasons, in the order they are worth saying. Every one names something
-   that happened; none restates the percentage and none grades the stock. */
+function vocabThreshold(name, fallback){
+  return (VOCAB && VOCAB.thresholds && VOCAB.thresholds[name] !== undefined)
+    ? VOCAB.thresholds[name] : fallback;
+}
+
+/* ROTATION, NOT RANDOM. A random variant makes the same market render
+   differently on every reload, which no screenshot can be checked against.
+   Rotating by a per-session counter gives variety across the tape and
+   repeatability across reloads. */
+var _vrot = {};
+function phraseFor(key, subs){
+  var list = (VOCAB && VOCAB.phrases && VOCAB.phrases[key]) || null;
+  if(!list || !list.length) return null;
+  var i = (_vrot[key] = (_vrot[key] || 0) + 1) - 1;
+  var out = list[i % list.length];
+  subs = subs || {};
+  Object.keys(subs).forEach(function(k){
+    out = out.split('{'+k+'}').join(subs[k]);
+  });
+  /* Any placeholder with nothing to put in it resolves to empty, so a
+     phrase never renders a literal {minute}. */
+  return out.replace(/\{[a-z]+\}/g, '');
+}
+
+/* A fact qualified and nothing in the file names it. State the measurement
+   plainly rather than dropping the stock -- ugly beats absent -- and record
+   the gap so the vocabulary grows from what the market did. */
+function catchAll(fact, measurement){
+  var t = (VOCAB && VOCAB.catch_all && VOCAB.catch_all.template)
+          || '{fact} {n}';
+  return t.split('{fact}').join(String(fact).replace(/_/g, ' '))
+          .split('{n}').join(measurement === undefined ? '' : measurement)
+          .trim();
+}
+
+/* ── THE GUARDS ──────────────────────────────────────────────────
+   A phrase must not be true and misleading at the same time. */
+function tradeable(p){
+  /* No phrase fires on a stock nobody can trade: a 6% move on a few
+     thousand rupees of turnover is an artefact, not an event. */
+  var px = parseFloat(p.ltp), v = parseFloat(p.volume);
+  if(isNaN(px) || isNaN(v)) return true;      /* unknown is not disqualifying */
+  return px * v >= vocabThreshold('min_turnover_inr', 20000000);
+}
+function hasHistory(p, sessions){
+  /* "At a one-month high" needs history meaningfully longer than a month, or
+     it really means "near its all-time high". HEGAM, six weeks listed, is
+     suppressed by this rather than quietly flattered by it. */
+  var h = parseFloat(p.history_sessions);
+  if(isNaN(h)) return false;                  /* unknown history: say nothing */
+  return h >= sessions;
+}
+
+/* The reasons, in the order they are worth saying. */
 function tapeReason(p, brk, secOf){
   var live = S.src.prices==='live';
+  var gaps = [];
 
-  /* 1 STRUCTURAL -- the strongest, because it is an event with a time. */
+  function phrase(key, subs, fact, measurement){
+    var t = phraseFor(key, subs);
+    if(t) return {text:t};
+    gaps.push({fact:fact||key, measurement:measurement});
+    return {text: catchAll(fact||key, measurement), improvised:true};
+  }
+
+  /* 1 STRUCTURAL -- an event, with a time while it is still live. */
   if(brk){
     var below = brk.break_close!==null && brk.range_low!==null &&
                 +brk.break_close < +brk.range_low;
-    var phrase = below ? 'gave up its morning low' : 'took out its morning high';
-    /* THE MINUTE ONLY WHILE IT IS LIVE. On a finished session "at 10:04" is
-       noise -- the day is over and the time changes nothing about the fact. */
-    return {text: phrase + (live && brk.break_minute
-                            ? ' at '+brk.break_minute : ''),
-            down: below};
+    var r = phrase(below?'broke_low':'broke_high',
+                   {minute: (live && brk.break_minute)
+                            ? ' at '+brk.break_minute : ''},
+                   below?'broke_low':'broke_high', brk.break_minute||'');
+    r.down = below; r.gaps = gaps;
+    return r;
   }
 
-  var c = parseFloat(p.change_pct);
-  var px = parseFloat(p.ltp);
+  if(!tradeable(p)) return null;
 
-  /* 2 LEVEL -- where the price now sits against its own history. */
-  if(p.high_52w && px >= +p.high_52w*0.999) return {text:'at a 52-week high'};
-  if(p.high_20d && px >= +p.high_20d*0.999) return {text:'at a one-month high'};
-  if(p.low_20d  && px <= +p.low_20d*1.001)  return {text:'at a one-month low'};
+  var c = parseFloat(p.change_pct), px = parseFloat(p.ltp);
+  var done;
 
-  /* 3 VOLUME -- how much conviction was behind it. */
-  var v = parseFloat(p.volume_ratio);
-  if(v>=3) return {text:'on '+(v>=10?Math.round(v):v.toFixed(1))+
-                        '\u00d7 normal volume'};
-  if(v>0 && v<=0.5) return {text:'on light volume'};
+  /* 2 LEVEL -- where the price sits against its own history. */
+  if(p.high_52w && px >= +p.high_52w*0.999 &&
+     hasHistory(p, vocabThreshold('min_history_for_year', 240))){
+    done = phrase('high_52w', {}, 'high_52w', fmtPx(p.high_52w));
+  } else if(p.high_20d && px >= +p.high_20d*0.999 &&
+     hasHistory(p, vocabThreshold('min_history_for_month', 60))){
+    done = phrase('high_20d', {}, 'high_20d', fmtPx(p.high_20d));
+  } else if(p.low_20d && px <= +p.low_20d*1.001 &&
+     hasHistory(p, vocabThreshold('min_history_for_month', 60))){
+    done = phrase('low_20d', {}, 'low_20d', fmtPx(p.low_20d));
+  }
+
+  /* 3 VOLUME -- how much was behind it. */
+  if(!done){
+    var v = parseFloat(p.volume_ratio);
+    var vx = isNaN(v) ? null
+             : (v>=10 ? Math.round(v)+'\u00d7' : v.toFixed(1)+'\u00d7');
+    if(v >= vocabThreshold('heavy_volume_x', 3)){
+      done = phrase('heavy_volume', {n:vx}, 'volume', vx+' its average');
+    } else if(v > 0 && v <= vocabThreshold('light_volume_x', 0.5)){
+      done = phrase('light_volume', {n:vx}, 'light_volume', vx+' its average');
+    }
+  }
 
   /* 4 FINISHED -- where in the day's range it ended. */
-  var hi=parseFloat(p.high), lo=parseFloat(p.low);
-  if(hi>lo){
-    var pos=(px-lo)/(hi-lo);
-    if(pos>=0.9) return {text:'closed on its highs'};
-    if(pos<=0.1) return {text:'closed on its lows'};
+  if(!done){
+    var hi=parseFloat(p.high), lo=parseFloat(p.low);
+    var edge = vocabThreshold('range_edge_pct', 0.1);
+    if(hi>lo){
+      var pos=(px-lo)/(hi-lo);
+      if(pos >= 1-edge) done = phrase('closed_high', {}, 'closed_high');
+      else if(pos <= edge) done = phrase('closed_low', {}, 'closed_low');
+    }
   }
 
-  /* 5 ISOLATION -- alone against its own sector. */
-  var sec = secOf[SECTOR_MAP[p.symbol]];
-  if(sec && sec.counted>=5 && !isNaN(c)){
-    if(c>0 && sec.pct<0) return {text:'one of the few up in a sector that fell'};
-    if(c<0 && sec.pct>0) return {text:'one of the few down in a sector that rose'};
+  /* 5 ISOLATION -- alone against its own sector, where the sector is big
+     enough that being alone is an observation rather than arithmetic. */
+  if(!done){
+    var sec = secOf[SECTOR_MAP[p.symbol]];
+    var minSec = vocabThreshold('min_sector_size', 10);
+    if(sec && sec.counted >= minSec && !isNaN(c)){
+      if(c>0 && sec.pct<0) done = phrase('alone_up', {}, 'alone_up');
+      else if(c<0 && sec.pct>0) done = phrase('alone_down', {}, 'alone_down');
+    }
   }
-  return null;
+
+  if(!done) return null;
+  done.gaps = gaps;
+  return done;
+}
+
+function fmtPx(v){
+  var n = parseFloat(v);
+  return isNaN(n) ? '' : num(n);
 }
 
 function tapeItems(){
   var out=[], secOf={};
+  S.vocabGaps=[];
   (S.sectors||[]).forEach(function(x){secOf[x.name]=x;});
 
   /* The newest session that actually has breaks -- the tape resolves its own. */
@@ -741,6 +831,12 @@ function tapeItems(){
   function add(p, brk){
     var r = tapeReason(p, brk, secOf);
     if(!r) return;
+    /* A fact with no phrase still reaches the tape, and is counted so the
+       console says how many improvised sentences a session produced. */
+    (r.gaps||[]).forEach(function(g){
+      S.vocabGaps.push({symbol:p.symbol, fact:g.fact,
+                        measurement:g.measurement});
+    });
     var c = parseFloat(p.change_pct);
     out.push({
       sym: p.symbol,
@@ -766,7 +862,7 @@ function tapeItems(){
     if(brkOf[p.symbol]) return;
     if(NO_PRICE[p.symbol]||p.covered===false) return;
     var c=parseFloat(p.change_pct);
-    if(isNaN(c)||Math.abs(c)<TAPE_MOVE_PCT) return;
+    if(isNaN(c)||Math.abs(c)<vocabThreshold('move_pct',2.5)) return;
     add(p, null);
   });
   return out;
@@ -1265,6 +1361,17 @@ function mountAccount(){
 /* ── BOOT ─────────────────────────────────────────────────────── */
 async function load(){
   var today=istDate();
+  /* THE VOCABULARY FIRST. The tape cannot name a fact before the file that
+     names it has arrived; a failed load falls back to the catch-all, which
+     states every measurement plainly rather than rendering nothing. */
+  try{
+    var vr=await fetch('/tape-vocabulary.json', {cache:'no-cache'});
+    VOCAB = vr.ok ? await vr.json() : null;
+    if(!VOCAB) console.error('home: tape-vocabulary.json -> HTTP '+vr.status);
+  }catch(e){
+    VOCAB=null;
+    console.error('home: tape-vocabulary.json -> '+e.message);
+  }
   var res=await Promise.all([
     sbGet('/rest/v1/live_prices?select=symbol,ltp,change_pct,updated_at&limit=2000'),
     sbGet('/rest/v1/index_quotes?select=*'),

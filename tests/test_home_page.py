@@ -187,7 +187,7 @@ def main() -> int:
     check("the tape resolves its own session",
           "S.src.tape" in html, True)
     check("  and does not blank out of hours",
-          "TAPE_MOVE_PCT" in html and "tapeReason(" in html, True,
+          "vocabThreshold('move_pct'" in html and "tapeReason(" in html, True,
           "items are included by move + a second fact")
 
     print()

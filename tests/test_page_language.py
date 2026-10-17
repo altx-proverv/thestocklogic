@@ -50,7 +50,16 @@ sys.path.insert(0, str(ROOT))
 # So: everything an external visitor can reach is checked. Everything behind
 # the gate is listed as out of scope, by name, so the boundary is visible and
 # a new PUBLIC file cannot quietly land outside it.
-PUBLIC = ["index.html", "waitlist.html", "manifest.json"]
+# tape-vocabulary.json is EVERY SENTENCE THE TAPE CAN EMIT, in one file,
+# which is the whole reason the phrases were moved out of the render code.
+# It is listed here rather than with the gated pages on two grounds: it is
+# anonymously fetchable at /tape-vocabulary.json like any other static file,
+# and scanning it checks the tape's entire vocabulary in one pass instead of
+# hoping a reviewer spots a bad phrase inside a template string. That is a
+# STRICTER standard than the gated boundary below requires -- deliberately,
+# because a phrase file is pure copy and has no columns to defend.
+PUBLIC = ["index.html", "waitlist.html", "manifest.json",
+          "tape-vocabulary.json"]
 
 GATED_OUT_OF_SCOPE = ["home.html", "signals.html", "atlas.html",
                       "tsl-dashboard.html", "performance.html",

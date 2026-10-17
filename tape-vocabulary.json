@@ -1,0 +1,95 @@
+{
+  "_README": [
+    "EVERY SENTENCE THE TAPE CAN EMIT IS IN THIS FILE.",
+    "",
+    "It is data, not code: edit a phrase here and the tape says the new thing",
+    "on the next load, with no logic touched. tests/test_page_language.py",
+    "scans this file directly, so the whole vocabulary is checked in one pass",
+    "rather than being hunted through render functions.",
+    "",
+    "THE RULE EVERY PHRASE OBEYS: the percentage already says WHAT happened.",
+    "A phrase must carry what the percentage cannot -- an event, a level, a",
+    "volume, a position in the day. Never a restatement ('closed down'), never",
+    "a verdict ('strong', 'looks good'). Naming an event is reporting; ranking a",
+    "stock is advice.",
+    "",
+    "VARIANTS exist because repetition reads as a template. Friday put 26",
+    "volume items on a 73-item tape; one phrasing would have made a third of",
+    "the tape one sentence. They are chosen in rotation, not at random, so the",
+    "same inputs always render the same text and a screenshot can be checked.",
+    "",
+    "{n} is substituted with the measurement. {minute} is substituted only",
+    "while the session is live; on a finished session the time is noise."
+  ],
+  "thresholds": {
+    "move_pct": 2.5,
+    "_move_pct": "A stock needs this move AND a second fact. Lower than the 3% it replaced because the fact is the filter: a 52-week high on a 1.8% move beats a 3% move with nothing behind it.",
+    "min_turnover_inr": 20000000,
+    "_min_turnover_inr": "Rs 2 crore of traded value. No phrase fires on a stock nobody can trade. The universe is already liquidity-screened -- p10 turnover was Rs 4.9 crore on 2026-10-16 -- so this removes only the 13 genuinely thin names, not ordinary mid-caps. Rs 5 crore would have cut 79.",
+    "min_sector_size": 10,
+    "_min_sector_size": "Before 'one of the few up in a sector that fell' is allowed. With seven members that is not an observation, it is arithmetic. Ten excludes DEFENCE (7) and TELECOM (8) and keeps REALTY (13) upward.",
+    "min_history_for_month": 60,
+    "_min_history_for_month": "Three times the 20-session window. Naming something a one-month high the stock needs history meaningfully longer than a month, or the sentence really means 'near its all-time high'. HEGAM, six weeks listed, is suppressed by this.",
+    "min_history_for_year": 240,
+    "_min_history_for_year": "A full 52 weeks. NSE trades about 246 sessions a year, so 240 is the shortest history that honestly supports the words 'a 52-week high'. An earlier draft used 200, and the live data showed why that was wrong: LENSKART, PIRAMALFIN, GROWW and TMCV all sit between 233 and 236 sessions -- roughly eleven months old -- and at 200 the tape would have told a reader a recent listing was at a 52-week high when the stock has not existed for 52 weeks. Ten symbols fall between the two numbers.",
+    "heavy_volume_x": 3.0,
+    "light_volume_x": 0.5,
+    "range_edge_pct": 0.1,
+    "_range_edge_pct": "Within a tenth of the day's range of its high or low.",
+    "_heavy_volume_x": "Three times the 20-day average. Twice average is ordinary -- roughly a fifth of sessions clear it -- and a phrase that fires on a fifth of the market says nothing. Three times is unusual enough to be worth a reader's attention.",
+    "_light_volume_x": "Half the 20-day average. The point of the light-volume phrase is that a move happened without participation, and half average is where that stops being noise and starts being the story."
+  },
+  "phrases": {
+    "broke_low": [
+      "gave up its morning low{minute}",
+      "lost its morning low{minute}",
+      "slipped under its morning low{minute}"
+    ],
+    "broke_high": [
+      "took out its morning high{minute}",
+      "cleared its morning high{minute}",
+      "pushed through its morning high{minute}"
+    ],
+    "high_52w": [
+      "at a 52-week high",
+      "at its highest in a year"
+    ],
+    "high_20d": [
+      "at a one-month high",
+      "at its highest in a month"
+    ],
+    "low_20d": [
+      "at a one-month low",
+      "at its lowest in a month"
+    ],
+    "heavy_volume": [
+      "on {n} normal volume",
+      "on {n} its usual volume",
+      "trading {n} its average volume"
+    ],
+    "light_volume": [
+      "on light volume",
+      "on unusually thin volume"
+    ],
+    "closed_high": [
+      "closed on its highs",
+      "finished at the top of its range"
+    ],
+    "closed_low": [
+      "closed on its lows",
+      "finished at the bottom of its range"
+    ],
+    "alone_up": [
+      "one of the few up in a sector that fell",
+      "rising while its sector fell"
+    ],
+    "alone_down": [
+      "one of the few down in a sector that rose",
+      "falling while its sector rose"
+    ]
+  },
+  "catch_all": {
+    "_why": "A fact that clears its bar with no phrase still reaches the tape, stated plainly. Ugly beats absent: a silently dropped stock is a stock the reader never learns about, and the gap is logged so the vocabulary grows from evidence.",
+    "template": "{fact} {n}"
+  }
+}
