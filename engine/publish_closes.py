@@ -70,7 +70,7 @@ def run(session_date: str = None) -> int:
     #
     # INCLUDING TODAY, so the window and the close beside it cannot disagree.
     STOCKS = ROOT / "data" / "processed" / "stocks"
-    hi20, lo20, hist = {}, {}, {}
+    hi20, lo20, lo52, hist = {}, {}, {}, {}
     missing = 0
     for sym in day["symbol"].astype(str):
         f = STOCKS / f"{sym}.parquet"
@@ -88,6 +88,15 @@ def run(session_date: str = None) -> int:
             if len(w) >= 10:        # too short a window is not a month
                 hi20[sym] = float(w["high"].max())
                 lo20[sym] = float(w["low"].min())
+            # THE 52-WEEK LOW, on the SAME window high_52w uses. 252 sessions
+            # is not a guess: it is the only tail length that reproduces the
+            # stored high_52w on all 40 symbols sampled -- tail(250) missed
+            # one, tail(240) missed six, 365 calendar days missed three. A low
+            # computed on a different window from the high beside it would be
+            # a pair that cannot be compared.
+            y = upto.tail(252)
+            if len(y) >= 240:       # the same bar the level guard already sets
+                lo52[sym] = float(y["low"].min())
         except Exception:
             missing += 1
     log.info(f"20-day window built for {len(hi20)} symbol(s)"
@@ -125,6 +134,7 @@ def run(session_date: str = None) -> int:
                      "high_20d": _n(hi20.get(sym)),
                      "low_20d": _n(lo20.get(sym)),
                      "high_52w": _n(r.get("high_52w")),
+                     "low_52w": _n(lo52.get(sym)),
                      "history_sessions": hist.get(sym)})
 
     if not rows:
@@ -202,6 +212,9 @@ def log_vocabulary_gaps(stamp: str, rows: list) -> int:
         if (r.get("high_52w") and px >= r["high_52w"] * 0.999
                 and hsess >= t("min_history_for_year", 200)):
             facts.append(("high_52w", f"{r['high_52w']}"))
+        elif (r.get("low_52w") and px <= r["low_52w"] * 1.001
+                and hsess >= t("min_history_for_year", 200)):
+            facts.append(("low_52w", f"{r['low_52w']}"))
         elif (r.get("high_20d") and px >= r["high_20d"] * 0.999
                 and hsess >= t("min_history_for_month", 60)):
             facts.append(("high_20d", f"{r['high_20d']}"))

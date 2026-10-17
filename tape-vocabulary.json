@@ -37,7 +37,9 @@
     "range_edge_pct": 0.1,
     "_range_edge_pct": "Within a tenth of the day's range of its high or low.",
     "_heavy_volume_x": "Three times the 20-day average. Twice average is ordinary -- roughly a fifth of sessions clear it -- and a phrase that fires on a fifth of the market says nothing. Three times is unusual enough to be worth a reader's attention.",
-    "_light_volume_x": "Half the 20-day average. The point of the light-volume phrase is that a move happened without participation, and half average is where that stops being noise and starts being the story."
+    "_light_volume_x": "Half the 20-day average. The point of the light-volume phrase is that a move happened without participation, and half average is where that stops being noise and starts being the story.",
+    "_unexplained_requires_radar_session": "UNEXPLAINED is a join against radar_events, and a join that finds nothing because the lookup failed looks exactly like a join that finds nothing because there is no news. So the chip is rendered ONLY when radar_events holds at least one row whose event_date is the session the list is showing. One row is enough: it proves detection ran for that session, which is the whole claim. Zero rows cannot be told apart from 'radar did not run' -- there is no run log anywhere, and radar_config carries configuration only, no last-run marker -- so zero suppresses the chip entirely rather than showing it empty. That deliberately also suppresses the honest case where radar ran and found nothing, which is the cheaper error: a missing filter costs a reader one control, a present one would assert 'nothing on file' about 744 symbols on no evidence at all.",
+    "unexplained_requires_radar_session": true
   },
   "phrases": {
     "broke_low": [
@@ -53,6 +55,10 @@
     "high_52w": [
       "at a 52-week high",
       "at its highest in a year"
+    ],
+    "low_52w": [
+      "at a 52-week low",
+      "at its lowest in a year"
     ],
     "high_20d": [
       "at a one-month high",
@@ -80,16 +86,65 @@
       "finished at the bottom of its range"
     ],
     "alone_up": [
-      "one of the few up in a sector that fell",
-      "rising while its sector fell"
+      "rising while its sector fell",
+      "up against a sector that fell",
+      "holding up against its sector"
     ],
     "alone_down": [
-      "one of the few down in a sector that rose",
-      "falling while its sector rose"
+      "falling while its sector rose",
+      "down against a sector that rose",
+      "sliding against its sector"
     ]
   },
   "catch_all": {
     "_why": "A fact that clears its bar with no phrase still reaches the tape, stated plainly. Ugly beats absent: a silently dropped stock is a stock the reader never learns about, and the gap is logged so the vocabulary grows from evidence.",
     "template": "{fact} {n}"
+  },
+  "chips": {
+    "_why": "The reason taxonomy -- volume, structure, finished, alone, level -- was built to make the detectors legible to whoever was writing them. It was never a reader's vocabulary: nobody has ever wanted to see 'the alone ones'. These are the filter labels, and they are a different thing from the keys they filter on.",
+    "_flip": "Three labels read differently by direction because the fact they name is directional: an extreme, a break and a close are each a high or a low. Heavy volume, unexplained and against-sector read the same either way -- one chip, one label.",
+    "direction": {
+      "up": "Gainers",
+      "down": "Losers"
+    },
+    "order": [
+      "all",
+      "heavy_volume",
+      "unexplained",
+      "extreme",
+      "broke",
+      "closed_at",
+      "against_sector"
+    ],
+    "labels": {
+      "all": {
+        "up": "All",
+        "down": "All"
+      },
+      "heavy_volume": {
+        "up": "Heavy volume",
+        "down": "Heavy volume"
+      },
+      "unexplained": {
+        "up": "Unexplained",
+        "down": "Unexplained"
+      },
+      "extreme": {
+        "up": "52-week high",
+        "down": "52-week low"
+      },
+      "broke": {
+        "up": "Broke out",
+        "down": "Broke down"
+      },
+      "closed_at": {
+        "up": "Closed at high",
+        "down": "Closed at low"
+      },
+      "against_sector": {
+        "up": "Against sector",
+        "down": "Against sector"
+      }
+    }
   }
 }

@@ -139,9 +139,49 @@ subs = [f"{k}: {o!r}" for k, opts in phrases.items() for o in opts
 check("every substitution slot is well formed", subs, [])
 
 print()
+print("3b. THE CHIP LABELS ARE VOCABULARY, NOT RENDER CODE")
+print("-" * 104)
+# The five build-time reason groups -- volume, structure, finished, alone,
+# level -- were legible to whoever wrote the detectors and meaningless to a
+# reader. The filter labels are a separate thing and live here so they can be
+# edited without touching logic and scanned by the language test in one pass.
+chips = v.get("chips", {})
+check("the file carries a chip section", bool(chips), True)
+order = chips.get("order", [])
+labels = chips.get("labels", {})
+check("every chip in the order has a label",
+      sorted(set(order) - set(labels)), [])
+check("every label belongs to a chip in the order",
+      sorted(set(labels) - set(order)), [])
+check("the first chip is all", order[:1], ["all"],
+      "a filter list opens unfiltered")
+check("both directions are named",
+      sorted((chips.get("direction") or {}).keys()), ["down", "up"])
+missing_dir = sorted(k for k, L in labels.items()
+                     if not (isinstance(L, dict) and L.get("up") and L.get("down")))
+check("every chip has a label for both directions", missing_dir, [])
+flips = sorted(k for k, L in labels.items() if L.get("up") != L.get("down"))
+check("the directional facts flip their label", flips,
+      ["broke", "closed_at", "extreme"],
+      "an extreme, a break and a close are each a high or a low")
+# a chip label is read by someone who has never seen the codebase
+leaked = sorted(k for k, L in labels.items()
+                for t in (L.get("up", ""), L.get("down", ""))
+                if t.lower() in ("volume", "structure", "finished", "alone", "level"))
+check("no label is just the internal category name", leaked, [])
+# "All" and "Unexplained" happen to match their keys and are perfectly good
+# words; what must never ship is a raw snake_case key used as a label.
+raw_keys_as_labels = sorted(
+    f"{k}:{t}" for k, L in labels.items()
+    for t in (L.get("up", ""), L.get("down", "")) if "_" in t)
+check("no raw key is used as a label", raw_keys_as_labels, [])
+
+print()
 print("4. THE GUARDS ARE NUMBERS WITH STATED REASONS")
 print("-" * 104)
-live = {k: x for k, x in thresholds.items() if not k.startswith("_")}
+live = {k: x for k, x in thresholds.items()
+        if not k.startswith("_") and isinstance(x, (int, float))
+        and not isinstance(x, bool)}
 unexplained = sorted(k for k in live if f"_{k}" not in thresholds)
 check("every threshold states why it is what it is", unexplained, [],
       "a number nobody can argue with is a number nobody can fix")
@@ -174,6 +214,26 @@ check("rotation is deterministic, not random",
       "Math.random" in home.split("function phraseFor")[1].split("\n}")[0]
       if "function phraseFor" in home else True, False,
       "a screenshot has to be reproducible")
+
+print()
+print("4b. UNEXPLAINED CANNOT CLAIM MORE THAN IT CHECKED")
+print("-" * 104)
+# A join that returns nothing because the lookup failed looks exactly like a
+# join that returns nothing because there is no news, and the second is a
+# claim about every symbol on the page.
+check("the guard is recorded in the file",
+      bool(thresholds.get("unexplained_requires_radar_session")), True)
+why = thresholds.get("_unexplained_requires_radar_session", "")
+check("  and its reasoning with it", len(why) > 200, True,
+      f"{len(why)} chars")
+check("the page gates the chip on it", "radarOk()" in home, True)
+check("  by requiring a row for the session shown",
+      "radarSession()" in home and "event_date" in home, True)
+check("  and omits the chip rather than showing it empty",
+      "if(key === 'unexplained' && !ok) return false;" in home, True)
+check("a filter whose chip vanished falls back to all",
+      "visible.indexOf(cur) < 0" in home, True,
+      "or the reader is stranded on an empty list")
 
 print()
 print("5. THE GAP LOG FIRES WHEN A FACT HAS NO PHRASE")

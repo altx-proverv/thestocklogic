@@ -401,6 +401,17 @@ footer p{margin:0 0 6px; max-width:88ch}
   /* the animated track gives way to the list */
   .tape{display:none}
   .m-h{font-size:30px; color:var(--white,#FFFFFF); margin-top:4px}
+  /* THE DIRECTION CONTROL. Two halves, not a chip: this is the split the
+     page is named for, so it reads as the top-level choice it is. */
+  .segs{display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:14px}
+  .seg{min-height:44px; border-radius:9px; font-size:13px; letter-spacing:.06em;
+    text-transform:uppercase; display:flex; align-items:center;
+    justify-content:center; gap:7px;
+    border:1px solid var(--hair,rgba(255,255,255,0.10));
+    background:var(--card,#16294A); color:var(--ink2,#9FB3D0)}
+  .seg b{font-weight:600; color:var(--white,#FFFFFF)}
+  .seg[aria-pressed="true"]{border-color:var(--sky,#3BA9EE);
+    color:var(--sky,#3BA9EE); background:rgba(59,169,238,0.10)}
   .chips{display:flex; gap:7px; overflow-x:auto; padding:14px 0 4px;
     margin-inline:-16px; padding-inline:16px}
   .chips::-webkit-scrollbar{display:none}
@@ -413,7 +424,7 @@ footer p{margin:0 0 6px; max-width:88ch}
     color:var(--sky,#3BA9EE); background:rgba(59,169,238,0.10)}
   .chip b{font-weight:600; color:var(--white,#FFFFFF)}
   .mlist{display:flex; flex-direction:column; gap:7px; margin-top:12px}
-  .mrow{display:grid; grid-template-columns:auto 1fr auto; gap:9px;
+  .mrow{display:grid; grid-template-columns:1fr auto; gap:9px;
     align-items:baseline; min-height:44px; padding:10px 12px 10px 13px;
     background:var(--card,#16294A); border-radius:9px;
     border-left:3px solid var(--navy,#1B3A6B); text-align:left; width:100%}
@@ -421,7 +432,7 @@ footer p{margin:0 0 6px; max-width:88ch}
   .mrow.dn{border-left-color:var(--down,#ff4d6d)}
   .mrow .arr{font-size:12px}
   .mrow .sym{font-size:14px; font-weight:700; color:var(--white,#FFFFFF)}
-  .mrow .why{grid-column:2/4; font-size:12px; color:var(--micro,#8CA3C4);
+  .mrow .why{grid-column:1/3; font-size:12px; color:var(--micro,#8CA3C4);
     margin-top:3px}
   .mrow .pc{font-size:14px; font-weight:600}
   .m-foot{text-align:center; font-size:12px; color:var(--micro,#8CA3C4);
@@ -636,6 +647,7 @@ footer p{margin:0 0 6px; max-width:88ch}
 <div class="wrap m-only" id="tapeView">
   <h2 class="m-h" id="tapeH"></h2>
   <p class="flash-p" id="tapeSub">Each one carries the reason the percentage cannot tell you.</p>
+  <div class="segs" id="tapeDir"></div>
   <div class="chips" id="tapeChips"></div>
   <div class="mlist" id="tapeList"></div>
   <div class="m-foot" id="tapeFoot"></div>
@@ -792,7 +804,8 @@ var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
           on Friday's close while the tape is on Friday's breaks and the
           index strip is still waiting for its first write. */
        vocabGaps:[],
-       flash:[], view:'market', detail:null, stock:null, tapeFilter:'all',
+       flash:[], radar:[], view:'market', detail:null, stock:null,
+       tapeFilter:'all', tapeDir:'up',
        svSort:'move', tapeCache:[],
        src:{prices:null, priceDate:null, tape:null, events:null, landed:null}};
 
@@ -837,7 +850,8 @@ function resolvePrices(){
       p.change_pct=c.change_pct; p.ltp=c.close;
       p.volume_ratio=(c.rvol===null||c.rvol===undefined)?null:+c.rvol;
       p.high=c.high; p.low=c.low; p.volume=c.volume;
-      p.high_20d=c.high_20d; p.low_20d=c.low_20d; p.high_52w=c.high_52w;
+      p.high_20d=c.high_20d; p.low_20d=c.low_20d;
+      p.high_52w=c.high_52w; p.low_52w=c.low_52w;
       p.history_sessions=c.history_sessions;
       p.covered=true; p.live=false;
       return;
@@ -1082,7 +1096,7 @@ function hasHistory(p, sessions){
    reasons are chosen in, so a chip count and the tape can never disagree. */
 var TAPE_CAT={
   broke_low:'structure', broke_high:'structure',
-  high_52w:'level', high_20d:'level', low_20d:'level',
+  high_52w:'level', low_52w:'level', high_20d:'level', low_20d:'level',
   heavy_volume:'volume', light_volume:'volume',
   closed_high:'finished', closed_low:'finished',
   alone_up:'isolation', alone_down:'isolation'
@@ -1097,10 +1111,10 @@ function tapeReason(p, brk, secOf){
 
   function phrase(key, subs, fact, measurement){
     var t = phraseFor(key, subs);
-    if(t) return {text:t, cat:TAPE_CAT[key]||'other'};
+    if(t) return {text:t, cat:TAPE_CAT[key]||'other', key:key};
     gaps.push({fact:fact||key, measurement:measurement});
     return {text: catchAll(fact||key, measurement), improvised:true,
-            cat:TAPE_CAT[key]||'other'};
+            cat:TAPE_CAT[key]||'other', key:key};
   }
 
   /* 1 STRUCTURAL -- an event, with a time while it is still live. */
@@ -1124,6 +1138,9 @@ function tapeReason(p, brk, secOf){
   if(p.high_52w && px >= +p.high_52w*0.999 &&
      hasHistory(p, vocabThreshold('min_history_for_year', 240))){
     done = phrase('high_52w', {}, 'high_52w', fmtPx(p.high_52w));
+  } else if(p.low_52w && px <= +p.low_52w*1.001 &&
+     hasHistory(p, vocabThreshold('min_history_for_year', 240))){
+    done = phrase('low_52w', {}, 'low_52w', fmtPx(p.low_52w));
   } else if(p.high_20d && px >= +p.high_20d*0.999 &&
      hasHistory(p, vocabThreshold('min_history_for_month', 60))){
     done = phrase('high_20d', {}, 'high_20d', fmtPx(p.high_20d));
@@ -1216,7 +1233,14 @@ function tapeItems(){
          different facts, and the old arrow reported the wrong one. */
       dn: (r.down!==undefined) ? r.down : (c<0),
       why: r.text,
-      cat: r.cat||'other'
+      cat: r.cat||'other',
+      key: r.key||null,
+      /* GAINER OR LOSER IS THE DAY, not the event. A stock can give up its
+         morning low and still finish up; the arrow reports the event and this
+         reports the session, and they are allowed to disagree. Where the day
+         change is unknown the event direction stands in. */
+      up: (p.covered && !isNaN(c)) ? (c > 0) : !((r.down!==undefined)?r.down:(c<0)),
+      unexplained: false
     });
   }
 
@@ -1855,44 +1879,161 @@ function renderBreadthBar(){
    Same items, same order, same reasons as the animated track. The arrow
    reports the event and the percentage reports the day; they diverge and
    that is correct. */
+/* THE ARROW BELONGS TO THE REASON, NOT THE SYMBOL. It reports the event and
+   the percentage reports the session, and the two are allowed to disagree:
+   VBL gave up its morning low and still finished +0.29%. Printed beside the
+   symbol that reads as a contradiction -- a red triangle against a green
+   number on the same line. Printed at the head of the reason it reads as what
+   it is, the direction of the thing that happened. */
 function mrow(i){
   return '<div class="mrow '+(i.dn?'dn':'up')+'">'+
-    '<span class="arr" style="color:'+(i.dn?'var(--down,#ff4d6d)':'var(--up,#00d68f)')+
-      '">'+(i.dn?'▼':'▲')+'</span>'+
     '<span class="sym">'+esc(i.sym)+'</span>'+
     '<span class="pc fig" style="color:'+(i.p===null?'var(--micro,#8CA3C4)':sign(i.p))+'">'+
       (i.p===null?'—':pct(i.p))+'</span>'+
-    '<span class="why">'+esc(i.why)+'</span>'+
+    '<span class="why"><span class="arr" style="color:'+
+      (i.dn?'var(--down,#ff4d6d)':'var(--up,#00d68f)')+'">'+
+      (i.dn?'▼':'▲')+'</span> '+esc(i.why)+'</span>'+
   '</div>';
 }
 
-function renderTapeList(){
-  var items=S.tapeCache||[];
-  var listEl=document.getElementById('tapeList');
-  if(!listEl) return;
-  mset('tapeH', items.length+' moved 2.5% or more');
-  mset('wmN', String(items.length));
+/* ── THE FILTERS ──────────────────────────────────────────────────
+   GAINERS and LOSERS is the split the page's name promises, so it is the
+   top-level control and not a chip. Inside a direction the chips are facts a
+   reader might actually be looking for. They are NOT the five build-time
+   reason categories: volume / structure / finished / alone / level were
+   written to make the detectors legible while they were being built, and no
+   reader has ever gone looking for "the alone ones". The keys below are
+   internal; every word on screen comes from tape-vocabulary.json. */
+function chipSpec(){
+  var C = (VOCAB && VOCAB.chips) || {};
+  var order = C.order || ['all','heavy_volume','unexplained','extreme','broke',
+                          'closed_at','against_sector'];
+  var labels = C.labels || {};
+  return {order:order, labels:labels,
+          dir:(C.direction||{up:'Gainers',down:'Losers'})};
+}
 
-  var counts={}; items.forEach(function(i){counts[i.cat]=(counts[i.cat]||0)+1;});
-  var cats=Object.keys(counts).sort(function(a,b){return counts[b]-counts[a];});
-  var cur=S.tapeFilter||'all';
-  var chips='<button class="chip" data-cat="all" aria-pressed="'+(cur==='all')+
-    '">All <b>'+items.length+'</b></button>';
-  cats.forEach(function(c){
-    chips+='<button class="chip" data-cat="'+c+'" aria-pressed="'+(cur===c)+'">'+
-      esc(TAPE_CAT_LABEL[c]||c)+' <b>'+counts[c]+'</b></button>';
+/* Which vocabulary keys each chip gathers. One chip can span two keys where
+   the fact is one fact with two directions. */
+var CHIP_KEYS = {
+  heavy_volume:   ['heavy_volume'],
+  extreme:        ['high_52w','low_52w'],
+  broke:          ['broke_high','broke_low'],
+  closed_at:      ['closed_high','closed_low'],
+  against_sector: ['alone_up','alone_down']
+};
+
+/* ── THE UNEXPLAINED GUARD ────────────────────────────────────────
+   "Nothing on file" has to mean we looked. A join that returns nothing
+   because radar never ran is indistinguishable from one that returns nothing
+   because there was no news, and the second is a claim about 744 symbols.
+
+   The condition: radar_events must hold at least one row whose event_date is
+   the session this list is showing. One row proves detection ran for that
+   session, which is the entire claim. Zero rows cannot be told apart from
+   "did not run" -- there is no run log anywhere in the codebase and
+   radar_config carries configuration only, no last-run marker -- so zero
+   suppresses the chip rather than showing it empty.
+
+   This also suppresses the honest case where radar ran and found nothing.
+   That is the cheaper error by a wide margin. */
+function radarSession(){
+  /* The session the list is describing: the prices the rows were built from,
+     falling back to the breaks' own session. */
+  return (S.src.priceDate || S.src.tape || null);
+}
+function radarOk(){
+  var day = radarSession();
+  if(!day) return false;
+  return (S.radar||[]).some(function(r){
+    return String(r.event_date||'').slice(0,10) === String(day).slice(0,10);
   });
-  document.getElementById('tapeChips').innerHTML=chips;
+}
+function explainedSet(){
+  var day = radarSession(), set = {};
+  (S.radar||[]).forEach(function(r){
+    if(String(r.event_date||'').slice(0,10) === String(day).slice(0,10)) {
+      set[r.symbol] = true;
+    }
+  });
+  return set;
+}
 
-  var shown=(cur==='all')?items:items.filter(function(i){return i.cat===cur;});
-  listEl.innerHTML=shown.length
+function chipMatch(key, i){
+  if(key === 'all') return true;
+  if(key === 'unexplained') return !!i.unexplained;
+  var keys = CHIP_KEYS[key];
+  return !!(keys && i.key && keys.indexOf(i.key) >= 0);
+}
+
+function renderTapeList(){
+  var all = S.tapeCache || [];
+  var listEl = document.getElementById('tapeList');
+  if(!listEl) return;
+
+  /* Mark the movers nothing was filed against, once per render. */
+  var ok = radarOk(), expl = ok ? explainedSet() : {};
+  all.forEach(function(i){ i.unexplained = ok && !expl[i.sym]; });
+
+  var dir = S.tapeDir || 'up';
+  var items = all.filter(function(i){ return dir === 'up' ? i.up : !i.up; });
+  var spec = chipSpec();
+
+  mset('tapeH', items.length + ' moved 2.5% or more');
+  mset('wmN', String(all.length));
+
+  /* THE DIRECTION CONTROL */
+  var seg = ['up','down'].map(function(d){
+    var n = all.filter(function(i){ return d === 'up' ? i.up : !i.up; }).length;
+    return '<button class="seg" data-dir="' + d + '" aria-pressed="' +
+           (dir === d) + '">' + esc(spec.dir[d] || d) +
+           ' <b>' + n + '</b></button>';
+  }).join('');
+  var segEl = document.getElementById('tapeDir');
+  if(segEl) segEl.innerHTML = seg;
+
+  /* THE CHIPS, in the order the vocabulary gives them. A chip with no rows in
+     this direction is still shown -- a zero is a fact about the session. The
+     one exception is unexplained, which is absent entirely when the guard
+     fails, because an empty chip there would be a different claim. */
+  var cur = S.tapeFilter || 'all';
+  var visible = spec.order.filter(function(key){
+    if(key === 'unexplained' && !ok) return false;
+    if(key === 'extreme' && dir === 'down' && !has52wLow()) return false;
+    return true;
+  });
+  /* A filter whose chip is no longer on screen leaves the reader on an empty
+     list with nothing showing as selected and no way back. It happens for
+     real: select unexplained, the page refreshes, radar is down, the chip
+     goes. Fall back to all rather than stranding them. */
+  if(visible.indexOf(cur) < 0){ cur = 'all'; S.tapeFilter = 'all'; }
+
+  var html = '';
+  visible.forEach(function(key){
+    var n = items.filter(function(i){ return chipMatch(key, i); }).length;
+    var lab = (spec.labels[key] && spec.labels[key][dir]) || key;
+    html += '<button class="chip" data-cat="' + key + '" aria-pressed="' +
+            (cur === key) + '">' + esc(lab) + ' <b>' + n + '</b></button>';
+  });
+  document.getElementById('tapeChips').innerHTML = html;
+
+  var shown = items.filter(function(i){ return chipMatch(cur, i); });
+  listEl.innerHTML = shown.length
     ? shown.map(mrow).join('')
-    : '<div class="empty">Nothing in this category today.</div>';
-  mset('tapeFoot', shown.length+' shown');
+    : '<div class="empty">Nothing matches that filter in this session.</div>';
+  mset('tapeFoot', shown.length + ' shown');
 
-  /* The market view carries the first three as a preview. */
-  var wm=document.getElementById('wmList');
-  if(wm) wm.innerHTML=items.slice(0,3).map(mrow).join('');
+  var wm = document.getElementById('wmList');
+  if(wm) wm.innerHTML = all.slice(0, 3).map(mrow).join('');
+}
+
+/* The losers half of the extreme chip needs a 52-week LOW, which did not
+   exist until daily_closes gained low_52w. Asked of the vocabulary rather
+   than held in a flag: if the phrase group is there the detector can speak,
+   and nobody has to remember to flip a boolean. */
+function has52wLow(){
+  return !!(VOCAB && VOCAB.phrases && VOCAB.phrases.low_52w
+            && VOCAB.phrases.low_52w.length);
 }
 
 /* ── 5 SECTOR DETAIL ──────────────────────────────────────────────
@@ -1969,6 +2110,16 @@ document.addEventListener('click', function(e){
     return;
   }
 
+  /* Changing direction resets the chip: a filter chosen on gainers has no
+     meaning carried onto losers, and three of the labels mean the opposite
+     thing there. */
+  var seg=e.target.closest?e.target.closest('.seg'):null;
+  if(seg){
+    e.preventDefault(); e.stopPropagation();
+    S.tapeDir=seg.getAttribute('data-dir'); S.tapeFilter='all';
+    renderTapeList(); return;
+  }
+
   var chip=e.target.closest?e.target.closest('.chip'):null;
   if(chip){
     if(chip.hasAttribute('data-cat')){
@@ -2023,11 +2174,12 @@ async function load(){
     sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120'),
     sbGet('/rest/v1/intraday_prices?select=*&limit=1000'),
     sbGet('/rest/v1/daily_closes?select=*&order=session_date.desc&limit=1600'),
-    sbGet('/rest/v1/market_flash?select=*&order=session_date.desc&limit=2')
+    sbGet('/rest/v1/market_flash?select=*&order=session_date.desc&limit=2'),
+    sbGet('/rest/v1/radar_events?select=symbol,event_date&order=event_date.desc&limit=600', true)
   ]);
   S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
   S.breadth=res[3]; S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
-  S.closes=res[7]; S.flash=res[8];
+  S.closes=res[7]; S.flash=res[8]; S.radar=res[9];
   resolvePrices();
 
   buildSectors();
