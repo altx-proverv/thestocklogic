@@ -307,13 +307,31 @@ footer p{margin:0 0 6px; max-width:88ch}
 /* Display type, shared by both widths. */
 .m-h,.sv-n{font-family:'Bebas Neue',Impact,sans-serif; letter-spacing:.02em;
   line-height:1; margin:0}
-.flash-p,.bbar{display:none}          /* phone build; desktop layout unchanged */
+/* THE FLASH AND THE BREADTH BAR SHOW AT EVERY WIDTH. They were phone-only in
+   the first pass on the reading that desktop layout stays as it is; the
+   operator overruled that -- it meant do not rearrange desktop, not withhold
+   content from it. Nothing else about the desktop page moves: these two sit
+   inside .reading, so every block below shifts down by their height and none
+   of them changes size.
+
+   The other two instances of these classes are inside .m-only containers
+   (#tapeView, #secView) and stay phone-only on their container's rule. */
 .flash-p{font-family:'Crimson Pro',Georgia,serif; font-style:italic;
-  font-size:16px; line-height:1.45; color:var(--ink3,#D6E2F2);
-  margin:10px 0 0; max-width:62ch}
+  font-size:18px; line-height:1.5; color:var(--ink3,#D6E2F2);
+  margin:14px 0 0; max-width:62ch}
+/* .reading p is (0,1,1) and beats .flash-p at (0,1,0), so inside the reading
+   the flash was silently taking the statement's clamp -- 27px on desktop and
+   19px on a phone. Restated at matching depth, resetting every property that
+   rule sets. */
+.reading p.flash-p{font-size:18px; font-weight:400; letter-spacing:normal;
+  line-height:1.5; margin:14px 0 0; max-width:62ch; text-wrap:wrap}
+
+/* An empty flash must not leave its margin behind. [hidden] alone loses to a
+   class rule setting display, so it is restated at higher specificity. */
+.flash-p[hidden],.bbar[hidden]{display:none}
 
 /* The breadth bar: one two-tone rule, not two numbers in a list. */
-.bbar{margin-top:14px}
+.bbar{margin-top:16px; max-width:620px}
 .bbar-t{display:flex; height:7px; border-radius:4px; overflow:hidden;
   background:var(--navy,#1B3A6B)}
 .bbar-t i{display:block; height:100%}
@@ -333,7 +351,8 @@ footer p{margin:0 0 6px; max-width:88ch}
 
 @media (max-width:620px){
   .m-only{display:block}
-  .flash-p,.bbar{display:block}
+  .reading p.flash-p{font-size:16px; line-height:1.45; margin:10px 0 0}
+  .bbar{margin-top:14px; max-width:none}
   body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
 
   /* NOTHING UNDER 12px ON A PHONE. Measured across all four views, not
