@@ -349,6 +349,54 @@ footer p{margin:0 0 6px; max-width:88ch}
 
 .m-only{display:none}
 
+/* ── THE TAPE STOPS CRAWLING WHERE IT CANNOT BE PAUSED ──────────────
+   Pause is :hover and :focus-within. A touch device has neither: there is no
+   hover, and the tape's items are plain divs with nothing focusable inside
+   them, so :focus-within can never fire either. Width was standing in for
+   that and it was the wrong proxy -- an iPad is above the 620px breakpoint
+   and still cannot stop the thing. The condition is the capability, so the
+   list replaces the crawl on any pointer that cannot hover, at any width.
+
+   Both halves are needed. A desktop window narrowed under 620px HAS hover and
+   would otherwise get the phone shell with a Tape tab rendering nothing; a
+   hover-less tablet at 768px is above the breakpoint and would otherwise get
+   the crawl.
+
+   Placed BEFORE the phone block deliberately: there, the view-switching rules
+   hide #tapeView at equal specificity and must win on source order. */
+@media (max-width:620px), (hover:none){
+  /* the animated track gives way to the list */
+  .tape{display:none}
+  .m-h{font-size:30px; color:var(--white,#FFFFFF); margin-top:4px}
+  .chips{display:flex; gap:7px; overflow-x:auto; padding:14px 0 4px;
+    margin-inline:-16px; padding-inline:16px}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto; min-height:44px; padding:0 14px; border-radius:9px;
+    border:1px solid var(--hair,rgba(255,255,255,0.10));
+    background:var(--card,#16294A); color:var(--ink2,#9FB3D0);
+    font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    display:flex; align-items:center; gap:7px}
+  .chip[aria-pressed="true"]{border-color:var(--sky,#3BA9EE);
+    color:var(--sky,#3BA9EE); background:rgba(59,169,238,0.10)}
+  .chip b{font-weight:600; color:var(--white,#FFFFFF)}
+  .mlist{display:flex; flex-direction:column; gap:7px; margin-top:12px}
+  .mrow{display:grid; grid-template-columns:auto 1fr auto; gap:9px;
+    align-items:baseline; min-height:44px; padding:10px 12px 10px 13px;
+    background:var(--card,#16294A); border-radius:9px;
+    border-left:3px solid var(--navy,#1B3A6B); text-align:left; width:100%}
+  .mrow.up{border-left-color:var(--up,#00d68f)}
+  .mrow.dn{border-left-color:var(--down,#ff4d6d)}
+  .mrow .arr{font-size:12px}
+  .mrow .sym{font-size:14px; font-weight:700; color:var(--white,#FFFFFF)}
+  .mrow .why{grid-column:2/4; font-size:12px; color:var(--micro,#8CA3C4);
+    margin-top:3px}
+  .mrow .pc{font-size:14px; font-weight:600}
+  .m-foot{text-align:center; font-size:12px; color:var(--micro,#8CA3C4);
+    letter-spacing:.1em; text-transform:uppercase; padding:16px 0 4px}
+
+  #tapeView{display:block}
+}
+
 @media (max-width:620px){
   .m-only{display:block}
   .reading p.flash-p{font-size:16px; line-height:1.45; margin:10px 0 0}
@@ -412,35 +460,7 @@ footer p{margin:0 0 6px; max-width:88ch}
   .sbox[aria-expanded="true"]{grid-column:auto; border-width:1px}
   .sbox .tiles,.sbox .d{display:none}
 
-  /* 4 THE TAPE, as a list. */
-  .tape{display:none}
-  .m-h{font-size:30px; color:var(--white,#FFFFFF); margin-top:4px}
-  .chips{display:flex; gap:7px; overflow-x:auto; padding:14px 0 4px;
-    margin-inline:-16px; padding-inline:16px}
-  .chips::-webkit-scrollbar{display:none}
-  .chip{flex:0 0 auto; min-height:44px; padding:0 14px; border-radius:9px;
-    border:1px solid var(--hair,rgba(255,255,255,0.10));
-    background:var(--card,#16294A); color:var(--ink2,#9FB3D0);
-    font-size:12px; letter-spacing:.08em; text-transform:uppercase;
-    display:flex; align-items:center; gap:7px}
-  .chip[aria-pressed="true"]{border-color:var(--sky,#3BA9EE);
-    color:var(--sky,#3BA9EE); background:rgba(59,169,238,0.10)}
-  .chip b{font-weight:600; color:var(--white,#FFFFFF)}
-  .mlist{display:flex; flex-direction:column; gap:7px; margin-top:12px}
-  .mrow{display:grid; grid-template-columns:auto 1fr auto; gap:9px;
-    align-items:baseline; min-height:44px; padding:10px 12px 10px 13px;
-    background:var(--card,#16294A); border-radius:9px;
-    border-left:3px solid var(--navy,#1B3A6B); text-align:left; width:100%}
-  .mrow.up{border-left-color:var(--up,#00d68f)}
-  .mrow.dn{border-left-color:var(--down,#ff4d6d)}
-  .mrow .arr{font-size:12px}
-  .mrow .sym{font-size:14px; font-weight:700; color:var(--white,#FFFFFF)}
-  .mrow .why{grid-column:2/4; font-size:12px; color:var(--micro,#8CA3C4);
-    margin-top:3px}
-  .mrow .pc{font-size:14px; font-weight:600}
   .m-all{float:right; font-size:12px; letter-spacing:.06em; color:var(--sky,#3BA9EE)}
-  .m-foot{text-align:center; font-size:12px; color:var(--micro,#8CA3C4);
-    letter-spacing:.1em; text-transform:uppercase; padding:16px 0 4px}
 
   /* 5 SECTOR DETAIL */
   .sv-top{display:flex; align-items:flex-end; justify-content:space-between;
