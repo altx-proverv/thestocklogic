@@ -56,8 +56,19 @@ GATES = {
     },
     "atlas.html": {
         "route": "/atlas",
-        "declare": ["loadSession", "mountAccount"],
-        "call": ["loadSession", "mountAccount"],
+        # mountAccount() was listed here until 2026-10-17 and is gone with the
+        # account menu, which was never the gate -- the nav links back to Home
+        # where the menu lives. loadSession() is what this page's session
+        # actually governs.
+        #
+        # AND BE PRECISE ABOUT WHAT THAT IS. atlas reads every table it needs
+        # as anon if a session is rejected, by design -- the trade book still
+        # renders, only the EXIT control goes. So loadSession() is the session
+        # path, not a wall; the enforcement is the RLS policy on the write,
+        # not this page. Asserting it exists is still worth doing: if it is
+        # deleted the EXIT control silently authenticates as nobody.
+        "declare": ["loadSession", "isFresh"],
+        "call": ["loadSession", "isFresh"],
         "session_read": "auth.getSession",
     },
     "signals.html": {

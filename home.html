@@ -142,8 +142,17 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
 /* 4 THE TAPE */
 .tape{background:var(--rail); border-block:1px solid var(--hair);
   overflow:hidden; position:relative}
-.tape-in{display:flex; width:max-content; animation:tape 86s linear infinite}
+/* CONSTANT PIXELS PER SECOND, not a constant duration. 86s fixed meant the
+   speed depended on how many items the day produced: eight items crawled and
+   thirty blurred past. The duration is computed from the measured track width
+   in setTapeSpeed() so the rate is the same whatever the day looks like. */
+.tape-in{display:flex; width:max-content;
+  animation:tape var(--tape-dur,86s) linear infinite}
 @keyframes tape{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+/* PAUSE ON HOVER AND ON FOCUS. A moving target is unreadable and unclickable;
+   focus-within covers the keyboard, which hover alone leaves out. */
+.tape:hover .tape-in,
+.tape:focus-within .tape-in{animation-play-state:paused}
 @media (prefers-reduced-motion:reduce){
   .tape-in{animation:none}
   .tape{overflow-x:auto}
@@ -650,8 +659,11 @@ function tapeItems(){
     out.push({
       sym:b.symbol, p:b.change_pct, dn:below,
       badge:'ORB '+(below?'↓':'↑'),
-      why:'broke '+(below?'below':'above')+' its opening range '+
-          num(b.range_low)+'–'+num(b.range_high)+
+      /* THE FACT AND THE TIME, not the range arithmetic. This read "broke
+         below its opening range 1,879.00-1,906.90 at 10:04" -- nineteen
+         words of which two carry the observation. The levels are on the
+         stock's own tile; the tape is for noticing, not for reading. */
+      why:'broke its opening range '+(below?'low':'high')+
           (b.break_minute?' at '+b.break_minute:'')
     });
   });
@@ -669,13 +681,11 @@ function tapeItems(){
       var v=parseFloat(p.volume_ratio);
       if(!(v>=2))return;
       out.push({sym:p.symbol, p:c, dn:c<0, badge:'VOL '+v.toFixed(1)+'x',
-        why:'moved '+Math.abs(c).toFixed(2)+'% running at '+v.toFixed(1)+
-            '× its normal pace for this time of day'});
+        why:'on '+v.toFixed(1)+'× normal volume'});
     }else{
       if(Math.abs(c)<3)return;      /* a higher bar, with no volume to confirm */
       out.push({sym:p.symbol, p:c, dn:c<0, badge:'CLOSE',
-        why:(c<0?'closed down ':'closed up ')+Math.abs(c).toFixed(2)+
-            '% on '+dayName(S.src.priceDate)});
+        why:'closed '+(c<0?'down':'up')+' on '+dayName(S.src.priceDate)});
     }
   });
   return out;
@@ -699,7 +709,24 @@ function renderTape(){
       '<span class="tape-r">'+esc(i.why)+'</span></div>';
   }).join('');
   /* Concatenated with itself so the -50% translate loops seamlessly. */
-  document.getElementById('tape').innerHTML=html+html;
+  var el=document.getElementById('tape');
+  el.innerHTML=html+html;
+  setTapeSpeed(el);
+}
+
+/* 70 PIXELS PER SECOND. Slow enough to read a six-word reason as it passes --
+   about three seconds for a typical item at 1440 -- and brisk enough that a
+   quiet day does not look frozen. The duration covers HALF the track, because
+   the keyframe translates -50% across the doubled list.
+
+   Measured, not assumed: scrollWidth is read after the items are in the DOM,
+   so the rate holds whether the day produced eight items or eighty. */
+var TAPE_PX_PER_SEC=70;
+function setTapeSpeed(el){
+  var half=el.scrollWidth/2;
+  if(!half) return;
+  var secs=Math.max(20, Math.round(half/TAPE_PX_PER_SEC));
+  el.style.setProperty('--tape-dur', secs+'s');
 }
 
 /* ── 5 SECTORS ────────────────────────────────────────────────── */
@@ -1170,6 +1197,17 @@ async function load(){
   renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
   renderTags();
   if(marketOpen())setInterval(renderState,1000);
+
+  /* The track width changes with the viewport, so the duration has to be
+     recomputed or the rate drifts on resize. */
+  var _rt;
+  window.addEventListener('resize',function(){
+    clearTimeout(_rt);
+    _rt=setTimeout(function(){
+      var el=document.getElementById('tape');
+      if(el&&el.children.length)setTapeSpeed(el);
+    },200);
+  });
 }
 
 /* NOTHING IS FETCHED UNTIL THE SESSION IS CONFIRMED. */

@@ -61,6 +61,12 @@ a{color:var(--accent);text-decoration:none}
 .banner.show{display:flex}
 .b-risk{background:rgba(245,132,69,.10);border:1px solid rgba(245,132,69,.42);color:var(--orange)}
 .b-stale{background:rgba(245,211,61,.08);border:1px solid rgba(245,211,61,.3);color:#ffd9a8}
+/* All protected: quiet and factual. A green shout for the normal case trains
+   the eye to ignore this row, which is the row that must be read on the day
+   it is not green. */
+.b-ok{background:rgba(0,214,143,.07);border:1px solid rgba(0,214,143,.26);color:#9fe7cd}
+/* Cannot say. Not a warning about the positions -- a warning about the check. */
+.b-unknown{background:rgba(255,255,255,.04);border:1px solid var(--line,rgba(255,255,255,.12));color:var(--text-2,rgba(255,255,255,.6))}
 
 .cap-note{margin-top:12px;font-size:12px;line-height:1.5;opacity:.65}
 
@@ -113,57 +119,6 @@ td.sym{font-weight:700;color:var(--ink)}
 
 .foot{text-align:center;padding:28px 0 44px;color:var(--faint);font-size:9.5px;letter-spacing:1.2px;line-height:1.9}
 
-/* THE ACCOUNT MENU. Same three items as /home, in THIS page's palette.
-   Hidden until a session is confirmed, so a signed-out visitor never sees a
-   control that would do nothing.
-
-   EVERY COLOUR CARRIES A HEX FALLBACK. The first version of this block used
-   --s1, --s3 and --muted2, which are home.html's token names and are NOT
-   defined here -- so background, hover and the email colour all resolved to
-   nothing and the panel rendered fully transparent with the page showing
-   through it. A var() that does not resolve fails silently and invisibly;
-   a fallback turns that into a wrong shade instead of no shade.
-
-   text-transform is reset because .navlinks sets uppercase and the menu
-   inherits it -- which is what made the email read as a third clickable row. */
-.acct{position:relative}
-.acct-btn{display:flex;align-items:center;gap:5px;font:inherit;font-size:10px;
-  letter-spacing:2px;color:var(--text-2,rgba(255,255,255,.6));background:none;
-  cursor:pointer;padding:5px 8px;border:1px solid var(--line,rgba(255,255,255,.10));
-  border-radius:6px;min-height:30px}
-.acct-btn:hover{color:var(--white,#FFF);border-color:var(--sky,#3BA9EE)}
-.acct-menu{
-  position:absolute;
-  top:calc(100% + 6px);
-  right:0;                      /* right edge to the button's right edge */
-  left:auto;
-  min-width:210px;
-  max-width:min(260px, calc(100vw - 32px));   /* never leaves the viewport */
-  background:var(--panel,#16294A);            /* SOLID, with a fallback */
-  border:1px solid var(--line,rgba(255,255,255,.14));
-  border-radius:8px;
-  padding:6px;
-  z-index:300;                  /* above the status bar and the page */
-  box-shadow:0 14px 36px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
-  text-transform:none;          /* .navlinks sets uppercase; the menu is text */
-  letter-spacing:normal;
-  text-align:left;
-}
-.acct-menu button{display:block;width:100%;text-align:left;font:inherit;
-  font-size:12px;letter-spacing:0;text-transform:none;
-  color:var(--white,#FFF);
-  background:transparent;        /* identical resting state on both items */
-  border:none;cursor:pointer;padding:9px;border-radius:5px;min-height:40px}
-.acct-menu button:hover,
-.acct-menu button:focus-visible{background:rgba(255,255,255,.10)}
-.acct-who{display:block;font-size:10px;line-height:1.4;
-  color:var(--text-3,rgba(255,255,255,.45));
-  text-transform:none;letter-spacing:normal;
-  padding:7px 9px 9px;margin-bottom:5px;
-  border-bottom:1px solid var(--line,rgba(255,255,255,.14));
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  cursor:default;user-select:none;   /* a label, not a control */
-}
 </style>
 </head>
 <body>
@@ -181,26 +136,22 @@ td.sym{font-weight:700;color:var(--ink)}
     <div class="navlinks">
       <a href="/home">HOME</a>
       <a href="/atlas" aria-current="page">ATLAS</a>
-      <div class="acct" id="acct" hidden>
-        <button class="acct-btn" id="acctBtn" aria-haspopup="true"
-                aria-expanded="false" aria-controls="acctMenu">
-          <span id="acctName">&mdash;</span><span aria-hidden="true">&#9662;</span>
-        </button>
-        <div class="acct-menu" id="acctMenu" role="menu" hidden>
-          <div class="acct-who" id="acctEmail"></div>
-          <button role="menuitem" id="pwBtn">Change password</button>
-          <button role="menuitem" id="outBtn">Log out</button>
-        </div>
-      </div>
     </div>
   </div>
 </div>
 
 <div class="wrap">
 
-  <div id="riskBanner" class="banner b-risk">
-    <span>&#9888;</span>
-    <span><b>MANUAL RISK REQUIRED</b> &mdash; <span id="riskCount">0</span> open position(s). ATLAS does not place stop-losses. Recommended stops are shown in the STOP column.</span>
+  <!-- PROTECTION STATE, READ FROM THE BROKER. This used to read "MANUAL RISK
+       REQUIRED - N open position(s). ATLAS does not place stop-losses" while
+       every open position had a confirmed GTT resting. Acting on it would
+       have put a second stop on shares that already had one, and whichever
+       fired first would leave the other trying to sell stock that was gone.
+       The text is now set from position_protection, which is read back from
+       orders() and get_gtts() and never from the recorded exit_legs column. -->
+  <div id="riskBanner" class="banner">
+    <span id="riskIcon">&#9888;</span>
+    <span id="riskText"></span>
   </div>
 
   <div id="markBanner" class="banner b-stale">
@@ -290,7 +241,7 @@ var CFG={riskPerTrade:3000, maxNotionalPerTrade:100000, maxTradesPerDay:3};
                   keeping the first hit per symbol takes the latest close. */
 var MARK_ROWS=400;
 
-var _trades=[], _mark={}, _session=null, _editing=null, _supa=null, _sessionStale=false;
+var _trades=[], _protection=[], _mark={}, _session=null, _editing=null, _supa=null, _sessionStale=false;
 
 function hdr(){
   var h={apikey:AK, Authorization:'Bearer '+AK, 'Content-Type':'application/json'};
@@ -389,48 +340,73 @@ async function sbGet(path){
   return r;
 }
 
-/* ── THE ACCOUNT MENU ─────────────────────────────────────────────
-   Driven by the session loadSession() already resolved -- this page has a
-   supabase client and a session, so the menu reuses both rather than
-   standing up a second client that could disagree with the first. */
-function mountAccount(session){
-  if(!session||!session.user)return;
-  var u=session.user;
-  var wrap=document.getElementById('acct');
-  var btn=document.getElementById('acctBtn');
-  var menu=document.getElementById('acctMenu');
-  if(!wrap||!btn||!menu)return;
-  var name=(u.user_metadata&&(u.user_metadata.full_name||u.user_metadata.name))
-           ||String(u.email||'').split('@')[0];
-  document.getElementById('acctName').textContent=name;
-  document.getElementById('acctEmail').textContent=u.email||'';
-  wrap.hidden=false;
+/* ── PROTECTION, FROM THE BROKER ─────────────────────────────────
+   Three states and no fourth, matching what the publisher recorded:
 
-  function close(){menu.hidden=true;btn.setAttribute('aria-expanded','false');}
-  function open(){menu.hidden=false;btn.setAttribute('aria-expanded','true');}
-  btn.addEventListener('click',function(e){
-    e.stopPropagation(); menu.hidden?open():close();
-  });
-  document.addEventListener('click',function(e){
-    if(!wrap.contains(e.target))close();
-  });
-  document.addEventListener('keydown',function(e){
-    if(e.key==='Escape')close();
-  });
-  document.getElementById('pwBtn').addEventListener('click',function(){
-    close();
-    if(!confirm('Send a password reset email to '+u.email+'?'))return;
-    _supa.auth.resetPasswordForEmail(u.email,
-      {redirectTo:'https://thestocklogic.com/atlas'}).then(function(res){
-        alert(res.error?('Could not send it: '+res.error.message)
-                       :'Reset email sent. Check your inbox.');
-      });
-  });
-  document.getElementById('outBtn').addEventListener('click',async function(){
-    close();
-    try{ await _supa.auth.signOut(); }catch(e){}
-    window.location.href='/';
-  });
+     CONFIRMED  read back from orders()/get_gtts()
+     NONE       the broker answered and nothing is resting -- loud, and it
+                names the symbols, because only those need a manual stop
+     UNKNOWN    the broker could not be read -- report NEITHER state. "I
+                cannot tell you" is a different sentence from "you are
+                unprotected", and printing the second when the first is true
+                is how a banner gets acted on wrongly. */
+function renderProtection(open){
+  var rb=document.getElementById('riskBanner');
+  var icon=document.getElementById('riskIcon');
+  var txt=document.getElementById('riskText');
+  rb.classList.remove('show','b-risk','b-ok','b-unknown');
+  if(!open.length) return;
+
+  var rows=_protection||[];
+  if(!rows.length){
+    rb.classList.add('show','b-unknown');
+    icon.innerHTML='&#9888;';
+    txt.innerHTML='<b>PROTECTION NOT CHECKED</b> &mdash; '+open.length+
+      ' open position(s). No broker check has been recorded, so this page '+
+      'cannot say whether they are protected.';
+    return;
+  }
+
+  var when=String(rows[0].checked_at||'').slice(11,16);
+  if(rows.some(function(r){return r.broker_ok===false;})){
+    rb.classList.add('show','b-unknown');
+    icon.innerHTML='&#9888;';
+    txt.innerHTML='<b>BROKER UNREADABLE</b> &mdash; the last check at '+
+      esc(when)+' IST could not reach the broker, so the protection state of '+
+      'these '+open.length+' position(s) is unknown. Neither protected nor '+
+      'unprotected is being claimed.';
+    return;
+  }
+
+  var naked=rows.filter(function(r){return r.stop_state!=='CONFIRMED';});
+  if(naked.length){
+    rb.classList.add('show','b-risk');
+    icon.innerHTML='&#9888;';
+    txt.innerHTML='<b>MANUAL STOP NEEDED</b> &mdash; '+naked.length+' of '+
+      rows.length+' open position(s) have no stop at the broker: <b>'+
+      naked.map(function(r){return esc(r.symbol);}).join(', ')+
+      '</b>. The others are protected and need nothing. Checked '+esc(when)+
+      ' IST.';
+    return;
+  }
+
+  rb.classList.add('show','b-ok');
+  icon.innerHTML='&#10003;';
+  txt.innerHTML='<b>'+rows.length+' open position'+(rows.length===1?'':'s')+
+    ', all protected at the broker.</b> Stops are resting as GTTs; nothing '+
+    'needs placing by hand. Checked '+esc(when)+' IST.';
+}
+
+async function fetchProtection(){
+  try{
+    var r=await sbGet('/rest/v1/position_protection?select=*');
+    if(!r.ok) return [];
+    var j=await r.json();
+    return Array.isArray(j)?j:[];
+  }catch(e){
+    console.error('ATLAS: protection read failed: '+e.message);
+    return [];
+  }
 }
 
 async function fetchTrades(){
@@ -599,9 +575,7 @@ function render(){
            (x.s?'<div class="s">'+x.s+'</div>':'')+'</div>';
   }).join('');
 
-  var rb=document.getElementById('riskBanner');
-  if(open.length){rb.classList.add('show');document.getElementById('riskCount').textContent=open.length;}
-  else rb.classList.remove('show');
+  renderProtection(open);
 
   /* Say what the mark actually is. The number is always shown; the banner is
      what stops it being mistaken for a live one. */
@@ -720,8 +694,12 @@ async function load(){
   try{
     _sessionStale=false;
     _session=await loadSession();
-    mountAccount(_session);
+    /* NO ACCOUNT MENU HERE, deliberately. The nav carries a link back to
+       Home, where the menu lives. loadSession() stays and is still what the
+       EXIT control and the session banner depend on -- removing the menu does
+       not remove the gate, and tests/test_gates_intact.py asserts that. */
     _trades=await fetchTrades();
+    _protection=await fetchProtection();
     /* Prices are fetched for OPEN symbols only. Nothing else on this page is
        marked to market. */
     var syms=_trades.filter(function(t){return st(t)==='OPEN';}).map(function(t){return t.symbol;});

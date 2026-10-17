@@ -180,7 +180,8 @@ def main() -> int:
     check("the tape resolves its own session",
           "S.src.tape" in html, True)
     check("  and does not blank out of hours",
-          "closed up " in html or "closed down " in html, True)
+          "'closed'+(c<0?'down':'up')" in html.replace(" ", ""), True,
+          "the close-mode mover item still exists after the text was shortened")
     check("the reading switches to the past tense",
           "At the close on" in html, True)
     check("the three new tables say when they first fill",

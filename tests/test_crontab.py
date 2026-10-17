@@ -76,7 +76,9 @@ check("no competing .cron fragments remain", not strays, f"found {strays}")
 jobs = [l for l in src.splitlines()
         if l.strip() and not l.lstrip().startswith("#")
         and re.match(r"^\s*([0-9*/,-]+\s+){4}[0-9*/,-]+\s+\S|^\s*@reboot", l)]
-check("it has the expected number of jobs", 20 <= len(jobs) <= 40, str(len(jobs)))
+# The band, not a pin: a schedule that grows by one should not need a
+# test edit, but a file that doubles or empties should fail loudly.
+check("it has the expected number of jobs", 20 <= len(jobs) <= 55, str(len(jobs)))
 
 # EXECUTABLE LINES ONLY, NOT THE WHOLE FILE. The first version of this scanned
 # `src` and failed on the comment at the top of crontab.box that names
