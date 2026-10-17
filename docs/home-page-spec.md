@@ -82,20 +82,26 @@ Investment Adviser, and that nothing on it is investment advice.
 ## Tokens — exact values, this is the contract
 Surfaces: ground #080F1C · header #0A1424 · card #0D1829 · rail #0C1626 · rail label
 #101E33 · hairline rgba(232,237,245,0.1) · radius 10px (sector 7px, tile 5px)
-Ink: primary #E8EDF5 · secondary #8A9BB4 · micro-label #7D8FA8 · tertiary #C4D2E4 ·
-link #7FA8D9 / hover #A9C6E8
-Accents, one job each: brand green #00FF88 — LOGO, ACTIVE NAV UNDERLINE, LIVE DOT ONLY ·
-positive #4ADE80 · negative #F87171 · amber #E39F7F with border rgba(217,119,87,0.6) ·
-closed dot #7D8FA8
-HEAT SCALE on day % — deliberately NOT the brand green, so bright green never reads
-as "up":
-  >= +2.00%  #1E8A4C
-  >= +1.00%  #19663D
-  >= +0.30%  #15492F
-  >  -0.30%  #1C2E4A   (neutral)
-  >  -1.00%  #5E1A20
-  >  -2.00%  #8A1F26
-  <= -2.00%  #B4232B
+AMENDED 17 Oct 2026. This page ran a near-black #080F1C ground with IBM Plex,
+which was a fork nobody chose: /, /waitlist, signals, tsl-dashboard and atlas
+all share one palette byte-identically and this page did not. It now shares it.
+The heat ramp below is restated against the navy ground; the seven steps and
+their thresholds are unchanged, only the ground they sit on.
+Ground #0F1F38 · navy #1B3A6B · panel #16294A · line rgba(255,255,255,0.10)
+Ink: primary #FFFFFF · secondary #9FB3D0 · micro-label #8CA3C4 · tertiary #D6E2F2 ·
+link #3BA9EE / hover #7FC4F5
+Accents, one job each: brand sky #3BA9EE · yellow #F5D33D · orange #F58445 ·
+positive #00d68f · negative #ff4d6d · closed dot #8CA3C4
+Typeface: Bebas Neue (display) · Inconsolata (body and numbers) · Crimson Pro (italic)
+HEAT SCALE on day % — still deliberately NOT the accent sky, so the brand colour
+never reads as "up":
+  >= +2.00%  #0E7D55
+  >= +1.00%  #126046
+  >= +0.30%  #15463C
+  >  -0.30%  #1B3A6B   (neutral — the navy ground's own mid tone)
+  >  -1.00%  #5E2233
+  >  -2.00%  #8A2740
+  <= -2.00%  #B42D4C
 Tile states: default border 1px solid rgba(8,15,28,0.45) · selected 2px solid #E8EDF5 ·
 hover outline 2px solid rgba(232,237,245,0.45) offset -2px · tile ink #F8FAFC / sub
 rgba(248,250,252,0.68) · stale fill #131C29, ink #9AA9BE, sub #78889D, border 1px dashed

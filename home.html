@@ -9,45 +9,57 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inconsolata:wght@300;400;500;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300;1,400&display=swap">
 <style>
 :root{
-  --ground:#080F1C; --header:#0A1424; --card:#0D1829; --rail:#0C1626;
-  --rail-label:#101E33; --hair:rgba(232,237,245,0.1);
-  --ink:#E8EDF5; --ink2:#8A9BB4; --micro:#7D8FA8; --ink3:#C4D2E4;
-  --link:#7FA8D9; --link-h:#A9C6E8;
-  --brand:#3BA9EE; --pos:#4ADE80; --neg:#F87171;
-  --amber:#E39F7F; --amber-b:rgba(217,119,87,0.6); --closed:#7D8FA8;
-  --h3:#1E8A4C; --h2:#19663D; --h1:#15492F; --h0:#1C2E4A;
-  --hm1:#5E1A20; --hm2:#8A1F26; --hm3:#B4232B;
-  --tile-ink:#F8FAFC; --tile-sub:rgba(248,250,252,0.68);
-  --stale-fill:#131C29; --stale-ink:#9AA9BE; --stale-sub:#78889D;
+  /* THE BRAND TOKENS, byte-identical to /, /waitlist, signals,
+     tsl-dashboard and atlas. This page ran #080F1C with IBM Plex, which was
+     a fork nobody chose. */
+  --navy-deep:#0F1F38; --navy:#1B3A6B; --navy-panel:#16294A;
+  --sky:#3BA9EE; --yellow:#F5D33D; --orange:#F58445; --white:#FFFFFF;
+  --up:#00d68f; --down:#ff4d6d;
+  --line:rgba(255,255,255,0.10);
+
+  /* The page's own names, remapped onto the brand. Kept rather than renamed
+     so every existing var() site keeps resolving and this stays a palette
+     change, not a rewrite. */
+  --ground:#0F1F38; --header:#16294A; --card:#16294A; --rail:#1B3A6B;
+  --rail-label:#16294A; --hair:rgba(255,255,255,0.10);
+  --ink:#FFFFFF; --ink2:#9FB3D0; --micro:#8CA3C4; --ink3:#D6E2F2;
+  --link:#3BA9EE; --link-h:#7FC4F5;
+  --brand:#3BA9EE; --pos:#00d68f; --neg:#ff4d6d;
+  --amber:#F58445; --amber-b:rgba(245,132,69,0.55); --closed:#8CA3C4;
+  /* heat ramp, green through the navy ground to red */
+  --h3:#0E7D55; --h2:#126046; --h1:#15463C; --h0:#1B3A6B;
+  --hm1:#5E2233; --hm2:#8A2740; --hm3:#B42D4C;
+  --tile-ink:#FFFFFF; --tile-sub:rgba(255,255,255,0.70);
+  --stale-fill:#16294A; --stale-ink:#9FB3D0; --stale-sub:#8CA3C4;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{
-  background:var(--ground); color:var(--ink);
-  font-family:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  background:var(--ground,#0F1F38); color:var(--ink,#FFFFFF);
+  font-family:'Inconsolata',ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:14px; line-height:1.5;
   -webkit-font-smoothing:antialiased;
   overflow-x:hidden;
 }
-.mono,.fig{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+.mono,.fig{font-family:'Inconsolata',ui-monospace,SFMono-Regular,Menlo,monospace;
   font-variant-numeric:tabular-nums}
 .wrap{
   max-width:1480px; margin:0 auto;
   padding-left:max(16px, env(safe-area-inset-left, 0px));
   padding-right:max(16px, env(safe-area-inset-right, 0px));
 }
-a{color:var(--link); text-decoration:none}
-a:hover{color:var(--link-h); text-decoration:underline}
+a{color:var(--link,#3BA9EE); text-decoration:none}
+a:hover{color:var(--link-h,#7FC4F5); text-decoration:underline}
 button{font:inherit; color:inherit; background:none; border:none; cursor:pointer}
-:focus-visible{outline:2px solid var(--ink); outline-offset:2px}
+:focus-visible{outline:2px solid var(--ink,#FFFFFF); outline-offset:2px}
 .micro{font-size:9.5px; font-weight:600; letter-spacing:.14em;
-  text-transform:uppercase; color:var(--micro)}
+  text-transform:uppercase; color:var(--micro,#8CA3C4)}
 
 /* 1 HEADER */
-.hdr{background:var(--header); border-bottom:1px solid var(--hair);
+.hdr{background:var(--header,#16294A); border-bottom:1px solid var(--hair,rgba(255,255,255,0.10));
   position:sticky; top:0; z-index:30}
 .hdr-in{display:flex; align-items:center; gap:18px; padding-block:12px; min-height:52px}
 /* THE LOGO, to the same convention as every other page: 26px asset, an
@@ -58,18 +70,18 @@ button{font:inherit; color:inherit; background:none; border:none; cursor:pointer
 .logo img{height:26px; width:auto; display:block}
 .logo-name{margin-left:11px; padding-left:11px;
   border-left:1px solid rgba(232,237,245,.18);
-  font-size:10px; letter-spacing:3px; color:var(--ink2); white-space:nowrap;
+  font-size:10px; letter-spacing:3px; color:var(--ink2,#9FB3D0); white-space:nowrap;
   line-height:1}
 @media(max-width:560px){.logo-name{display:none}}
 nav{display:flex; gap:16px; margin-left:4px; min-width:0}
-nav a{font-size:13px; color:var(--ink2); padding-bottom:3px; white-space:nowrap}
-nav a:hover{color:var(--ink); text-decoration:none}
-nav a[aria-current="page"]{color:var(--ink); font-weight:600;
-  border-bottom:2px solid var(--brand)}
+nav a{font-size:13px; color:var(--ink2,#9FB3D0); padding-bottom:3px; white-space:nowrap}
+nav a:hover{color:var(--ink,#FFFFFF); text-decoration:none}
+nav a[aria-current="page"]{color:var(--ink,#FFFFFF); font-weight:600;
+  border-bottom:2px solid var(--brand,#3BA9EE)}
 .state{margin-left:auto; display:flex; align-items:center; gap:8px; min-width:0}
-.dot{width:7px; height:7px; border-radius:50%; background:var(--closed); flex:0 0 auto}
-.dot.on{background:var(--brand)}
-.state-txt{font-size:11px; color:var(--ink2); white-space:nowrap}
+.dot{width:7px; height:7px; border-radius:50%; background:var(--closed,#8CA3C4); flex:0 0 auto}
+.dot.on{background:var(--brand,#3BA9EE)}
+.state-txt{font-size:11px; color:var(--ink2,#9FB3D0); white-space:nowrap}
 
 /* THE ACCOUNT MENU. Hidden until a session is confirmed, so a signed-out
    visitor never sees a control that would do nothing.
@@ -81,10 +93,10 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
    rather than no shade. */
 .acct{position:relative; flex:0 0 auto}
 .acct-btn{display:flex; align-items:center; gap:5px; font-size:11px;
-  color:var(--ink2,#8A9BB4); padding:5px 8px;
-  border:1px solid var(--hair,rgba(232,237,245,0.1));
+  color:var(--ink2,#9FB3D0); padding:5px 8px;
+  border:1px solid var(--hair,rgba(255,255,255,0.10));
   border-radius:6px; min-height:30px}
-.acct-btn:hover{color:var(--ink,#E8EDF5);
+.acct-btn:hover{color:var(--ink,#FFFFFF);
   border-color:rgba(232,237,245,.28)}
 .acct-menu{
   position:absolute;
@@ -93,8 +105,8 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   left:auto;
   min-width:210px;
   max-width:min(260px, calc(100vw - 32px));    /* never leaves the viewport */
-  background:var(--card,#0D1829);              /* SOLID, with a fallback */
-  border:1px solid var(--hair,rgba(232,237,245,0.16));
+  background:var(--card,#16294A);              /* SOLID, with a fallback */
+  border:1px solid var(--hair,rgba(255,255,255,0.10));
   border-radius:8px;
   padding:6px;
   z-index:300;                   /* above the sticky header and the page */
@@ -104,17 +116,17 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   text-align:left;
 }
 .acct-menu button{display:block; width:100%; text-align:left; font-size:12px;
-  color:var(--ink,#E8EDF5);
+  color:var(--ink,#FFFFFF);
   background:transparent;         /* identical resting state on both items */
   padding:9px; border-radius:5px; min-height:40px;
   text-transform:none; letter-spacing:normal}
 .acct-menu button:hover,
-.acct-menu button:focus-visible{background:var(--rail-label,#101E33)}
+.acct-menu button:focus-visible{background:var(--rail-label,#16294A)}
 .acct-who{display:block; font-size:10px; line-height:1.4;
-  color:var(--micro,#7D8FA8);
+  color:var(--micro,#8CA3C4);
   text-transform:none; letter-spacing:normal;
   padding:7px 9px 9px; margin-bottom:5px;
-  border-bottom:1px solid var(--hair,rgba(232,237,245,0.1));
+  border-bottom:1px solid var(--hair,rgba(255,255,255,0.10));
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   cursor:default; user-select:none;   /* a label, not a control */
 }
@@ -124,8 +136,8 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
    asserts the rule exists: without it the tag rendered as bare inline text
    jammed against the heading -- "SECTOR STRENGTHCLOSE · FRI 16 OCT". */
 .tag{display:inline-block; font-size:9px; font-weight:600; letter-spacing:.1em;
-  padding:2px 6px; border:1px solid var(--hair,rgba(232,237,245,0.1));
-  border-radius:3px; color:var(--micro,#7D8FA8);
+  padding:2px 6px; border:1px solid var(--hair,rgba(255,255,255,0.10));
+  border-radius:3px; color:var(--micro,#8CA3C4);
   margin-left:8px; white-space:nowrap; vertical-align:middle;
   text-transform:uppercase}
 .tag-live{color:var(--brand,#3BA9EE); border-color:rgba(59,169,238,.5)}
@@ -136,22 +148,22 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   font-size:clamp(19px,2.2vw,27px); font-weight:600; letter-spacing:-.012em;
   line-height:1.3; margin:0; max-width:62ch; text-wrap:balance;
 }
-.prov{margin-top:10px; font-size:11px; color:var(--micro); max-width:72ch}
+.prov{margin-top:10px; font-size:11px; color:var(--micro,#8CA3C4); max-width:72ch}
 
 /* 3 INDEX STRIP */
 .idx{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px;
   padding-bottom:18px}
-.idx-t{background:var(--card); border:1px solid var(--hair); border-radius:10px;
+.idx-t{background:var(--card,#16294A); border:1px solid var(--hair,rgba(255,255,255,0.10)); border-radius:10px;
   padding:11px 12px; min-width:0}
 .idx-n{font-size:10.5px; font-weight:600; letter-spacing:.08em;
-  text-transform:uppercase; color:var(--micro); white-space:nowrap;
+  text-transform:uppercase; color:var(--micro,#8CA3C4); white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis}
 .idx-l{font-size:20px; font-weight:600; letter-spacing:-.01em; margin-top:5px}
 .idx-c{font-size:12.5px; font-weight:600; margin-top:2px}
-.fut{font-size:9px; color:var(--micro); letter-spacing:.06em; margin-top:3px}
+.fut{font-size:9px; color:var(--micro,#8CA3C4); letter-spacing:.06em; margin-top:3px}
 
 /* 4 THE TAPE */
-.tape{background:var(--rail); border-block:1px solid var(--hair);
+.tape{background:var(--rail,#1B3A6B); border-block:1px solid var(--hair,rgba(255,255,255,0.10));
   overflow:hidden; position:relative}
 /* CONSTANT PIXELS PER SECOND, not a constant duration. 86s fixed meant the
    speed depended on how many items the day produced: eight items crawled and
@@ -169,14 +181,14 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   .tape{overflow-x:auto}
 }
 .tape-i{display:flex; align-items:baseline; gap:7px; padding:9px 18px;
-  border-right:1px solid var(--hair); white-space:nowrap}
+  border-right:1px solid var(--hair,rgba(255,255,255,0.10)); white-space:nowrap}
 .tape-s{font-size:12px; font-weight:600}
 .tape-f{font-size:12px; font-weight:600}
-.tape-r{font-size:11px; color:var(--micro)}
+.tape-r{font-size:11px; color:var(--micro,#8CA3C4)}
 .arr{display:inline-block; font-size:11px; line-height:1}
 .arr.dn{transform:rotate(180deg)}
 .badge{font-size:9px; font-weight:600; letter-spacing:.08em; padding:1px 5px;
-  border:1px solid var(--hair); border-radius:3px; color:var(--micro)}
+  border:1px solid var(--hair,rgba(255,255,255,0.10)); border-radius:3px; color:var(--micro,#8CA3C4)}
 
 /* 5 THE FLOOR */
 .floor{display:grid; grid-template-columns:minmax(0,1fr) 352px; gap:12px;
@@ -189,36 +201,36 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   .flash{overflow-y:auto}
 }
 .sect{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px}
-.sbox{background:var(--card); border:1px solid rgba(8,15,28,0.45);
+.sbox{background:var(--card,#16294A); border:1px solid rgba(8,15,28,0.45);
   border-radius:7px; padding:10px; text-align:left; min-width:0;
   min-height:44px; display:block; width:100%}
 .sbox:hover{border-color:rgba(232,237,245,0.28)}
-.sbox[aria-expanded="true"]{grid-column:1/-1; border:2px solid var(--ink)}
+.sbox[aria-expanded="true"]{grid-column:1/-1; border:2px solid var(--ink,#FFFFFF)}
 .s-n{font-size:10.5px; font-weight:600; letter-spacing:.04em;
-  text-transform:uppercase; color:var(--tile-ink)}
+  text-transform:uppercase; color:var(--tile-ink,#FFFFFF)}
 .s-p{font-size:15px; font-weight:600; margin-top:3px}
-.s-ad{font-size:9.5px; color:var(--tile-sub); margin-top:1px}
+.s-ad{font-size:9.5px; color:var(--tile-sub,rgba(255,255,255,0.70)); margin-top:1px}
 .s-c{margin-top:7px; display:flex; flex-direction:column; gap:1px}
-.s-c div{font-size:9.5px; color:var(--tile-sub); display:flex;
+.s-c div{font-size:9.5px; color:var(--tile-sub,rgba(255,255,255,0.70)); display:flex;
   justify-content:space-between; gap:8px; min-width:0}
 .s-c span:first-child{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.s-more{font-size:9.5px; color:var(--micro); margin-top:3px}
+.s-more{font-size:9.5px; color:var(--micro,#8CA3C4); margin-top:3px}
 .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(94px,1fr));
   gap:6px; margin-top:10px}
 .tile{border:1px solid rgba(8,15,28,0.45); border-radius:5px; padding:7px;
   text-align:left; min-width:0; min-height:44px}
 .tile:hover{outline:2px solid rgba(232,237,245,0.45); outline-offset:-2px}
-.tile[aria-pressed="true"]{border:2px solid var(--ink)}
-.t-s{font-size:10px; font-weight:600; color:var(--tile-ink);
+.tile[aria-pressed="true"]{border:2px solid var(--ink,#FFFFFF)}
+.t-s{font-size:10px; font-weight:600; color:var(--tile-ink,#FFFFFF);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.t-p{font-size:12.5px; font-weight:600; color:var(--tile-ink)}
-.t-l{font-size:9.5px; color:var(--tile-sub)}
-.tile.stale{background:var(--stale-fill); border:1px dashed rgba(227,159,127,0.75)}
-.tile.stale .t-s{color:var(--stale-ink)}
-.tile.stale .t-p,.tile.stale .t-l{color:var(--stale-sub)}
+.t-p{font-size:12.5px; font-weight:600; color:var(--tile-ink,#FFFFFF)}
+.t-l{font-size:9.5px; color:var(--tile-sub,rgba(255,255,255,0.70))}
+.tile.stale{background:var(--stale-fill,#16294A); border:1px dashed rgba(227,159,127,0.75)}
+.tile.stale .t-s{color:var(--stale-ink,#9FB3D0)}
+.tile.stale .t-p,.tile.stale .t-l{color:var(--stale-sub,#8CA3C4)}
 .stale-tag{font-size:8.5px; font-weight:600; letter-spacing:.06em;
-  color:var(--amber); margin-top:2px; line-height:1.25}
-.detail{grid-column:1/-1; background:var(--rail); border:1px solid var(--hair);
+  color:var(--amber,#F58445); margin-top:2px; line-height:1.25}
+.detail{grid-column:1/-1; background:var(--rail,#1B3A6B); border:1px solid var(--hair,rgba(255,255,255,0.10));
   border-radius:7px; padding:12px; margin-top:8px}
 .d-top{display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap}
 .d-sym{font-size:14px; font-weight:700; letter-spacing:.04em}
@@ -229,37 +241,37 @@ nav a[aria-current="page"]{color:var(--ink); font-weight:600;
   margin-top:12px}
 .d-f{min-width:0}
 .d-fv{font-size:12.5px; font-weight:600; margin-top:2px}
-.d-say{margin-top:11px; font-size:12px; color:var(--ink3); max-width:62ch}
+.d-say{margin-top:11px; font-size:12px; color:var(--ink3,#D6E2F2); max-width:62ch}
 .rng{height:4px; background:rgba(232,237,245,0.12); border-radius:2px;
   margin-top:7px; position:relative}
-.rng i{position:absolute; top:-3px; width:2px; height:10px; background:var(--ink);
+.rng i{position:absolute; top:-3px; width:2px; height:10px; background:var(--ink,#FFFFFF);
   border-radius:1px}
 
 /* FLASH BLOCKS */
-.blk{background:var(--card); border:1px solid var(--hair); border-radius:10px;
+.blk{background:var(--card,#16294A); border:1px solid var(--hair,rgba(255,255,255,0.10)); border-radius:10px;
   padding:12px; min-width:0}
 .blk h2{font-size:9.5px; font-weight:600; letter-spacing:.14em;
-  text-transform:uppercase; color:var(--micro); margin:0 0 9px}
-.ev{border-top:1px solid var(--hair); padding-top:9px; margin-top:9px}
+  text-transform:uppercase; color:var(--micro,#8CA3C4); margin:0 0 9px}
+.ev{border-top:1px solid var(--hair,rgba(255,255,255,0.10)); padding-top:9px; margin-top:9px}
 .ev:first-of-type{border-top:none; padding-top:0; margin-top:0}
 .ev-h{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap}
 .ev-s{font-size:12px; font-weight:600}
-.ev-t{font-size:10px; color:var(--micro); margin-left:auto}
+.ev-t{font-size:10px; color:var(--micro,#8CA3C4); margin-left:auto}
 .ev-p{font-size:12px; font-weight:600}
-.ev-x{font-size:11.5px; color:var(--ink3); margin-top:4px}
+.ev-x{font-size:11.5px; color:var(--ink3,#D6E2F2); margin-top:4px}
 .ev-src{font-size:10.5px; margin-top:4px}
 .spark{width:100%; height:48px; display:block; margin-bottom:7px}
 .bd-n{display:flex; gap:14px; align-items:baseline; flex-wrap:wrap}
 .bd-v{font-size:15px; font-weight:600}
-.bd-s{font-size:11.5px; color:var(--ink3); margin-top:6px}
-.empty{font-size:11.5px; color:var(--micro); line-height:1.5}
+.bd-s{font-size:11.5px; color:var(--ink3,#D6E2F2); margin-top:6px}
+.empty{font-size:11.5px; color:var(--micro,#8CA3C4); line-height:1.5}
 
 /* 6 CALENDAR */
 .cal{display:grid; grid-template-columns:1fr 1fr; gap:12px; padding-bottom:22px}
 
 /* 7 FOOTER */
-footer{border-top:1px solid var(--hair); padding-block:20px 30px;
-  font-size:11px; color:var(--micro); line-height:1.6}
+footer{border-top:1px solid var(--hair,rgba(255,255,255,0.10)); padding-block:20px 30px;
+  font-size:11px; color:var(--micro,#8CA3C4); line-height:1.6}
 footer p{margin:0 0 6px; max-width:88ch}
 
 /* RESPONSIVE */
@@ -282,6 +294,180 @@ footer p{margin:0 0 6px; max-width:88ch}
   .tiles{grid-template-columns:repeat(auto-fill,minmax(98px,1fr))}
   .hdr-in{flex-wrap:wrap; gap:10px}
   .state{margin-left:0; width:100%}
+}
+/* ──────────────────────────────────────────────────────────────────────
+   8  THE PHONE BUILD
+   Breakpoint 620px. Chosen from this file's own set (560/620/760/1099/1100)
+   rather than adding a fifteenth to the codebase: 620 is already where .idx,
+   .sect, .cal and .d-row collapse to one column, so it is the existing phone
+   transition. It sits above 430 (Pro Max) and below 768 (iPad portrait), so
+   phones get the app shell and tablets keep the desktop layout untouched.
+   ────────────────────────────────────────────────────────────────────── */
+
+/* Display type, shared by both widths. */
+.m-h,.sv-n{font-family:'Bebas Neue',Impact,sans-serif; letter-spacing:.02em;
+  line-height:1; margin:0}
+.flash-p,.bbar{display:none}          /* phone build; desktop layout unchanged */
+.flash-p{font-family:'Crimson Pro',Georgia,serif; font-style:italic;
+  font-size:16px; line-height:1.45; color:var(--ink3,#D6E2F2);
+  margin:10px 0 0; max-width:62ch}
+
+/* The breadth bar: one two-tone rule, not two numbers in a list. */
+.bbar{margin-top:14px}
+.bbar-t{display:flex; height:7px; border-radius:4px; overflow:hidden;
+  background:var(--navy,#1B3A6B)}
+.bbar-t i{display:block; height:100%}
+#bbarUp,#svUp{background:var(--up,#00d68f)}
+#bbarDn,#svDn{background:var(--down,#ff4d6d)}
+.bbar-l{display:flex; justify-content:space-between; margin-top:7px;
+  font-size:12px}
+.bbar-l span:first-child{color:var(--up,#00d68f)}
+.bbar-l span:last-child{color:var(--down,#ff4d6d)}
+.bbar-l span:nth-child(2){color:var(--micro,#8CA3C4)}
+
+/* Sector card additions. Rendered at every width but shown only below the
+   breakpoint, so the desktop grid is byte-for-byte the layout it was. */
+.s-ct,.s-bar,.s-br{display:none}
+
+.m-only{display:none}
+
+@media (max-width:620px){
+  .m-only{display:block}
+  .flash-p,.bbar{display:block}
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+
+  /* NOTHING UNDER 12px ON A PHONE. Measured across all four views, not
+     assumed: .tag, .badge, .idx-n and .s-n were each still under it. */
+  .micro,.blk h2{font-size:12px; letter-spacing:.1em}
+  .s-ad,.s-more,.fut,.prov,.empty,.t-l,.t-s,.ev-x,footer{font-size:12px}
+  .tape-r,.tape-s,.tape-f{font-size:13px}
+  .tag,.tag-live,.badge,.idx-n,.s-n,.stale-tag{font-size:12px}
+
+  /* 44px MINIMUM ON EVERY TARGET. */
+  .logo{min-height:44px; display:flex; align-items:center}
+  .m-all{min-height:44px; display:inline-flex; align-items:center;
+    padding-left:12px}
+
+  /* Header: the wordmark and the nav give way to the tab bar. */
+  .hdr nav{display:none}
+  .hdr-in{flex-wrap:nowrap; gap:10px}
+  .state{margin-left:auto; width:auto; min-width:0; overflow:hidden}
+  .state-txt{font-size:12px; white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; display:block; max-width:100%}
+  .hdr-in{min-width:0}
+  .logo-name{display:none}
+
+  /* 1 THE READING */
+  .reading{padding-block:18px 14px}
+  .reading p#reading{font-family:'Bebas Neue',Impact,sans-serif;
+    font-size:26px; line-height:1.06; letter-spacing:.01em; font-weight:400;
+    color:var(--yellow,#F5D33D); text-transform:uppercase; max-width:none}
+  .prov{margin-top:12px}
+
+  /* 2 INDEX LEVELS — six rows become one band. */
+  .idx{display:flex; grid-template-columns:none; gap:9px; overflow-x:auto;
+    scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch;
+    padding-bottom:14px; margin-inline:-16px; padding-inline:16px}
+  .idx::-webkit-scrollbar{display:none}
+  /* The USDINR card carries an expiry disclosure the others do not, and it
+     set the height of the whole band -- including the part scrolled out of
+     view, which read as a void. Clamped to two lines rather than hidden: the
+     "not the spot rate" caveat is the point of it. */
+  .idx{align-items:flex-start}
+  .idx-t{flex:0 0 150px; scroll-snap-align:start; min-height:44px}
+  .fut{display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden; line-height:1.3}
+  .idx-l{font-size:19px}
+
+  /* 3 SECTOR STRENGTH — two columns, ranked, with the bar and the breadth. */
+  .sect{grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px}
+  .sbox{min-height:44px; padding:11px 12px}
+  .s-n{display:flex; align-items:baseline; justify-content:space-between; gap:6px}
+  .s-ct{display:inline; color:var(--micro,#8CA3C4); font-size:12px}
+  .s-p{font-size:19px; margin-top:3px}
+  .s-bar{display:block; height:4px; border-radius:3px; margin-top:8px;
+    background:var(--navy,#1B3A6B); overflow:hidden}
+  .s-bar i{display:block; height:100%}
+  .s-br{display:block; margin-top:7px; font-size:12px; color:var(--micro,#8CA3C4)}
+  .s-ad,.s-c,.s-more{display:none}
+  .sbox[aria-expanded="true"]{grid-column:auto; border-width:1px}
+  .sbox .tiles,.sbox .d{display:none}
+
+  /* 4 THE TAPE, as a list. */
+  .tape{display:none}
+  .m-h{font-size:30px; color:var(--white,#FFFFFF); margin-top:4px}
+  .chips{display:flex; gap:7px; overflow-x:auto; padding:14px 0 4px;
+    margin-inline:-16px; padding-inline:16px}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto; min-height:44px; padding:0 14px; border-radius:9px;
+    border:1px solid var(--hair,rgba(255,255,255,0.10));
+    background:var(--card,#16294A); color:var(--ink2,#9FB3D0);
+    font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    display:flex; align-items:center; gap:7px}
+  .chip[aria-pressed="true"]{border-color:var(--sky,#3BA9EE);
+    color:var(--sky,#3BA9EE); background:rgba(59,169,238,0.10)}
+  .chip b{font-weight:600; color:var(--white,#FFFFFF)}
+  .mlist{display:flex; flex-direction:column; gap:7px; margin-top:12px}
+  .mrow{display:grid; grid-template-columns:auto 1fr auto; gap:9px;
+    align-items:baseline; min-height:44px; padding:10px 12px 10px 13px;
+    background:var(--card,#16294A); border-radius:9px;
+    border-left:3px solid var(--navy,#1B3A6B); text-align:left; width:100%}
+  .mrow.up{border-left-color:var(--up,#00d68f)}
+  .mrow.dn{border-left-color:var(--down,#ff4d6d)}
+  .mrow .arr{font-size:12px}
+  .mrow .sym{font-size:14px; font-weight:700; color:var(--white,#FFFFFF)}
+  .mrow .why{grid-column:2/4; font-size:12px; color:var(--micro,#8CA3C4);
+    margin-top:3px}
+  .mrow .pc{font-size:14px; font-weight:600}
+  .m-all{float:right; font-size:12px; letter-spacing:.06em; color:var(--sky,#3BA9EE)}
+  .m-foot{text-align:center; font-size:12px; color:var(--micro,#8CA3C4);
+    letter-spacing:.1em; text-transform:uppercase; padding:16px 0 4px}
+
+  /* 5 SECTOR DETAIL */
+  .sv-top{display:flex; align-items:flex-end; justify-content:space-between;
+    gap:12px; padding-top:6px}
+  .sv-n{font-size:40px; color:var(--white,#FFFFFF)}
+  .sv-p{font-size:26px; font-weight:600}
+  .sv-sub{font-size:12px; color:var(--micro,#8CA3C4); margin-top:5px}
+  .sv-rank{font-family:'Crimson Pro',Georgia,serif; font-style:italic;
+    font-size:15px; color:var(--ink3,#D6E2F2); margin-top:12px}
+  #svTiles .tiles{margin-top:12px}
+
+  /* 6 THE TAB BAR */
+  .tabs{position:fixed; left:0; right:0; bottom:0; z-index:40;
+    display:grid; grid-template-columns:repeat(4,1fr);
+    background:var(--header,#16294A);
+    border-top:1px solid var(--hair,rgba(255,255,255,0.10));
+    padding-bottom:env(safe-area-inset-bottom,0px)}
+  .tab{min-height:56px; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:3px; font-size:12px; letter-spacing:.07em;
+    text-transform:uppercase; color:var(--micro,#8CA3C4)}
+  .tab-i{font-size:15px; line-height:1}
+  .tab[aria-current="page"]{color:var(--sky,#3BA9EE);
+    box-shadow:inset 0 2px 0 var(--sky,#3BA9EE)}
+
+  /* VIEW SWITCHING. One DOM; each view shows its own sections.
+     Every hide and every show is one class or one attribute deep, so the
+     show always outranks the hide. An earlier draft hid the index band with
+     #ix-h+.idx -- an id selector -- which silently beat the show rule and
+     left the market view with no index band at all. */
+  .reading,
+  section[aria-labelledby="ix-h"],
+  #wmBlock,
+  .floor,.cal,#tapeView,#secView,.tape{display:none}
+
+  html[data-view="market"] .reading,
+  html[data-view="market"] section[aria-labelledby="ix-h"],
+  html[data-view="market"] #wmBlock{display:block}
+  html[data-view="tape"] #tapeView{display:block}
+  html[data-view="sectors"] .floor{display:block}
+  html[data-view="sectors"] .flash{display:none}
+  html[data-view="events"] .floor{display:block}
+  html[data-view="events"] .centre{display:none}
+  html[data-view="events"] .flash{display:block}
+  html[data-view="events"] .cal{display:grid}
+  html[data-detail="1"] .floor{display:none}
+  html[data-detail="1"] #secView{display:block}
 }
 </style>
 </head>
@@ -319,6 +505,18 @@ footer p{margin:0 0 6px; max-width:88ch}
   <section class="reading" aria-labelledby="rd-h">
     <h1 class="micro" id="rd-h">The reading</h1>
     <p id="reading">Reading the market&hellip;</p>
+    <!-- THE FLASH IS THE READING. One validated paragraph per session out of
+         market_flash, written by the EOD job and checked by its own validator
+         before it was stored. Nothing is composed here. -->
+    <p class="flash-p" id="flashP" hidden></p>
+    <div class="bbar" id="bbar" hidden>
+      <div class="bbar-t" aria-hidden="true"><i id="bbarUp"></i><i id="bbarDn"></i></div>
+      <div class="bbar-l">
+        <span class="fig" id="bbarUpN"></span>
+        <span class="fig" id="bbarTot"></span>
+        <span class="fig" id="bbarDnN"></span>
+      </div>
+    </div>
     <div class="prov" id="prov"></div>
   </section>
 
@@ -328,10 +526,27 @@ footer p{margin:0 0 6px; max-width:88ch}
   </section>
 </div>
 
+<div class="wrap m-only" id="wmBlock">
+  <section aria-labelledby="wm-h">
+    <h2 class="micro" id="wm-h" style="margin:0 0 8px">What moved<a class="m-all" id="wmAll" href="#tape">All <span id="wmN"></span> &rarr;</a></h2>
+    <div class="mlist" id="wmList"></div>
+  </section>
+</div>
+
 <section class="tape" aria-labelledby="tp-h">
   <h2 class="micro" id="tp-h" style="position:absolute;left:-9999px">Market activity</h2>
   <div class="tape-in" id="tape"></div>
 </section>
+
+<!-- BELOW 620 THE TAPE IS A LIST, NOT A CRAWL. Same items, same reasons, same
+     order as the animated track; the reader sets the pace. -->
+<div class="wrap m-only" id="tapeView">
+  <h2 class="m-h" id="tapeH"></h2>
+  <p class="flash-p" id="tapeSub">Each one carries the reason the percentage cannot tell you.</p>
+  <div class="chips" id="tapeChips"></div>
+  <div class="mlist" id="tapeList"></div>
+  <div class="m-foot" id="tapeFoot"></div>
+</div>
 
 <div class="wrap">
   <section class="floor">
@@ -352,7 +567,37 @@ footer p{margin:0 0 6px; max-width:88ch}
     <div class="blk"><h2>Landed<span id="lb-tag"></span></h2><div id="cal-yday"></div></div>
   </section>
 </div>
+
+<!-- SECTOR DETAIL IS A VIEW, NOT AN EXPANSION. Opening a sector used to take
+     the page from 3,837px to 7,506px by unfolding 154 tiles inline. Below the
+     breakpoint it pushes this instead and the market view keeps its height. -->
+<div class="wrap m-only" id="secView" hidden>
+  <div class="sv-top">
+    <div class="sv-n" id="svName"></div>
+    <div class="sv-p fig" id="svPct"></div>
+  </div>
+  <div class="sv-sub fig" id="svSub"></div>
+  <div class="bbar"><div class="bbar-t" aria-hidden="true"><i id="svUp"></i><i id="svDn"></i></div></div>
+  <div class="sv-rank" id="svRank"></div>
+  <div class="chips" id="svSort"></div>
+  <div id="svTiles"></div>
+  <div class="m-foot" id="svFoot"></div>
+</div>
 </main>
+
+<!-- THE TAB BAR. Market / Tape / Sectors / Events. Events has its own live
+     source -- v_radar_card_latest, written by radar.run_detection -- which is
+     the test it had to pass to earn a tab. -->
+<nav class="tabs m-only" id="tabs" aria-label="Sections">
+  <button class="tab" data-view="market"  aria-current="page">
+    <span class="tab-i" aria-hidden="true">&#9638;</span><span>Market</span></button>
+  <button class="tab" data-view="tape">
+    <span class="tab-i" aria-hidden="true">&#9776;</span><span>Tape</span></button>
+  <button class="tab" data-view="sectors">
+    <span class="tab-i" aria-hidden="true">&#9783;</span><span>Sectors</span></button>
+  <button class="tab" data-view="events">
+    <span class="tab-i" aria-hidden="true">&#9873;</span><span>Events</span></button>
+</nav>
 
 <footer><div class="wrap">
   <p>This page is market data, published for information only. The Stock Logic is
@@ -382,21 +627,21 @@ var NO_PRICE={CHOLAFIN:1};
    fault; HEGAM clears around 1 December. */
 var NEW_LISTING={HEGAM:'2026-12-01'};
 
-var HEAT=[[2,'var(--h3)'],[1,'var(--h2)'],[0.3,'var(--h1)'],
-          [-0.3,'var(--h0)'],[-1,'var(--hm1)'],[-2,'var(--hm2)']];
+var HEAT=[[2,'var(--h3,#0E7D55)'],[1,'var(--h2,#126046)'],[0.3,'var(--h1,#15463C)'],
+          [-0.3,'var(--h0,#1B3A6B)'],[-1,'var(--hm1,#5E2233)'],[-2,'var(--hm2,#8A2740)']];
 function heat(p){
-  if(p===null||p===undefined||isNaN(p))return 'var(--h0)';
+  if(p===null||p===undefined||isNaN(p))return 'var(--h0,#1B3A6B)';
   var v=+p;
-  if(v>=2)return 'var(--h3)';
-  if(v>=1)return 'var(--h2)';
-  if(v>=0.3)return 'var(--h1)';
-  if(v>-0.3)return 'var(--h0)';
-  if(v>-1)return 'var(--hm1)';
-  if(v>-2)return 'var(--hm2)';
-  return 'var(--hm3)';
+  if(v>=2)return 'var(--h3,#0E7D55)';
+  if(v>=1)return 'var(--h2,#126046)';
+  if(v>=0.3)return 'var(--h1,#15463C)';
+  if(v>-0.3)return 'var(--h0,#1B3A6B)';
+  if(v>-1)return 'var(--hm1,#5E2233)';
+  if(v>-2)return 'var(--hm2,#8A2740)';
+  return 'var(--hm3,#B42D4C)';
 }
-function sign(p){return (p===null||p===undefined||isNaN(p))?'var(--stale-ink)'
-  :(+p>=0?'var(--pos)':'var(--neg)');}
+function sign(p){return (p===null||p===undefined||isNaN(p))?'var(--stale-ink,#9FB3D0)'
+  :(+p>=0?'var(--pos,#00d68f)':'var(--neg,#ff4d6d)');}
 function pct(p,d){ if(p===null||p===undefined||p===''||isNaN(p))return '—';
   var v=+p; return (v>=0?'+':'')+v.toFixed(d===undefined?2:d)+'%'; }
 function num(n,d){ if(n===null||n===undefined||n===''||isNaN(n))return '—';
@@ -439,6 +684,8 @@ var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
           on Friday's close while the tape is on Friday's breaks and the
           index strip is still waiting for its first write. */
        vocabGaps:[],
+       flash:[], view:'market', detail:null, tapeFilter:'all',
+       svSort:'move', tapeCache:[],
        src:{prices:null, priceDate:null, tape:null, events:null, landed:null}};
 
 /* ── WHERE THE DAY CHANGE COMES FROM, IN ORDER ───────────────────
@@ -723,6 +970,18 @@ function hasHistory(p, sessions){
   return h >= sessions;
 }
 
+/* THE FILTER CATEGORIES. One per vocabulary key, in the same five groups the
+   reasons are chosen in, so a chip count and the tape can never disagree. */
+var TAPE_CAT={
+  broke_low:'structure', broke_high:'structure',
+  high_52w:'level', high_20d:'level', low_20d:'level',
+  heavy_volume:'volume', light_volume:'volume',
+  closed_high:'finished', closed_low:'finished',
+  alone_up:'isolation', alone_down:'isolation'
+};
+var TAPE_CAT_LABEL={structure:'Structure', level:'Level', volume:'Volume',
+                    finished:'Finished', isolation:'Alone', other:'Other'};
+
 /* The reasons, in the order they are worth saying. */
 function tapeReason(p, brk, secOf){
   var live = S.src.prices==='live';
@@ -730,9 +989,10 @@ function tapeReason(p, brk, secOf){
 
   function phrase(key, subs, fact, measurement){
     var t = phraseFor(key, subs);
-    if(t) return {text:t};
+    if(t) return {text:t, cat:TAPE_CAT[key]||'other'};
     gaps.push({fact:fact||key, measurement:measurement});
-    return {text: catchAll(fact||key, measurement), improvised:true};
+    return {text: catchAll(fact||key, measurement), improvised:true,
+            cat:TAPE_CAT[key]||'other'};
   }
 
   /* 1 STRUCTURAL -- an event, with a time while it is still live. */
@@ -847,7 +1107,8 @@ function tapeItems(){
          its morning low and still finish up; both are true and they are
          different facts, and the old arrow reported the wrong one. */
       dn: (r.down!==undefined) ? r.down : (c<0),
-      why: r.text
+      why: r.text,
+      cat: r.cat||'other'
     });
   }
 
@@ -886,7 +1147,7 @@ function renderTape(){
   var html=items.map(function(i){
     return '<div class="tape-i">'+
       '<span class="arr'+(i.dn?' dn':'')+'" style="color:'+
-        (i.dn?'var(--neg)':'var(--pos)')+'" aria-hidden="true">&#9650;</span>'+
+        (i.dn?'var(--neg,#ff4d6d)':'var(--pos,#00d68f)')+'" aria-hidden="true">&#9650;</span>'+
       '<span class="tape-s">'+esc(i.sym)+'</span>'+
       (i.p===null?'':'<span class="tape-f fig" style="color:'+sign(i.p)+'">'+
         pct(i.p)+'</span>')+
@@ -958,10 +1219,45 @@ function staleOf(sym,row){
   return null;
 }
 
+/* THE TILE GRID, LIFTED OUT UNCHANGED. The desktop inline expansion and the
+   mobile sector view render the same markup from the same function rather than
+   two copies that drift: min-height:44px, role="button", tabindex="0" and the
+   delegated click all survive exactly as they were. */
+function tilesHtml(rows){
+  return '<div class="tiles">'+rows.map(function(r){
+    var st=staleOf(r.symbol,r);
+    return '<span class="tile'+(st?' stale':'')+'" role="button" tabindex="0"'+
+      ' aria-pressed="'+(S.sel===r.symbol)+'"'+
+      ' data-sym="'+esc(r.symbol)+'"'+
+      (st?'':' style="background:'+heat(r.change_pct)+'"')+'>'+
+      '<div class="t-s">'+esc(r.symbol)+'</div>'+
+      '<div class="t-p fig">'+pct(r.change_pct)+'</div>'+
+      '<div class="t-l fig">'+num(r.ltp)+'</div>'+
+      (st?'<div class="stale-tag">'+esc(st.tag)+'</div>':'')+
+      '</span>';
+  }).join('')+'</div>';
+}
+
+/* The strength bar is scaled to the largest absolute sector move of the day,
+   so the longest bar is always the day's extreme and the rest are readable
+   against it. Recomputed per render rather than held in state. */
+function sectorMaxAbs(){
+  var m=0;
+  (S.sectors||[]).forEach(function(x){
+    var a=Math.abs(parseFloat(x.pct)); if(!isNaN(a)&&a>m)m=a;
+  });
+  return m||1;
+}
+
 function sectorBox(s,expanded){
   var top=s.rows.slice(0,3), more=s.rows.length-top.length;
-  var inner='<div class="s-n">'+esc(s.name)+'</div>'+
+  var w=Math.max(2,Math.round(Math.abs(s.pct)/sectorMaxAbs()*100));
+  var inner='<div class="s-n">'+esc(s.name)+'<span class="s-ct fig">'+
+      s.rows.length+'</span></div>'+
     '<div class="s-p fig" style="color:'+sign(s.pct)+'">'+pct(s.pct)+'</div>'+
+    '<div class="s-bar" aria-hidden="true"><i style="width:'+w+'%;background:'+
+      sign(s.pct)+'"></i></div>'+
+    '<div class="s-br fig">'+s.adv+' of '+s.rows.length+' up</div>'+
     '<div class="s-ad fig">'+s.adv+' advancing · '+s.dec+' declining'+
       (s.counted<s.rows.length
         ? ' · '+s.counted+' of '+s.rows.length+' priced' : '')+'</div>'+
@@ -972,18 +1268,7 @@ function sectorBox(s,expanded){
     }).join('')+'</div>'+
     (more>0?'<div class="s-more">+'+more+' more</div>':'');
   if(expanded){
-    inner+='<div class="tiles">'+s.rows.map(function(r){
-      var st=staleOf(r.symbol,r);
-      return '<span class="tile'+(st?' stale':'')+'" role="button" tabindex="0"'+
-        ' aria-pressed="'+(S.sel===r.symbol)+'"'+
-        ' data-sym="'+esc(r.symbol)+'"'+
-        (st?'':' style="background:'+heat(r.change_pct)+'"')+'>'+
-        '<div class="t-s">'+esc(r.symbol)+'</div>'+
-        '<div class="t-p fig">'+pct(r.change_pct)+'</div>'+
-        '<div class="t-l fig">'+num(r.ltp)+'</div>'+
-        (st?'<div class="stale-tag">'+esc(st.tag)+'</div>':'')+
-        '</span>';
-    }).join('')+'</div>';
+    inner+=tilesHtml(s.rows);
     if(S.sel){
       var row=s.rows.filter(function(r){return r.symbol===S.sel;})[0];
       if(row)inner+=detailHtml(row);
@@ -996,7 +1281,7 @@ function sectorBox(s,expanded){
 function detailHtml(r){
   var c=parseFloat(r.change_pct), px=parseFloat(r.ltp);
   var st=staleOf(r.symbol,r);
-  var col=st?'var(--stale-ink)':sign(c);
+  var col=st?'var(--stale-ink,#9FB3D0)':sign(c);
   var say=st?(NEW_LISTING[r.symbol]
       ? 'Listed too recently to have a comparable history. Building it now.'
       : 'No usable price has been recorded for this symbol.')
@@ -1178,9 +1463,9 @@ function renderBreadth(){
       '<line x1="0" y1="'+mid.toFixed(1)+'" x2="'+w+'" y2="'+mid.toFixed(1)+
         '" stroke="rgba(232,237,245,0.25)" stroke-dasharray="3 3"/>'+
       '<path d="'+d+'" fill="none" stroke="'+
-        (delta>=0?'var(--pos)':'var(--neg)')+'" stroke-width="1.5"/></svg>'+
-    '<div class="bd-n"><span class="bd-v fig" style="color:var(--pos)">'+
-      last.advancing+'</span><span class="bd-v fig" style="color:var(--neg)">'+
+        (delta>=0?'var(--pos,#00d68f)':'var(--neg,#ff4d6d)')+'" stroke-width="1.5"/></svg>'+
+    '<div class="bd-n"><span class="bd-v fig" style="color:var(--pos,#00d68f)">'+
+      last.advancing+'</span><span class="bd-v fig" style="color:var(--neg,#ff4d6d)">'+
       last.declining+'</span>'+
       '<span class="micro">of '+last.tracked+' tracked</span></div>'+
     '<div class="bd-s">Opened at '+(+first.pct_advancing).toFixed(0)+
@@ -1359,6 +1644,194 @@ function mountAccount(){
 }
 
 /* ── BOOT ─────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════
+   THE PHONE VIEWS
+   One DOM, four views, below 620px only. Nothing here runs on desktop
+   except the market_flash read, which both widths show.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* set() is a local helper inside another function, not a global, so the
+   phone module carries its own. textContent, never innerHTML: every value
+   here comes from the database. */
+function mset(id,txt){var e=document.getElementById(id); if(e)e.textContent=txt;}
+
+var MQ = window.matchMedia('(max-width:620px)');
+function isPhone(){ return MQ.matches; }
+
+function setView(v){
+  S.view = v;
+  S.detail = null;
+  document.documentElement.setAttribute('data-view', v);
+  document.documentElement.removeAttribute('data-detail');
+  [].forEach.call(document.querySelectorAll('.tab'), function(b){
+    if(b.getAttribute('data-view')===v) b.setAttribute('aria-current','page');
+    else b.removeAttribute('aria-current');
+  });
+  window.scrollTo(0,0);
+}
+
+function openSector(name){
+  S.detail = name;
+  document.documentElement.setAttribute('data-detail','1');
+  renderSectorView();
+  window.scrollTo(0,0);
+}
+function closeSector(){
+  S.detail = null;
+  document.documentElement.removeAttribute('data-detail');
+  window.scrollTo(0,0);
+}
+
+/* ── 1 THE READING ────────────────────────────────────────────────
+   The flash paragraph is the reading. It is read from market_flash, which the
+   EOD job writes once per session after its own validator has passed it.
+   Nothing is composed in the browser. */
+function renderFlash(){
+  var el=document.getElementById('flashP');
+  var row=(S.flash||[])[0];
+  if(!el) return;
+  if(!row||!row.flash_text){ el.hidden=true; return; }
+  el.textContent=row.flash_text;
+  el.hidden=false;
+}
+
+/* Breadth as one two-tone rule. The counts are the same advancing/declining
+   the reading already states; the bar is the shape of them. */
+function renderBreadthBar(){
+  var wrap=document.getElementById('bbar');
+  if(!wrap) return;
+  var up=0, dn=0, tot=0;
+  (S.prices||[]).forEach(function(p){
+    var c=parseFloat(p.change_pct);
+    if(isNaN(c)||!p.covered) return;
+    tot++; if(c>0)up++; else if(c<0)dn++;
+  });
+  if(!tot){ wrap.hidden=true; return; }
+  var flat=tot-up-dn;
+  document.getElementById('bbarUp').style.width=(up/tot*100)+'%';
+  document.getElementById('bbarDn').style.width=(dn/tot*100)+'%';
+  mset('bbarUpN', up+' up');
+  mset('bbarTot', tot+' traded'+(flat?' · '+flat+' flat':''));
+  mset('bbarDnN', dn+' down');
+  wrap.hidden=false;
+}
+
+/* ── 4 THE TAPE AS A LIST ─────────────────────────────────────────
+   Same items, same order, same reasons as the animated track. The arrow
+   reports the event and the percentage reports the day; they diverge and
+   that is correct. */
+function mrow(i){
+  return '<div class="mrow '+(i.dn?'dn':'up')+'">'+
+    '<span class="arr" style="color:'+(i.dn?'var(--down,#ff4d6d)':'var(--up,#00d68f)')+
+      '">'+(i.dn?'▼':'▲')+'</span>'+
+    '<span class="sym">'+esc(i.sym)+'</span>'+
+    '<span class="pc fig" style="color:'+(i.p===null?'var(--micro,#8CA3C4)':sign(i.p))+'">'+
+      (i.p===null?'—':pct(i.p))+'</span>'+
+    '<span class="why">'+esc(i.why)+'</span>'+
+  '</div>';
+}
+
+function renderTapeList(){
+  var items=S.tapeCache||[];
+  var listEl=document.getElementById('tapeList');
+  if(!listEl) return;
+  mset('tapeH', items.length+' moved 2.5% or more');
+  mset('wmN', String(items.length));
+
+  var counts={}; items.forEach(function(i){counts[i.cat]=(counts[i.cat]||0)+1;});
+  var cats=Object.keys(counts).sort(function(a,b){return counts[b]-counts[a];});
+  var cur=S.tapeFilter||'all';
+  var chips='<button class="chip" data-cat="all" aria-pressed="'+(cur==='all')+
+    '">All <b>'+items.length+'</b></button>';
+  cats.forEach(function(c){
+    chips+='<button class="chip" data-cat="'+c+'" aria-pressed="'+(cur===c)+'">'+
+      esc(TAPE_CAT_LABEL[c]||c)+' <b>'+counts[c]+'</b></button>';
+  });
+  document.getElementById('tapeChips').innerHTML=chips;
+
+  var shown=(cur==='all')?items:items.filter(function(i){return i.cat===cur;});
+  listEl.innerHTML=shown.length
+    ? shown.map(mrow).join('')
+    : '<div class="empty">Nothing in this category today.</div>';
+  mset('tapeFoot', shown.length+' shown');
+
+  /* The market view carries the first three as a preview. */
+  var wm=document.getElementById('wmList');
+  if(wm) wm.innerHTML=items.slice(0,3).map(mrow).join('');
+}
+
+/* ── 5 SECTOR DETAIL ──────────────────────────────────────────────
+   The same tiles the desktop expansion draws, from the same function. */
+function renderSectorView(){
+  if(!S.detail) return;
+  var s=(S.sectors||[]).filter(function(x){return x.name===S.detail;})[0];
+  if(!s) return;
+  mset('svName', s.name);
+  var pe=document.getElementById('svPct');
+  pe.textContent=pct(s.pct); pe.style.color=sign(s.pct);
+  mset('svSub', s.rows.length+' stocks · '+s.adv+' up');
+  var tot=s.rows.length||1;
+  document.getElementById('svUp').style.width=(s.adv/tot*100)+'%';
+  document.getElementById('svDn').style.width=(s.dec/tot*100)+'%';
+
+  /* A rank, not a characterisation. The only claim is its position among the
+     twelve and how many of its own stocks rose -- both counted, neither
+     written. */
+  var rank=(S.sectors||[]).map(function(x){return x.name;}).indexOf(s.name)+1;
+  mset('svRank', 'Ranked '+rank+' of '+(S.sectors||[]).length+' by today’s move, '+
+      'with '+s.adv+' of its '+s.rows.length+' stocks up.');
+
+  var sort=S.svSort||'move';
+  var rows=s.rows.slice();
+  if(sort==='az') rows.sort(function(a,b){return a.symbol<b.symbol?-1:1;});
+  else if(sort==='vol') rows.sort(function(a,b){
+    return (parseFloat(b.volume_ratio)||0)-(parseFloat(a.volume_ratio)||0);});
+  else rows.sort(function(a,b){
+    return (parseFloat(b.change_pct)||0)-(parseFloat(a.change_pct)||0);});
+
+  document.getElementById('svSort').innerHTML=
+    [['move','By move'],['vol','By volume'],['az','A – Z']].map(function(o){
+      return '<button class="chip" data-sort="'+o[0]+'" aria-pressed="'+
+        (sort===o[0])+'">'+o[1]+'</button>';}).join('');
+  document.getElementById('svTiles').innerHTML=tilesHtml(rows);
+  mset('svFoot', rows.length+' stocks');
+}
+
+function renderPhone(){
+  renderFlash();
+  renderBreadthBar();
+  S.tapeCache=tapeItems();
+  renderTapeList();
+  if(S.detail) renderSectorView();
+}
+
+/* ── WIRING ───────────────────────────────────────────────────────
+   One delegated listener, consistent with the rest of the page. */
+document.addEventListener('click', function(e){
+  var t=e.target.closest?e.target.closest('.tab'):null;
+  if(t){ setView(t.getAttribute('data-view')); return; }
+
+  var chip=e.target.closest?e.target.closest('.chip'):null;
+  if(chip){
+    if(chip.hasAttribute('data-cat')){
+      S.tapeFilter=chip.getAttribute('data-cat'); renderTapeList();
+    }else if(chip.hasAttribute('data-sort')){
+      S.svSort=chip.getAttribute('data-sort'); renderSectorView();
+    }
+    return;
+  }
+
+  /* On a phone a sector pushes a view instead of unfolding inline. */
+  var box=e.target.closest?e.target.closest('.sbox'):null;
+  if(box && isPhone()){
+    e.stopPropagation();
+    openSector(box.getAttribute('data-sec'));
+  }
+}, true);
+
+/* Back out of the detail view with the hardware/browser back gesture too. */
+window.addEventListener('popstate', function(){ if(S.detail) closeSector(); });
+
 async function load(){
   var today=istDate();
   /* THE VOCABULARY FIRST. The tape cannot name a fact before the file that
@@ -1380,17 +1853,20 @@ async function load(){
     sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=40', true),
     sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120'),
     sbGet('/rest/v1/intraday_prices?select=*&limit=1000'),
-    sbGet('/rest/v1/daily_closes?select=*&order=session_date.desc&limit=1600')
+    sbGet('/rest/v1/daily_closes?select=*&order=session_date.desc&limit=1600'),
+    sbGet('/rest/v1/market_flash?select=*&order=session_date.desc&limit=2')
   ]);
   S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
   S.breadth=res[3]; S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
-  S.closes=res[7];
+  S.closes=res[7]; S.flash=res[8];
   resolvePrices();
 
   buildSectors();
   renderState(); renderReading(); renderIdx(); renderTape();
   renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
   renderTags();
+  renderPhone();
+  setView(S.view||'market');
   if(marketOpen())setInterval(renderState,1000);
 
   /* The track width changes with the viewport, so the duration has to be

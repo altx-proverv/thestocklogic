@@ -66,10 +66,14 @@ def main() -> int:
     # Every one of these is a number from docs/home-page-spec.md. A heat scale
     # that drifts is a page that lies about the market in a way no reader can
     # detect.
-    for token, hexv in (("--h3", "#1E8A4C"), ("--h2", "#19663D"),
-                        ("--h1", "#15492F"), ("--h0", "#1C2E4A"),
-                        ("--hm1", "#5E1A20"), ("--hm2", "#8A1F26"),
-                        ("--hm3", "#B4232B")):
+    # RESTATED 17 Oct 2026 against the brand ground. The operator ruled the
+    # near-black #080F1C fork out at every width; docs/home-page-spec.md was
+    # amended in the same change. Seven steps and seven thresholds as before --
+    # this is the ramp moved onto navy, not a ramp loosened.
+    for token, hexv in (("--h3", "#0E7D55"), ("--h2", "#126046"),
+                        ("--h1", "#15463C"), ("--h0", "#1B3A6B"),
+                        ("--hm1", "#5E2233"), ("--hm2", "#8A2740"),
+                        ("--hm3", "#B42D4C")):
         check(f"{token} is {hexv}", f"{token}:{hexv}" in html.replace(" ", ""),
               True)
     for want in (">=2", ">=1", ">=0.3", ">-0.3", ">-1", ">-2"):
@@ -83,7 +87,7 @@ def main() -> int:
     # The contract is explicit: #00FF88 is the logo, the active nav underline
     # and the live dot ONLY. If bright green ever becomes "up", every heat
     # tile starts shouting.
-    brand_uses = len(re.findall(r"var\(--brand\)", html))
+    brand_uses = len(re.findall(r"var\(--brand[,)]", html))
     check("brand green is referenced a handful of times, not per tile",
           brand_uses <= 4, True, f"{brand_uses} use(s)")
     check("heat() never returns brand green",
