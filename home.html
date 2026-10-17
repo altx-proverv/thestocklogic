@@ -410,7 +410,16 @@ footer p{margin:0 0 6px; max-width:88ch}
   .tape-r,.tape-s,.tape-f{font-size:13px}
   .tag,.tag-live,.badge,.idx-n,.s-n,.stale-tag{font-size:12px}
 
-  /* 44px MINIMUM ON EVERY TARGET. */
+  /* 44px MINIMUM ON EVERY TARGET, and 12px MINIMUM ON EVERY LABEL, measured
+     with the account menu OPEN. The menu's items were 40px, the button that
+     opens it 30px, and its name, caret and email were all under 12px -- none
+     of which a scan of the closed page can reach, because none of it exists
+     until something is clicked. */
+  .acct-menu a,.acct-menu button{min-height:44px; display:flex;
+    align-items:center}
+  .acct-btn{min-height:44px; font-size:12px}
+  .acct-btn span{font-size:12px}
+  .acct-who{font-size:12px}
   .logo{min-height:44px; display:flex; align-items:center}
   .m-all{min-height:44px; display:inline-flex; align-items:center;
     padding-left:12px}
@@ -418,9 +427,13 @@ footer p{margin:0 0 6px; max-width:88ch}
   /* Header: the wordmark and the nav give way to the tab bar. */
   .hdr nav{display:none}
   .hdr-in{flex-wrap:nowrap; gap:10px}
-  .state{margin-left:auto; width:auto; min-width:0; overflow:hidden}
+  /* NO overflow:hidden HERE. It was added to stop the status line running off
+     the right edge and it clipped the account menu out of existence -- the
+     menu opened, 130px tall with both its items, and was invisible. The
+     clipping belongs on the text, which is the thing that overflows. */
+  .state{margin-left:auto; width:auto; min-width:0}
   .state-txt{font-size:12px; white-space:nowrap; overflow:hidden;
-    text-overflow:ellipsis; display:block; max-width:100%}
+    text-overflow:ellipsis; display:block; max-width:100%; min-width:0}
   .hdr-in{min-width:0}
   .logo-name{display:none}
 
@@ -462,6 +475,13 @@ footer p{margin:0 0 6px; max-width:88ch}
 
   .m-all{float:right; font-size:12px; letter-spacing:.06em; color:var(--sky,#3BA9EE)}
 
+  /* BACK CONTROLS. There were none: closeSector() existed but its only caller
+     was a popstate listener, and nothing ever called pushState, so it was
+     unreachable from the interface. */
+  .sv-back{min-height:44px; display:inline-flex; align-items:center;
+    font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--sky,#3BA9EE); padding:0 10px 0 0; margin-top:6px}
+
   /* 5 SECTOR DETAIL */
   .sv-top{display:flex; align-items:flex-end; justify-content:space-between;
     gap:12px; padding-top:6px}
@@ -480,7 +500,12 @@ footer p{margin:0 0 6px; max-width:88ch}
     padding-bottom:env(safe-area-inset-bottom,0px)}
   .tab{min-height:56px; display:flex; flex-direction:column; align-items:center;
     justify-content:center; gap:3px; font-size:12px; letter-spacing:.07em;
-    text-transform:uppercase; color:var(--micro,#8CA3C4)}
+    text-transform:uppercase; color:var(--micro,#8CA3C4);
+    text-decoration:none; text-align:center; padding:0 2px}
+  .tab:hover{text-decoration:none}
+  /* "Losers/Gainers" is the longest label; it loses the tracking rather than
+     the type size, which stays at the 12px floor. */
+  .tab-lg{letter-spacing:0; font-size:12px}
   .tab-i{font-size:15px; line-height:1}
   .tab[aria-current="page"]{color:var(--sky,#3BA9EE);
     box-shadow:inset 0 2px 0 var(--sky,#3BA9EE)}
@@ -498,15 +523,29 @@ footer p{margin:0 0 6px; max-width:88ch}
   html[data-view="market"] .reading,
   html[data-view="market"] section[aria-labelledby="ix-h"],
   html[data-view="market"] #wmBlock{display:block}
+  /* the Events blocks keep their home at the foot of Market */
+  html[data-view="market"] .floor{display:block}
+  html[data-view="market"] .centre{display:none}
+  html[data-view="market"] .flash{display:block}
+  html[data-view="market"] .cal{display:grid}
   html[data-view="tape"] #tapeView{display:block}
   html[data-view="sectors"] .floor{display:block}
+  html[data-view="sectors"] .centre{display:block}
   html[data-view="sectors"] .flash{display:none}
-  html[data-view="events"] .floor{display:block}
-  html[data-view="events"] .centre{display:none}
-  html[data-view="events"] .flash{display:block}
-  html[data-view="events"] .cal{display:grid}
   html[data-detail="1"] .floor{display:none}
+  html[data-detail="1"] .cal{display:none}
   html[data-detail="1"] #secView{display:block}
+
+  /* THE STOCK VIEW SITS ON TOP OF THE SECTOR VIEW and must be declared after
+     it: html[data-detail="1"] #secView and html[data-stock="1"] #secView have
+     identical specificity, so whichever is written last wins. Declared first,
+     the hide lost and both views rendered stacked. */
+  #stockView{display:none}
+  html[data-stock="1"] #stockView{display:block}
+  html[data-stock="1"] #secView,
+  html[data-stock="1"] .floor,
+  html[data-stock="1"] .cal{display:none}
+  #stBody .detail{margin-top:14px}
 }
 </style>
 </head>
@@ -567,13 +606,13 @@ footer p{margin:0 0 6px; max-width:88ch}
 
 <div class="wrap m-only" id="wmBlock">
   <section aria-labelledby="wm-h">
-    <h2 class="micro" id="wm-h" style="margin:0 0 8px">What moved<a class="m-all" id="wmAll" href="#tape">All <span id="wmN"></span> &rarr;</a></h2>
+    <h2 class="micro" id="wm-h" style="margin:0 0 8px">What moved<button class="m-all" id="wmAll" type="button">All <span id="wmN"></span> &rarr;</button></h2>
     <div class="mlist" id="wmList"></div>
   </section>
 </div>
 
 <section class="tape" aria-labelledby="tp-h">
-  <h2 class="micro" id="tp-h" style="position:absolute;left:-9999px">Market activity</h2>
+  <h2 class="micro" id="tp-h" style="position:absolute;left:-9999px">Losers and gainers</h2>
   <div class="tape-in" id="tape"></div>
 </section>
 
@@ -611,6 +650,7 @@ footer p{margin:0 0 6px; max-width:88ch}
      the page from 3,837px to 7,506px by unfolding 154 tiles inline. Below the
      breakpoint it pushes this instead and the market view keeps its height. -->
 <div class="wrap m-only" id="secView" hidden>
+  <button class="sv-back" id="svBack" type="button">&#8249;&nbsp; Sectors</button>
   <div class="sv-top">
     <div class="sv-n" id="svName"></div>
     <div class="sv-p fig" id="svPct"></div>
@@ -622,20 +662,28 @@ footer p{margin:0 0 6px; max-width:88ch}
   <div id="svTiles"></div>
   <div class="m-foot" id="svFoot"></div>
 </div>
+<!-- A STOCK IS ITS OWN VIEW TOO. Tapping a tile used to set S.sel and render
+     the panel into .floor, which data-detail hides -- so the tap did nothing
+     visible and there was no way back from anywhere. -->
+<div class="wrap m-only" id="stockView" hidden>
+  <button class="sv-back" id="stBack" type="button">&#8249;&nbsp; <span id="stBackTo"></span></button>
+  <div id="stBody"></div>
+</div>
 </main>
 
-<!-- THE TAB BAR. Market / Tape / Sectors / Events. Events has its own live
-     source -- v_radar_card_latest, written by radar.run_detection -- which is
-     the test it had to pass to earn a tab. -->
+<!-- THE TAB BAR. ATLAS had no entry at all on a phone, which made the whole
+     page unreachable from here. Events is gone as a tab: its blocks are not
+     deleted, they now sit at the foot of Market, where they were anyway on
+     desktop. -->
 <nav class="tabs m-only" id="tabs" aria-label="Sections">
-  <button class="tab" data-view="market"  aria-current="page">
+  <button class="tab" data-view="market" type="button" aria-current="page">
     <span class="tab-i" aria-hidden="true">&#9638;</span><span>Market</span></button>
-  <button class="tab" data-view="tape">
-    <span class="tab-i" aria-hidden="true">&#9776;</span><span>Tape</span></button>
-  <button class="tab" data-view="sectors">
+  <button class="tab" data-view="tape" type="button">
+    <span class="tab-i" aria-hidden="true">&#9776;</span><span class="tab-lg">Losers/Gainers</span></button>
+  <button class="tab" data-view="sectors" type="button">
     <span class="tab-i" aria-hidden="true">&#9783;</span><span>Sectors</span></button>
-  <button class="tab" data-view="events">
-    <span class="tab-i" aria-hidden="true">&#9873;</span><span>Events</span></button>
+  <a class="tab" href="/atlas">
+    <span class="tab-i" aria-hidden="true">&#9650;</span><span>ATLAS</span></a>
 </nav>
 
 <footer><div class="wrap">
@@ -723,7 +771,7 @@ var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
           on Friday's close while the tape is on Friday's breaks and the
           index strip is still waiting for its first write. */
        vocabGaps:[],
-       flash:[], view:'market', detail:null, tapeFilter:'all',
+       flash:[], view:'market', detail:null, stock:null, tapeFilter:'all',
        svSort:'move', tapeCache:[],
        src:{prices:null, priceDate:null, tape:null, events:null, landed:null}};
 
@@ -1699,9 +1747,10 @@ function isPhone(){ return MQ.matches; }
 
 function setView(v){
   S.view = v;
-  S.detail = null;
+  S.detail = null; S.stock = null;
   document.documentElement.setAttribute('data-view', v);
   document.documentElement.removeAttribute('data-detail');
+  document.documentElement.removeAttribute('data-stock');
   [].forEach.call(document.querySelectorAll('.tab'), function(b){
     if(b.getAttribute('data-view')===v) b.setAttribute('aria-current','page');
     else b.removeAttribute('aria-current');
@@ -1710,14 +1759,37 @@ function setView(v){
 }
 
 function openSector(name){
-  S.detail = name;
+  S.detail = name; S.stock = null;
   document.documentElement.setAttribute('data-detail','1');
+  document.documentElement.removeAttribute('data-stock');
   renderSectorView();
   window.scrollTo(0,0);
 }
 function closeSector(){
-  S.detail = null;
+  S.detail = null; S.stock = null;
   document.documentElement.removeAttribute('data-detail');
+  document.documentElement.removeAttribute('data-stock');
+  window.scrollTo(0,0);
+}
+
+/* A STOCK IS ITS OWN VIEW. The tile used to set S.sel and let the page's own
+   handler draw the panel into .floor, which data-detail hides -- so the tap
+   produced nothing a reader could see. */
+function openStock(sym){
+  var row=null;
+  (S.sectors||[]).forEach(function(sec){
+    (sec.rows||[]).forEach(function(r){ if(r.symbol===sym) row=r; });
+  });
+  if(!row) return;
+  S.stock=sym; S.sel=sym;
+  document.documentElement.setAttribute('data-stock','1');
+  mset('stBackTo', S.detail||'Sectors');
+  document.getElementById('stBody').innerHTML=detailHtml(row);
+  window.scrollTo(0,0);
+}
+function closeStock(){
+  S.stock=null; S.sel=null;
+  document.documentElement.removeAttribute('data-stock');
   window.scrollTo(0,0);
 }
 
@@ -1847,8 +1919,28 @@ function renderPhone(){
 /* ── WIRING ───────────────────────────────────────────────────────
    One delegated listener, consistent with the rest of the page. */
 document.addEventListener('click', function(e){
-  var t=e.target.closest?e.target.closest('.tab'):null;
-  if(t){ setView(t.getAttribute('data-view')); return; }
+  var c=e.target.closest?e.target:null;
+  if(!c) return;
+
+  /* ATLAS is an anchor, not a view; let the browser follow it. */
+  var tab=e.target.closest?e.target.closest('.tab'):null;
+  if(tab){
+    if(tab.hasAttribute('data-view')) setView(tab.getAttribute('data-view'));
+    return;
+  }
+
+  /* "All 73" used to be href="#tape" -- an anchor to the animated track,
+     which is display:none on a phone, so the tap went nowhere. */
+  if(e.target.closest && e.target.closest('#wmAll')){
+    e.preventDefault(); setView('tape'); return;
+  }
+
+  var back=e.target.closest?e.target.closest('.sv-back'):null;
+  if(back){
+    e.preventDefault(); e.stopPropagation();
+    if(back.id==='stBack') closeStock(); else closeSector();
+    return;
+  }
 
   var chip=e.target.closest?e.target.closest('.chip'):null;
   if(chip){
@@ -1860,16 +1952,27 @@ document.addEventListener('click', function(e){
     return;
   }
 
+  /* On a phone a tile pushes its own view rather than letting the page's
+     handler render a panel into the hidden floor. */
+  var tile=e.target.closest?e.target.closest('.tile'):null;
+  if(tile && isPhone()){
+    e.preventDefault(); e.stopPropagation();
+    openStock(tile.getAttribute('data-sym'));
+    return;
+  }
+
   /* On a phone a sector pushes a view instead of unfolding inline. */
   var box=e.target.closest?e.target.closest('.sbox'):null;
   if(box && isPhone()){
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     openSector(box.getAttribute('data-sec'));
   }
 }, true);
 
-/* Back out of the detail view with the hardware/browser back gesture too. */
-window.addEventListener('popstate', function(){ if(S.detail) closeSector(); });
+/* The browser back gesture unwinds the same stack the back controls do. */
+window.addEventListener('popstate', function(){
+  if(S.stock) closeStock(); else if(S.detail) closeSector();
+});
 
 async function load(){
   var today=istDate();
