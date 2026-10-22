@@ -706,6 +706,34 @@ def main():
                     if is_trading_day(now_ist.date())
                     else "not an NSE trading day"))
 
+    # ── THE CALENDAR IS REFRESHED HERE, DAILY ─────────────────────
+    #
+    # This job already runs every weekday at 13:05 UTC and already owns the
+    # reference data the rest of the chain reads, so it is the natural owner of
+    # the holiday cache too -- and it needs no new cron line, which means no
+    # new schedule to prove fires. A gazetted holiday does not move, so a
+    # refresh a few hours after the close is in good time for the next open.
+    #
+    # A FAILURE HERE IS NOT FATAL. trading_calendar falls back to the cache and
+    # alerts with its age; what must never happen is falling back to a list
+    # somebody typed. See engine/trading_calendar.py for what 2026-10-20 cost.
+    try:
+        from engine.trading_calendar import refresh_from_nse, cache_state
+        refresh_from_nse()
+        _cs = cache_state()
+        log.info(f"holiday calendar refreshed: {_cs['dates']} dates across "
+                 f"{_cs['years']}")
+    except Exception as e:
+        try:
+            from engine.trading_calendar import cache_state
+            _cs = cache_state()
+            log.error(f"HOLIDAY REFRESH FAILED ({e}) — falling back to the "
+                      f"cache fetched {_cs['fetched_at']} "
+                      f"({_cs['age_days']}d old)")
+        except Exception:
+            log.error(f"HOLIDAY REFRESH FAILED ({e}) and the cache is "
+                      f"unreadable — every date will read as NOT a trading day")
+
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     STOCKS_DIR.mkdir(parents=True, exist_ok=True)
 

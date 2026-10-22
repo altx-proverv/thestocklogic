@@ -127,6 +127,7 @@ SUITES = [
     ("feed freshness", [sys.executable, "tests/test_feed_freshness.py"]),
     ("bhavcopy dates", [sys.executable, "tests/test_bhavcopy_dates.py"]),
     ("price basis guard", [sys.executable, "tests/test_price_basis_guard.py"]),
+    ("calendar source", [sys.executable, "tests/test_calendar_source.py"]),
     ("tick sizes", [sys.executable, "tests/test_tick_sizes.py"]),
     ("session report", [sys.executable, "tests/test_session_report.py"]),
     ("unprotected entry", [sys.executable, "tests/test_unprotected_entry.py"]),

@@ -9,6 +9,11 @@ data/snapshots/
 # the Mac reads them in. Ignored so the box cannot stage one, and untracked so
 # the 5-minute `git reset --hard origin/main` cannot wipe one.
 data/artifacts/
+# The fetched NSE holiday calendar. Untracked so the box's 5-minute
+# `git reset --hard origin/main` cannot revert a refresh, and so no hand-edited
+# list can be committed into the trading-day path -- which is the whole point of
+# engine/trading_calendar.py no longer carrying one.
+data/reference/
 reports/
 __pycache__/
 *.pyc

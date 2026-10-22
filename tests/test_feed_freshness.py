@@ -316,16 +316,27 @@ head("ONE TRADING-DAY GATE, AND IT FAILS CLOSED")
 from engine.trading_calendar import (require_trading_day,         # noqa: E402
                                      is_trading_day, NSE_HOLIDAYS)
 
-check("20 Oct 2026 (a real session) passes",
-      require_trading_day(date(2026, 10, 20), "test"), True)
-check("21 Oct 2026 (NSE holiday) is refused",
-      require_trading_day(date(2026, 10, 21), "test"), False)
-check("22 Oct 2026 (NSE holiday) is refused",
-      require_trading_day(date(2026, 10, 22), "test"), False)
+# REPOINTED 2026-10-22, AND THESE THREE WERE WRONG WHEN WRITTEN. They asserted
+# that 20 Oct was a session and 21-22 were holidays, which is what the
+# hand-maintained NSE_HOLIDAYS said. NSE's own holiday-master API says the
+# opposite: 2026-10-20 is DUSSEHRA, and 21 and 22 October were real sessions
+# with genuine bhavcopies of 3,708 and 3,649 rows. The gate mechanism tested
+# here was never the problem; the calendar behind it was, and these assertions
+# encoded the bad data rather than catching it.
+check("20 Oct 2026 is DUSSEHRA — refused",
+      require_trading_day(date(2026, 10, 20), "test"), False,
+      "ATLAS traded this closed market")
+check("21 Oct 2026 was a real session — allowed",
+      require_trading_day(date(2026, 10, 21), "test"), True,
+      "ATLAS stood down for it")
+check("22 Oct 2026 was a real session — allowed",
+      require_trading_day(date(2026, 10, 22), "test"), True)
 check("a Saturday is refused", require_trading_day(date(2026, 10, 24), "test"),
       False)
-check("  both holidays are in the calendar",
-      {"2026-10-21", "2026-10-22"} <= NSE_HOLIDAYS, True)
+check("  the holiday is the one the API names",
+      {"2026-10-20"} <= NSE_HOLIDAYS, True)
+check("  and the two sessions are not in it",
+      bool({"2026-10-21", "2026-10-22"} & set(NSE_HOLIDAYS)), False)
 
 
 class _Boom:

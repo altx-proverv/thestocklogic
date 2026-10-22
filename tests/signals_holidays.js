@@ -55,7 +55,15 @@ check('the page carries a coverage year', !!COV, String(COV));
 
 /* 2 October 2026 is the whole point of this file. */
 check('2026-10-02 is in the stamped list', RAW.indexOf('2026-10-02') >= 0);
-check('the Diwali cluster is too', RAW.indexOf('2026-10-21') >= 0 && RAW.indexOf('2026-10-22') >= 0);
+/* THE CLUSTER MOVED, BECAUSE THE OLD LIST WAS WRONG. 2026-10-21 and -22 were
+   never holidays -- they were real sessions, and NSE's holiday-master API
+   confirms it. The Dussehra closure is 2026-10-20 and the Diwali pair is
+   2026-11-08 (Sun) and 2026-11-10. The stamped list is now fetched, so this
+   checks the real dates. */
+check('the Dussehra closure is in the stamped list', RAW.indexOf('2026-10-20') >= 0);
+check('the real Diwali pair is too', RAW.indexOf('2026-11-08') >= 0 && RAW.indexOf('2026-11-10') >= 0);
+check('and the two phantom holidays are gone',
+      RAW.indexOf('2026-10-21') < 0 && RAW.indexOf('2026-10-22') < 0);
 
 global.document = {
   getElementById: (id) => ({
@@ -95,8 +103,12 @@ check('Mon 2026-10-05 is a trading day', isTradingDay('2026-10-05'));
 console.log('\n── the batch carries across the closure ──');
 check('nextTD(2026-10-01) === 2026-10-05, not 10-02',
       nextTD('2026-10-01') === '2026-10-05', nextTD('2026-10-01'));
-check('nextTD steps the Diwali cluster whole',
-      nextTD('2026-10-20') === '2026-10-23', nextTD('2026-10-20'));
+/* Dussehra: Mon 19 Oct's next session is Wed 21 Oct, stepping over Tue 20. */
+check('nextTD steps Dussehra',
+      nextTD('2026-10-19') === '2026-10-21', nextTD('2026-10-19'));
+/* Diwali-Balipratipada: Mon 9 Nov's next session is Wed 11 Nov. */
+check('nextTD steps the Diwali closure',
+      nextTD('2026-11-09') === '2026-11-11', nextTD('2026-11-09'));
 check('a plain Friday still lands on Monday',
       nextTD('2026-10-09') === '2026-10-12', nextTD('2026-10-09'));
 check('tradingDayOrNext leaves a trading day alone',
@@ -132,18 +144,22 @@ console.log('\n── but a genuinely old batch still trips ──');
 r = stale('2026-09-25', '2026-10-05', true);
 check('25 Sep batch on 5 Oct is STALE', r.stale === true,
       `session ${r.sessionDate} vs expected ${r.expected}`);
-/* 19 Oct is a Monday whose next session is Tue 20 Oct, so by Friday the 23rd it
-   genuinely IS stale -- the first version of this case asserted otherwise and was
-   simply wrong about the dates. The batch that straddles the closure is Tuesday
-   the 20th, whose next session is Friday the 23rd. */
-r = stale('2026-10-19', '2026-10-23', true);
-check('a Mon batch IS stale by Fri across Diwali', r.stale === true,
+/* ACROSS THE REAL DUSSEHRA CLOSURE. This block previously read 19 Oct as a
+   Monday whose next session was Tue 20 Oct, and called a batch dated 20 Oct
+   current on Fri the 23rd. Both followed from the wrong calendar: 20 Oct is
+   DUSSEHRA, so Monday the 19th's next session is Wednesday the 21st and a
+   batch can never be dated the 20th at all.
+
+   sessionDate = nextTD(batch), expected = tradingDayOrNext(today), and stale is
+   sessionDate < expected -- so these are derived, not remembered. */
+r = stale('2026-10-19', '2026-10-21', true);
+check('a Mon batch is CURRENT on Wed, across Dussehra', r.stale === false,
       `session ${r.sessionDate} vs expected ${r.expected}`);
-r = stale('2026-10-20', '2026-10-23', true);
-check('the Tue batch straddling Diwali is CURRENT', r.stale === false,
-      `session ${r.sessionDate} vs expected ${r.expected}`);
-check('  and it is labelled for Fri 23 Oct', r.sessionDate === '2026-10-23',
+check('  and it is labelled for Wed 21 Oct', r.sessionDate === '2026-10-21',
       r.sessionDate);
+r = stale('2026-10-19', '2026-10-23', true);
+check('the same batch IS stale by Friday', r.stale === true,
+      `session ${r.sessionDate} vs expected ${r.expected} — 21 and 22 Oct both traded`);
 
 console.log('\n── the fallback, when the list is missing or expired ──');
 /* Neither extreme is acceptable: suppressing staleness renders an old batch as
