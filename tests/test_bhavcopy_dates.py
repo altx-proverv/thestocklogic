@@ -26,12 +26,18 @@ session against a close from another, which is exactly the signal
 engine/price_basis.feed_discontinuities exists to catch -- and the signals
 batch of 2026-10-20 was built on the duplicate.
 
-WHY THIS IS A RATCHET AND NOT A ZERO-TOLERANCE ASSERTION. There are 25 such
-files in the archive today and deleting them is explicitly not this change's
-job -- repair_bhavcopy --fix owns that, and a nightly job must not delete
-history on its own initiative. So the known set is RECORDED below and a file
-outside it fails. That keeps 25 known defects visible instead of silent, and
-makes the 26th loud.
+WHY THIS IS A RATCHET AND NOT A ZERO-TOLERANCE ASSERTION. 25 files disagreed on
+2026-10-22 and deleting the backlog is explicitly not this change's job --
+repair_bhavcopy --fix owns that, and a nightly job must not delete history on
+its own initiative. So the known set is recorded in
+engine/repair_bhavcopy.KNOWN_MISDATED, production's own list, and a file outside
+it fails. That keeps the backlog visible instead of silent and makes the 26th
+loud.
+
+2026-10-20 IS NOT IN THAT SET, which is what makes it fixed rather than
+recorded: NSE serves no bhavcopy for that date on either endpoint, so there is
+nothing to recover and parse_bhavcopy_csv now refuses the file instead of
+stamping 19-Oct data with it. The session is ABSENT, which is the honest state.
 
 The archive is gitignored, so its contents differ between the box (962 files)
 and a development machine (953). A recorded name that is absent locally is not
@@ -40,10 +46,11 @@ a failure; a mismatch that is not recorded is.
 import csv
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 BHAV = ROOT / "data" / "raw" / "bhavcopy"
 
 failures = []
@@ -56,52 +63,24 @@ def check(label, got, want, note=""):
     print(f"  {label:<58} {str(got)[:26]:<28} {'ok' if ok else 'FAIL':<6} {note}")
 
 
-# ── THE RECORDED SET, measured on the box 2026-10-22 ──────────────
-# Every one of these holds an EARLIER session than its name claims. Five of the
-# 25 are named for non-trading days (NSE served the previous session for a date
-# that never traded); the other 20 are named for genuine sessions, which is the
-# worse half -- a real session is missing from the archive AND another is
-# duplicated under its name.
-KNOWN_MISMATCHED = {
-    "cm01May2024bhav.csv", "cm01May2026bhav.csv", "cm03Apr2026bhav.csv",
-    "cm03Mar2026bhav.csv", "cm05Nov2025bhav.csv", "cm08Mar2024bhav.csv",
-    "cm11Apr2024bhav.csv", "cm14Apr2026bhav.csv", "cm14Nov2023bhav.csv",
-    "cm14Sep2026bhav.csv", "cm15Jan2026bhav.csv", "cm17Apr2024bhav.csv",
-    "cm17Jul2024bhav.csv", "cm17Jun2024bhav.csv", "cm19Sep2023bhav.csv",
-    "cm20May2024bhav.csv", "cm20Nov2024bhav.csv", "cm20Oct2026bhav.csv",
-    "cm22Oct2025bhav.csv", "cm26Jan2026bhav.csv", "cm26Jun2026bhav.csv",
-    "cm26Mar2026bhav.csv", "cm28May2026bhav.csv", "cm29Jun2023bhav.csv",
-    "cm31Mar2026bhav.csv",
-}
+# ── THE RECORDED SET LIVES IN PRODUCTION, NOT HERE ────────────────
+# It was duplicated in this file, which is the same single-source-of-truth
+# mistake the price-basis detector was fixed for. engine/repair_bhavcopy owns
+# the list because it owns the repair; this file asserts against it.
+from engine.repair_bhavcopy import (KNOWN_MISDATED as KNOWN_MISMATCHED,  # noqa: E402
+                                    is_bad, internal_date as _internal_date)
 
-# Saved HTML error pages, not bhavcopies. test_bhavcopy_guard.py owns the guard
-# that stops new ones being written; they are listed here so the date check can
-# report them separately instead of counting them as date mismatches.
+# Saved HTML error pages, not bhavcopies. is_bad() rejects these at write time;
+# they are listed so the date check can report them separately instead of
+# counting them as date mismatches.
 KNOWN_NOT_A_BHAVCOPY = {
     "cm02Oct2025bhav.csv", "cm10Apr2025bhav.csv", "cm15Aug2025bhav.csv",
     "cm25Dec2025bhav.csv", "cm27Aug2025bhav.csv",
 }
 
-DATE_COLS = (("TradDt", "%Y-%m-%d"), ("DATE1", "%d-%b-%Y"))
-
-
 def internal_date(path):
-    """The trading date the FILE claims. (date|None, why)."""
-    try:
-        with open(path, newline="", errors="replace") as fh:
-            rdr = csv.reader(fh)
-            header = [c.strip() for c in next(rdr)]
-            row = next(rdr)
-    except Exception as e:
-        return None, f"unreadable: {type(e).__name__}"
-    for col, fmt in DATE_COLS:
-        if col in header:
-            raw = row[header.index(col)].strip()
-            try:
-                return datetime.strptime(raw, fmt).date(), ""
-            except ValueError:
-                return None, f"{col} unparseable: {raw!r}"
-    return None, f"no date column (header starts {header[:3]})"
+    """Production's reader, so the test cannot drift from what ships."""
+    return _internal_date(Path(path))
 
 
 def filename_date(name):
@@ -201,6 +180,86 @@ else:
         fd, idt = filename_date(n), internal_date(BHAV / n)[0]
         print(f"      {n:<24} name {fd}  file {idt}  "
               f"({(idt - fd).days:+d} day(s))")
+
+print()
+print("THE DOWNLOADER'S TWO GUARDS, FED THE TWO REAL PAYLOADS")
+print("-" * 104)
+# THE EXACT TWO THINGS THAT GOT THROUGH. An HTML error page (five of those are
+# on disk, each one a session absent from every parquet) and a well-formed
+# bhavcopy for the wrong day (cm20Oct2026, which produced a duplicate 20 Oct
+# across the whole universe). Both are fed to the guards that ship.
+import importlib.util as _ilu                                     # noqa: E402
+
+_spec = _ilu.spec_from_file_location("dl", ROOT / "engine/01b_download_bhavcopy.py")
+_dl = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_dl)
+
+_real20 = BHAV / "cm20Oct2026bhav.csv"
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+
+    # (1) THE HTML ERROR PAGE.
+    _html = td / "cm21Jul2026bhav.csv"
+    _html.write_text("<!DOCTYPE html>\n<html><head><title>Error</title></head>"
+                     "<body>Access Denied</body></html>\n")
+    check("an HTML error page is rejected at write time",
+          bool(is_bad(_html)), True, is_bad(_html)[:40])
+
+    # (2) THE REAL cm20Oct2026 CONTENT: legacy layout, DATE1 = 19-Oct-2026,
+    # under a 20-Oct name. Copied verbatim when the archive has it; otherwise
+    # reconstructed with the same defining shape, so this bites on any machine.
+    _wrong = td / "cm20Oct2026bhav.csv"
+    if _real20.exists():
+        _wrong.write_bytes(_real20.read_bytes())
+        _src = f"the real file ({_real20.stat().st_size:,} bytes)"
+    else:
+        _wrong.write_text(
+            "SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, "
+            "LOW_PRICE, LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY\n"
+            "RELIANCE, EQ, 19-Oct-2026, 1211.20, 1212.00, 1228.20, 1201.00, "
+            "1202.00, 1202.00, 1210.00, 15572554\n")
+        _src = "a replica (archive lacks the file on this machine)"
+    _why = is_bad(_wrong)
+    check("a bhavcopy for the WRONG DAY is rejected", bool(_why), True, _src)
+    check("  and the reason names both dates",
+          ("2026-10-19" in _why and "2026-10-20" in _why), True, _why[:46])
+
+    # (3) THE PARSE REFUSES IT rather than stamping from the filename, which is
+    # the behaviour that produced the duplicate.
+    _dl._REFUSED.clear()
+    _got = _dl.parse_bhavcopy_csv(_wrong, date(2026, 10, 20))
+    check("parse_bhavcopy_csv returns NO rows for it", len(_got), 0,
+          "an empty frame is the refusal; build_parquets skips the session")
+    check("  and records the refusal for the alert", len(_dl._REFUSED), 1)
+
+    # (4) THE CONTROL. A correctly dated file passes both and parses.
+    _ok = td / "cm19Oct2026bhav.csv"
+    _ok.write_text(
+        "SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, "
+        "LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY, NO_OF_TRADES, "
+        "DELIV_QTY, DELIV_PER\n"
+        "RELIANCE, EQ, 19-Oct-2026, 1211.20, 1212.00, 1228.20, 1201.00, "
+        "1202.00, 1202.00, 1210.00, 15572554, 100, 50, 40\n")
+    check("a correctly dated file passes the guard", is_bad(_ok), "")
+    _dl._REFUSED.clear()
+    _rows = _dl.parse_bhavcopy_csv(_ok, date(2026, 10, 19))
+    check("  and parses to rows", len(_rows) > 0, True, f"{len(_rows)} row(s)")
+    check("  with nothing refused", len(_dl._REFUSED), 0)
+
+    # (5) THE BACKLOG IS NOT SILENTLY DROPPED. A grandfathered name is still
+    # ingested, loudly, because Hemal asked for the list before anything goes.
+    _grand = td / "cm14Sep2026bhav.csv"
+    _grand.write_text(
+        "SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE, "
+        "LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY, NO_OF_TRADES, "
+        "DELIV_QTY, DELIV_PER\n"
+        "INDIAGLYCO, BE, 11-Sep-2026, 310.40, 310.00, 310.00, 294.90, 294.90, "
+        "294.90, 297.66, 164145, 3256, 50, 40\n")
+    check("a RECORDED mis-dated file is still ingested",
+          len(_dl.parse_bhavcopy_csv(_grand, date(2026, 9, 14))) > 0, True,
+          "grandfathered; repair_bhavcopy --fix clears it")
+    check("  2026-10-20 is NOT grandfathered — that is the fix",
+          "cm20Oct2026bhav.csv" in KNOWN_MISMATCHED, False)
 
 print()
 print("=" * 104)

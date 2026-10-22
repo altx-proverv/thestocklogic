@@ -75,6 +75,65 @@ def _date_of(path: Path):
         return None
 
 
+# ── FILES WHOSE INTERNAL DATE IS KNOWN NOT TO MATCH THEIR NAME ────
+#
+# Measured 2026-10-22 across 962 files. Each holds an EARLIER session than its
+# filename claims, so the session it is named for is ABSENT from every parquet
+# and the one it actually contains is DUPLICATED under two dates.
+#
+# GRANDFATHERED, DELIBERATELY AND TEMPORARILY. parse refuses a mis-dated file,
+# which is the right behaviour -- but applying that to the whole backlog at once
+# would silently drop ~20 sessions from every symbol's history in one rebuild,
+# and Hemal asked for the list before anything is removed. So these are allowed
+# through with a loud warning per run, and `repair_bhavcopy --fix` is what
+# clears them once the list has been read.
+#
+# 2026-10-20 IS DELIBERATELY NOT IN THIS LIST. NSE publishes no bhavcopy for
+# that date on either endpoint -- the modern UDiFF path returns 404 and the
+# legacy path serves 19-Oct content under the 20-Oct name -- so there is nothing
+# to recover and the session is marked absent rather than duplicated. Removing
+# it from this set IS the fix; the file may stay on disk as evidence.
+KNOWN_MISDATED = {
+    "cm01May2024bhav.csv", "cm01May2026bhav.csv", "cm03Apr2026bhav.csv",
+    "cm03Mar2026bhav.csv", "cm05Nov2025bhav.csv", "cm08Mar2024bhav.csv",
+    "cm11Apr2024bhav.csv", "cm14Apr2026bhav.csv", "cm14Nov2023bhav.csv",
+    "cm14Sep2026bhav.csv", "cm15Jan2026bhav.csv", "cm17Apr2024bhav.csv",
+    "cm17Jul2024bhav.csv", "cm17Jun2024bhav.csv", "cm19Sep2023bhav.csv",
+    "cm20May2024bhav.csv", "cm20Nov2024bhav.csv", "cm22Oct2025bhav.csv",
+    "cm26Jan2026bhav.csv", "cm26Jun2026bhav.csv", "cm26Mar2026bhav.csv",
+    "cm28May2026bhav.csv", "cm29Jun2023bhav.csv", "cm31Mar2026bhav.csv",
+}
+
+_DATE_COLS = (("TradDt", "%Y-%m-%d"), ("DATE1", "%d-%b-%Y"))
+
+
+def internal_date(path: Path):
+    """The trading date the FILE ITSELF claims. (date|None, why_not).
+
+    THE FILENAME IS NOT EVIDENCE. 01b stamps every row with the date it asked
+    for, so when NSE serves a different session the rows land under the wrong
+    date and the series gains a duplicate bar indistinguishable from a real one.
+    cm20Oct2026bhav.csv held 19-Oct data and RELIANCE, TCS and INDIAGLYCO all
+    carried byte-identical bars -- volume included -- for the two dates.
+    """
+    import csv as _csv
+    try:
+        with open(path, newline="", errors="replace") as fh:
+            rdr = _csv.reader(fh)
+            header = [c.strip() for c in next(rdr)]
+            row = next(rdr)
+    except Exception as e:
+        return None, f"unreadable ({type(e).__name__})"
+    for col, fmt in _DATE_COLS:
+        if col in header:
+            raw = row[header.index(col)].strip()
+            try:
+                return datetime.strptime(raw, fmt).date(), ""
+            except ValueError:
+                return None, f"{col} unparseable: {raw!r}"
+    return None, f"no date column (header starts {header[:3]})"
+
+
 def is_bad(path: Path) -> str:
     """Reason this file is not a usable bhavcopy, or '' if it looks fine."""
     try:
@@ -90,6 +149,18 @@ def is_bad(path: Path) -> str:
     first = head.split(b"\n", 1)[0].decode("utf-8", "replace")
     if "SYMBOL" not in first.upper() and "TCKRSYMB" not in first.upper():
         return f"unrecognised header: {first[:60]!r}"
+    # ── THE CONTENT MUST BE THE SESSION THE NAME CLAIMS ───────────
+    # This is what the first three checks could not catch: a perfectly
+    # well-formed bhavcopy for the WRONG DAY. 25 of 962 files on 2026-10-22,
+    # and 20 of those named for genuine trading sessions.
+    named = _date_of(path)
+    if named is not None:
+        got, why = internal_date(path)
+        if got is None:
+            return f"date column unusable: {why}"
+        if got != named:
+            return (f"contains {got} but is named for {named} "
+                    f"({(got - named).days:+d} day(s))")
     return ""
 
 

@@ -178,6 +178,11 @@ def csv_filename(d: date) -> str:
 # and drop_duplicates("date") has nothing ambiguous to resolve.
 INGEST_SERIES = ("EQ", "BE")
 
+# Sessions refused at parse time this run. Module-level because parse is called
+# per day from build_parquets and the alert has to be one message, not one per
+# file -- a per-file alert on a 25-file backlog is a thing nobody reads.
+_REFUSED = []
+
 
 def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
     """
@@ -187,7 +192,34 @@ def parse_bhavcopy_csv(csv_path: Path, d: date) -> pd.DataFrame:
 
     Keeps the series in INGEST_SERIES; see the note above for why that is EQ
     and BE rather than EQ alone.
+
+    REFUSES A FILE WHOSE CONTENT IS NOT THE SESSION `d`. This function used to
+    stamp df["date"] = d from the FILENAME and never look at the file's own
+    date column, so a bhavcopy served for the wrong day was ingested as if it
+    were the right one. cm20Oct2026bhav.csv held 19-Oct data and the whole
+    20 Oct session in every parquet was a duplicate of 19 Oct -- RELIANCE, TCS
+    and INDIAGLYCO carried identical bars, volume included.
+
+    AN EMPTY FRAME IS THE REFUSAL. build_parquets skips a session with no rows,
+    so the session is simply ABSENT. A missing session we know about is safe; a
+    fabricated one is not, and this is the difference between the two.
     """
+    from engine.repair_bhavcopy import internal_date, KNOWN_MISDATED
+    _named = internal_date(csv_path)[0]
+    if _named is not None and _named != d:
+        _msg = (f"{csv_path.name} contains {_named}, not {d} "
+                f"({(_named - d).days:+d} day(s))")
+        if csv_path.name in KNOWN_MISDATED:
+            # The recorded backlog, allowed through for now so one rebuild does
+            # not silently drop ~20 sessions. See KNOWN_MISDATED for why.
+            log.warning(f"KNOWN MIS-DATED (grandfathered, still ingested): "
+                        f"{_msg}. Clear with repair_bhavcopy --fix.")
+        else:
+            log.error(f"REFUSING MIS-DATED BHAVCOPY: {_msg}. Session {d} will "
+                      f"be ABSENT from the parquets rather than duplicated.")
+            _REFUSED.append((d, _msg))
+            return pd.DataFrame()
+
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
 
@@ -492,6 +524,32 @@ def build_parquets(trading_days: list):
     if not all_dfs:
         log.error("No data parsed. Check download step.")
         return
+
+    # ── A REFUSED SESSION IS LOUD ─────────────────────────────────
+    #
+    # The whole class of defect here was silence: a bad fetch reported success,
+    # the parse stamped it from the filename, and nobody found out until a
+    # 52-week high came out five times the price. A refusal that only reaches
+    # reports/cron.log is the same failure with a different log line, so it
+    # goes to Telegram once per run with the sessions named.
+    if _REFUSED:
+        _lines = "\n".join(f"• {d}: {why}" for d, why in _REFUSED[:12])
+        log.error("=" * 66)
+        log.error(f"{len(_REFUSED)} SESSION(S) REFUSED — absent from the parquets:")
+        for d, why in _REFUSED:
+            log.error(f"    {d}  {why}")
+        log.error("=" * 66)
+        try:
+            from atlas.reporting.telegram import send
+            send(f"📄 <b>BHAVCOPY REFUSED — {len(_REFUSED)} SESSION(S) ABSENT</b>\n"
+                 f"NSE served a different session than the one requested, so "
+                 f"these are NOT in any parquet rather than being duplicated "
+                 f"under the wrong date:\n<code>{_lines}</code>\n\n"
+                 f"A missing session is safe; a fabricated one is not. Levels "
+                 f"and scores for the affected window are suppressed by "
+                 f"engine/price_basis.py.")
+        except Exception as e:
+            log.error(f"could not send the refusal alert: {e}")
 
     combined = pd.concat(all_dfs, ignore_index=True)
     log.info(f"Total rows: {len(combined):,} across {combined['symbol'].nunique()} symbols")
