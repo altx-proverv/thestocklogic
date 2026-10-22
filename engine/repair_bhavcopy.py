@@ -88,11 +88,17 @@ def _date_of(path: Path):
 # through with a loud warning per run, and `repair_bhavcopy --fix` is what
 # clears them once the list has been read.
 #
-# 2026-10-20 IS DELIBERATELY NOT IN THIS LIST. NSE publishes no bhavcopy for
-# that date on either endpoint -- the modern UDiFF path returns 404 and the
-# legacy path serves 19-Oct content under the 20-Oct name -- so there is nothing
-# to recover and the session is marked absent rather than duplicated. Removing
-# it from this set IS the fix; the file may stay on disk as evidence.
+# 2026-10-20 IS DELIBERATELY NOT IN THIS LIST, and that absence is the fix.
+# NSE publishes no bhavcopy for that date on either endpoint -- the modern UDiFF
+# path returns 404 and the legacy path serves 19-Oct content under the 20-Oct
+# name, which is why that one file was legacy-format when every other 2026 file
+# is UDiFF. It is not a session NSE lost: 2026-10-20 is DUSSEHRA, confirmed
+# against NSE's own holiday-master API, and our NSE_HOLIDAYS does not list it.
+#
+# So there was nothing to recover. The 744 fabricated bars were removed, the
+# file was quarantined off the archive rather than left in it, and a
+# re-download now hits the write-time guard above and is unlinked before it can
+# be cached again. The session is ABSENT, which is the honest state.
 KNOWN_MISDATED = {
     "cm01May2024bhav.csv", "cm01May2026bhav.csv", "cm03Apr2026bhav.csv",
     "cm03Mar2026bhav.csv", "cm05Nov2025bhav.csv", "cm08Mar2024bhav.csv",
