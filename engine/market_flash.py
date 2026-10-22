@@ -412,6 +412,23 @@ def main() -> int:
                     help="print the prompt and both paths; store nothing")
     a = ap.parse_args()
 
+    # NOT A TRADING DAY, NO FLASH. On 2026-10-21, an NSE holiday, this job
+    # stored "Nifty breadth deteriorated sharply with 13.1% of stocks
+    # advancing; 644 declining issues dominated" -- a sentence about a market
+    # that did not open, assembled from breadth_snapshots rows that
+    # rbe_engine had written against a closed feed. Every number in it was
+    # read from a real table and none of them described a session.
+    #
+    # The cron line is `20 13 * * 1-5`, which knows about weekends and nothing
+    # about holidays. That is the right place for the day-of-week filter and
+    # the wrong place for the calendar.
+    #
+    # --dry-run is exempt: it stores nothing, and being able to render the
+    # paragraph on a closed day is how this gets tested.
+    from engine.trading_calendar import require_trading_day
+    if not a.dry_run and not require_trading_day(what="market_flash", logger=log):
+        return 0
+
     try:
         d = gather()
     except Exception as e:

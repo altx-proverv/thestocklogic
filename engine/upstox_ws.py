@@ -13,6 +13,23 @@ Sessions:
 Run: python3 engine/upstox_ws.py
 """
 
+# ── RUN-ANYWHERE BOOTSTRAP ──────────────────────────────────────────
+# cron invokes this script BY FILE PATH:
+#     cd /home/ubuntu/thestocklogic && venv/bin/python3 engine/upstox_ws.py --update
+# Python then puts the SCRIPT'S OWN directory (engine/) on sys.path, not the repo
+# root, so `import engine.trading_calendar` cannot resolve. Same bootstrap and
+# same reason as engine/03b_score.py, where this cost three sessions of the
+# nightly chain on 2026-10-05.
+#
+# ADDED 2026-10-22 with the trading-day gate, and tests/test_crontab.py is what
+# found it needed: that suite checks every file-path script for a package import
+# it could not resolve, and flagged this file the moment the gate's import
+# landed. The gate exists in exactly one place; reaching it requires the root on
+# the path.
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
+# ────────────────────────────────────────────────────────────────────
+
 import os, sys, json, logging, asyncio, time
 from pathlib import Path
 from datetime import datetime, date, time as dtime, timezone, timedelta
@@ -405,6 +422,15 @@ def run_session_update():
 
     if session == "closed":
         log.info("Market closed. No update needed.")
+        return
+
+    # NOT A TRADING DAY, NOTHING TO PUBLISH. The cron line filters weekends
+    # (`* * 1-5`) and knows nothing about the NSE holiday calendar, so every
+    # weekday holiday reached this code and published a snapshot of a closed
+    # market. engine/trading_calendar.require_trading_day is the one gate; see
+    # the note above it for what its absence cost on 2026-10-21/22.
+    from engine.trading_calendar import require_trading_day
+    if not require_trading_day(what="upstox_ws", logger=log):
         return
 
     # Get all instrument keys

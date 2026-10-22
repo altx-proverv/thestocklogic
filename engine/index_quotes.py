@@ -100,6 +100,15 @@ def near_month_usdinr(kite) -> dict:
 
 
 def run() -> int:
+    # NOT A TRADING DAY, NOTHING TO PUBLISH. The cron line filters weekends
+    # (`* * 1-5`) and knows nothing about the NSE holiday calendar, so every
+    # weekday holiday reached this code and published a snapshot of a closed
+    # market. engine/trading_calendar.require_trading_day is the one gate; see
+    # the note above it for what its absence cost on 2026-10-21/22.
+    from engine.trading_calendar import require_trading_day
+    if not require_trading_day(what="index_quotes", logger=log):
+        return 0
+
     from atlas.execution.broker import get_kite
     kite = get_kite()
     if kite is None:

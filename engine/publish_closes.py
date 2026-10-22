@@ -19,6 +19,7 @@ import os
 import sys
 import logging
 from pathlib import Path
+from datetime import date
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -53,6 +54,23 @@ def run(session_date: str = None) -> int:
         log.error(f"no rows for {session_date or 'the newest date'}")
         return 1
     stamp = day["date"].iloc[0].date().isoformat()
+
+    # THE GATE BELONGS ON THE DAY BEING PUBLISHED, not on today. This job is
+    # routinely run for an explicit past session (the `session_date` argument
+    # backfills), so "is today a trading day" would be both the wrong question
+    # and a backfill-breaking one. What must be true is that the stamp about to
+    # be written names a session that existed.
+    #
+    # Nothing has reached this check yet, and that is luck rather than design:
+    # the parquet only ever contains bhavcopy dates and NSE publishes no
+    # bhavcopy for a holiday, so the upstream absence has been doing the
+    # guard's job. An upstream absence is not a guard -- it is a guard that
+    # works until the data source changes.
+    from engine.trading_calendar import require_trading_day
+    if not require_trading_day(date.fromisoformat(stamp), "publish_closes", log):
+        log.error(f"refusing to publish daily_closes for {stamp}: it is not an "
+                  f"NSE trading day")
+        return 1
 
     # ONE ROW PER SYMBOL. The frame carries a row per symbol per direction, so
     # a plain read would publish each symbol twice and let the second silently

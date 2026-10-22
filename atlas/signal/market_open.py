@@ -72,6 +72,7 @@ from atlas.config import (
     SUPABASE_URL, SUPABASE_KEY, LIVE_TRADING_ENABLED, BLOCKING_STATUSES,
     OPEN_STATUSES,
 )
+from atlas import freshness
 from atlas.execution.atlas_entry import enter_trade
 from atlas.execution import reconcile
 from atlas.risk import breaker
@@ -212,6 +213,14 @@ class Session:
         self.quotes_last = 0
         self.quotes_ok = 0
         self.quotes_failed = 0
+        # THE QUOTE SET, DIFFERENCED ACROSS CYCLES. fetch_quotes succeeding is
+        # not the same as the feed being alive: on 2026-10-20 it returned a full
+        # map every cycle for six hours and the map never changed. The cycle is
+        # 60s, which is the interval atlas/freshness.py derived its threshold on.
+        from atlas.freshness import Monitor
+        self.quote_freshness = Monitor("upstox quote set", interval_seconds=60,
+                                       baseline=freshness.fingerprint({}))
+        self.quotes_stale = False
         self.candidates_total = 0
         self.failures = {}
         self.reconcile = {"passes": 0, "opened": 0, "cancelled": 0, "unsettled": 0}
@@ -456,8 +465,17 @@ def fetch_quotes(symbols: list) -> dict:
         return {}
 
 
-def at_zone(sig: dict, ltp: float, direction: str) -> tuple:
+def at_zone(sig: dict, ltp: float, direction: str, fresh: bool = True) -> tuple:
     """(ok, why) -- is the LIVE price positioned to take this zone?
+
+    A FROZEN PRICE IS NOT A PRICE. `fresh=False` refuses outright, before any
+    comparison. Every test below reads as a confident answer -- "LTP 1456.4 in
+    zone 1450.0-1460.0" -- and on 2026-10-20 that sentence was produced 342
+    times from a quote that had not moved since 09:14. The arithmetic was
+    correct and the conclusion was worthless, which is the worst shape a check
+    can have: it cannot be told from a working one by reading its output.
+    Whoever owns the quote owns the freshness; this function's job is to refuse
+    rather than to answer well on bad input.
 
     THIS IS THE SECOND PLACE THE WRONG-ZONE DEFECT LIVED. engine/zone_entry.py
     was fixed on 30 Sep: it had chosen the zone family from `structure_trend`
@@ -491,6 +509,9 @@ def at_zone(sig: dict, ltp: float, direction: str) -> tuple:
     check_entry_range, which together say "price is in the zone, from the right
     side", and that is the condition the bound was a crude proxy for.
     """
+    if not fresh:
+        return False, ("price is stale — the quote feed has stopped updating, "
+                       "so there is no live price to position against")
     lo_in = float(sig.get("entry_low") or 0)
     hi_in = float(sig.get("entry_high") or 0)
     if ltp <= 0:
@@ -975,6 +996,56 @@ def cycle(state: Session) -> dict:
     breaker.record_read(True, "upstox")
     state.quotes_ok += 1
     state.quotes_last = len(quotes)
+
+    # ── IS THE FEED ALIVE, OR MERELY ANSWERING? ───────────────────
+    #
+    # A SUCCESSFUL FETCH IS NOT A LIVE PRICE. Everything above this point was
+    # true all day on 2026-10-20: the request succeeded, the map came back
+    # full, breaker.record_read logged a good read, and the prices were the
+    # ones from 09:14. The NIFTY futures leg read 22894.00 in cycle 1 and
+    # 22894.00 in cycle 360.
+    #
+    # AND THE EXISTING AGE CHECK PASSED. live_sentiment compares the quote's
+    # own timestamp against LIVE_SENTIMENT_MAX_AGE_SECONDS and logged
+    # "[quote 0.0s old]" in every one of those cycles -- Upstox stamps a current
+    # time onto a stale price, so an age from the provider's clock cannot see
+    # this. Only differencing the values we hold can.
+    #
+    # THIS RUNS AFTER EXIT RECONCILIATION, deliberately. Stops, targets,
+    # trailing and the handover are reconciled earlier in this cycle and are
+    # untouched by what follows: a frozen feed stops ATLAS opening risk, never
+    # protecting it.
+    fresh = state.quote_freshness.observe(freshness.fingerprint(quotes))
+    if fresh["stale"] and not state.quotes_stale:
+        state.quotes_stale = True
+        detail = (f"{fresh['detail']} — {len(quotes)} symbol(s) returned, every "
+                  f"price identical across {fresh['identical']} consecutive "
+                  f"cycles")
+        log.error("=" * 70)
+        log.error(f"QUOTE FEED FROZEN — {detail}")
+        log.error("=" * 70)
+        try:
+            from atlas.execution import sentiment_window as SD
+            SD.stand_down("FEED_STALE", detail,
+                          reason_code=SD.REASON_FEED_STALE)
+        except Exception as e:
+            log.error(f"could not stand down on a frozen feed ({e})")
+        alert("QUOTE FEED FROZEN", detail, key="quote_frozen")
+    if state.quotes_stale:
+        # NO EVALUATION ON A DEAD FEED. Returning here rather than passing
+        # fresh=False down to at_zone for every symbol: the stand-down has
+        # fired, so no entry can be taken anyway, and 450 refusal rows per
+        # cycle in atlas_entry_log would bury the one line that matters.
+        # at_zone still refuses on its own (fresh=False) for any caller that
+        # reaches it another way.
+        # THE LIVE VIEW IS NOT REFRESHED AND NOT WIPED. push_live_zones with
+        # no rows is a no-op that returns True, which would report a write that
+        # did not happen. The rows from the last good cycle stay as they are --
+        # the page's own staleness is a separate surface and is not fixed by
+        # overwriting it with frozen prices.
+        out["error"] = "quotes stale"
+        out["live_view"] = False
+        return out
 
     # ENTRIES COME FROM PUBLISHED SIGNALS ONLY. The watchlist is now every
     # symbol carrying a valid unmitigated zone, which is deliberately wider than

@@ -357,6 +357,15 @@ def print_heatmap(sector_df: pd.DataFrame):
 def main():
     log.info("THE STOCK LOGIC — Phase 2: Sector Momentum Engine")
 
+    # NOT A TRADING DAY, NOTHING TO PUBLISH. The cron line filters weekends
+    # (`* * 1-5`) and knows nothing about the NSE holiday calendar, so every
+    # weekday holiday reached this code and published a snapshot of a closed
+    # market. engine/trading_calendar.require_trading_day is the one gate; see
+    # the note above it for what its absence cost on 2026-10-21/22.
+    from engine.trading_calendar import require_trading_day
+    if not require_trading_day(what="07_sector_momentum", logger=log):
+        return
+
     # One return shape now, so the isinstance guard this used to need is gone.
     sector_df, stocks_df = compute_sector_momentum()
 

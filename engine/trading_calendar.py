@@ -72,6 +72,65 @@ def is_trading_day(d: date) -> bool:
     return d.isoformat() not in NSE_HOLIDAYS
 
 
+# ── THE ONE GATE EVERY SESSION-SCOPED WRITER CALLS ────────────────
+#
+# is_trading_day() above is a pure predicate. This is the GATE: it fails
+# closed, it logs in one voice, and it is the single thing a publisher has to
+# call. The difference matters because the predicate can be forgotten and a
+# forgotten predicate is silent.
+#
+# WHAT IT COST TO NOT HAVE THIS. rbe_engine.market_is_open() checked
+# `weekday() >= 5` and the clock and never the holiday list -- a weekend guard
+# wearing a trading-day guard's name. On 2026-10-21 and 2026-10-22, both NSE
+# holidays, it therefore ran a full session: 5,920,860 and 6,007,262 ticks,
+# 89 signals fired against a closed market, and rows written to
+# breadth_snapshots and heavy_quiet for two days that never opened. market_flash
+# then read them and published "breadth deteriorated sharply with 13.1%
+# advancing; 644 declining issues" about a market that did not trade.
+#
+# Four other processes already had the check and had it four different ways --
+# `from engine.trading_calendar import`, `from trading_calendar import` behind a
+# sys.path.insert, inside a try/except that swallowed the ImportError. A guard
+# that each process has to remember, and spell differently, is the bug. This is
+# the spelling.
+def require_trading_day(day: Optional[date] = None, what: str = "",
+                        logger=None) -> bool:
+    """True if `day` (default: today, IST) is an NSE trading day.
+
+    FAILS CLOSED. An unreadable calendar returns False -- a publisher that
+    cannot tell what day it is must not publish a claim about the session. The
+    opposite default is how 2026-10-21 got published.
+
+    `what` names the caller in the log line, so a skipped run says which
+    publisher skipped it rather than appearing as an unexplained silence.
+    """
+    lg = logger or log
+    label = f"{what}: " if what else ""
+    try:
+        d = day or _today_ist()
+        if is_trading_day(d):
+            return True
+        lg.info(f"{label}{d} is not an NSE trading day — nothing to publish")
+        return False
+    except Exception as e:
+        lg.error(f"{label}trading calendar unreadable ({e}) — treating the day "
+                 f"as CLOSED rather than publishing a session that may not "
+                 f"exist")
+        return False
+
+
+def _today_ist() -> date:
+    """Today in IST, not in the box's timezone.
+
+    The box runs UTC. date.today() there rolls over at 05:30 IST, which is
+    before the 09:15 open and so happens to be harmless for an entry gate -- but
+    it is wrong for any publisher that stamps session_date, and relying on
+    "harmless for now" is how the next defect gets written.
+    """
+    from datetime import datetime, timezone, timedelta
+    return datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+
+
 def next_trading_day(from_date: Optional[date] = None) -> date:
     """
     Return the next trading day after from_date.

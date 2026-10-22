@@ -118,7 +118,7 @@ def main() -> int:
 
     print()
     print("=" * 82)
-    print("3 — EXACTLY ONE THING FIRES IT")
+    print("3 — ONLY DECLARED THINGS FIRE IT")
     print("-" * 82)
     # INVERTED 2026-10-15, not deleted. This section asserted that NOTHING
     # called stand_down(), which was the correct invariant for the day the
@@ -126,6 +126,22 @@ def main() -> int:
     # invariant becomes the one that matters now: exactly one caller, and it is
     # the market range breaker. A second caller appearing is something to find
     # here rather than in a session.
+    #
+    # REPOINTED 2026-10-22, AND IT DID ITS JOB FIRST. A second and third caller
+    # appeared and this check is where they surfaced. Both are the feed-staleness
+    # stand-down Hemal asked for after 2026-10-20, when two price feeds froze
+    # and ATLAS made 342 entry decisions against a snapshot taken at 09:14:
+    #
+    #   rbe_engine.feed_is_dead   the Zerodha WebSocket stopped after 498 ticks
+    #   market_open.cycle         the Upstox quote map stopped changing
+    #
+    # The list is DECLARED rather than counted, for the same reason it was
+    # pinned to one name before: the assertion is "only these, and they are
+    # deliberate", not "no more than N". A fourth caller still fails here.
+    #
+    # Each fires with its own reason_code (FEED_STALE_STAND_DOWN), so a frozen
+    # feed stays countable apart from a market reversal in
+    # atlas_entry_log.blocked_by -- section 4 below asserts that.
     callers = []
     for d in ("atlas", "engine", "radar", "tools"):
         for q in (ROOT / d).rglob("*.py"):
@@ -141,9 +157,11 @@ def main() -> int:
                 t = q.read_text(encoding="utf-8", errors="ignore")
             if ".stand_down(" in t:
                 callers.append(q.relative_to(ROOT).as_posix())
-    check("exactly one module calls stand_down()", sorted(set(callers)),
-          ["atlas/execution/range_breaker.py"],
-          "the market range breaker, and nothing else")
+    check("only the declared modules call stand_down()", sorted(set(callers)),
+          ["atlas/execution/range_breaker.py",
+           "atlas/signal/market_open.py",
+           "engine/rbe_engine.py"],
+          "the range breaker and the two feed-staleness guards")
     check("the module names its trigger",
           "range_breaker.market_check" in w_src or "range break" in w_src.lower(),
           True)

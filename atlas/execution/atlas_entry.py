@@ -320,7 +320,7 @@ def allowed_side(ctx: dict) -> tuple:
 
         sentiment   ->  side
         bullish         LONG
-        bearish         cash
+        bearish         SHORT      (cash while ALLOW_SHORT_ENTRIES was False)
         mixed           cash
         unknown         cash
 
@@ -348,10 +348,18 @@ def allowed_side(ctx: dict) -> tuple:
     application of it at entry time. The regime gate's data source is a
     separate job and is deliberately not touched here either.
 
-    SHORTS ARE STILL DISABLED AND THE PATH IS STILL PRESENT. A bearish reading
-    returns cash rather than naming a SHORT, because ALLOW_SHORT_ENTRIES is
-    False -- but the short branch below is kept, not deleted, so re-enabling
-    is a config change and not a rewrite.
+    SHORTS ARE LIVE, 2026-10-16. ALLOW_SHORT_ENTRIES is True (config.py:793,
+    approved by Hemal that morning), so a bearish reading names a SHORT and the
+    branch at the bottom of this function returns it.
+
+    THIS PARAGRAPH SAID THE OPPOSITE FOR SIX DAYS and was read as fact while
+    the 2026-10-19/20 sessions were being investigated. It claimed "SHORTS ARE
+    STILL DISABLED ... because ALLOW_SHORT_ENTRIES is False" on top of a
+    function that returns "SHORT", and the matrix above it said bearish meant
+    cash. Nothing failed; a comment cannot fail. It simply made the wrong answer
+    look like the documented one, which cost real time on the question of why
+    no short had been taken -- the answer was the opening-range gate and the
+    feed, not the flag.
 
     ONE SIDE AT A TIME, never both. This function returns a single direction,
     so a long and a short cannot be opened on the same evaluation cycle.
@@ -387,10 +395,13 @@ def allowed_side(ctx: dict) -> tuple:
 
     # ── BEARISH ───────────────────────────────────────────────────
     #
-    # The side this would name is a SHORT, and shorts are disabled. Kept as a
-    # branch rather than collapsed into the cash return above, so the reason
-    # the engine sat out is the real one and re-enabling shorts is a config
-    # change.
+    # NAMES A SHORT. The flag below is the kill switch, not the normal path:
+    # ALLOW_SHORT_ENTRIES has been True since 2026-10-16, so bearish sentiment
+    # returns "SHORT" and the LONG_ONLY return is what fires only if shorts are
+    # switched back off.
+    #
+    # This comment also said shorts were disabled. See the note in the
+    # docstring: it was wrong from 16 to 22 October and it was believed.
     if not ALLOW_SHORT_ENTRIES:
         return (None, f"bearish sentiment would be a SHORT; ATLAS is "
                       f"long-only ({sreason})", "LONG_ONLY")

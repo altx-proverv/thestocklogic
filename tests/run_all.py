@@ -124,6 +124,7 @@ SUITES = [
     ("sentiment stand-down", [sys.executable,
                               "tests/test_sentiment_standdown.py"]),
     ("range breaker", [sys.executable, "tests/test_range_breaker.py"]),
+    ("feed freshness", [sys.executable, "tests/test_feed_freshness.py"]),
     ("tick sizes", [sys.executable, "tests/test_tick_sizes.py"]),
     ("session report", [sys.executable, "tests/test_session_report.py"]),
     ("unprotected entry", [sys.executable, "tests/test_unprotected_entry.py"]),

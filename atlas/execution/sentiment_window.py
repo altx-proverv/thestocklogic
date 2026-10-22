@@ -76,6 +76,16 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # market does next.
 REASON_STAND_DOWN = "RANGE_BREAK_STAND_DOWN"
 
+# A SECOND TRIGGER, 2026-10-22. A price feed that has stopped updating is not a
+# market reversal and must not be counted as one -- see the reason_code note in
+# state(). Fired by atlas.freshness via rbe_engine's heartbeat and by
+# market_open's quote-set monitor; both mean "we no longer know the price", which
+# is the one condition under which continuing to evaluate entries is worse than
+# stopping. Like a range break it is one-way and entry-only: exits, stops,
+# trailing and the 15:20 handover are untouched, because a frozen feed is a
+# reason to stop opening risk and never a reason to stop protecting it.
+REASON_FEED_STALE = "FEED_STALE_STAND_DOWN"
+
 CANONICAL_FILE = "/var/lib/atlas/sentiment_standdown.json"
 
 
@@ -90,7 +100,7 @@ def _now_ist():
 
 def _blank(day: str) -> dict:
     return {"session_date": day, "stood_down": False, "at": None,
-            "kind": None, "detail": ""}
+            "kind": None, "reason_code": None, "detail": ""}
 
 
 def _load() -> dict:
@@ -149,11 +159,33 @@ def state() -> dict:
             "stood_down": bool(st.get("stood_down")),
             "at": st.get("at"), "kind": st.get("kind"),
             "detail": st.get("detail", ""),
-            "reason_code": REASON_STAND_DOWN if st.get("stood_down") else None,
+            # THE CODE IS A FIELD OF ITS OWN, not the kind and not a constant.
+            #
+            # It was REASON_STAND_DOWN unconditionally, which was right only
+            # while range_breaker was the single caller. A second trigger --
+            # FEED_STALE_STAND_DOWN, live 2026-10-22 -- would then have been
+            # logged into atlas_entry_log.blocked_by as a RANGE BREAK, making a
+            # dead price feed indistinguishable from a market reversal in every
+            # count over that column. This project has shipped a message naming
+            # the wrong mechanism four times; the list is above
+            # REASON_STAND_DOWN.
+            #
+            # AND IT IS NOT `kind` EITHER. The first attempt at this returned
+            # st["kind"], which conflated two things the caller keeps separate:
+            # `kind` is a human label ("RANGE_BREAK") and the code is the
+            # countable bucket ("RANGE_BREAK_STAND_DOWN"). tests/
+            # test_sentiment_standdown.py asserts exactly that distinction and
+            # caught it.
+            #
+            # The fallback reads a file written by an older build, which has no
+            # reason_code: before this change every stand-down was a range
+            # break, so that constant is the correct reading of such a file.
+            "reason_code": (st.get("reason_code") or REASON_STAND_DOWN
+                            ) if st.get("stood_down") else None,
             "file": str(_path())}
 
 
-def stand_down(kind: str, detail: str) -> dict:
+def stand_down(kind: str, detail: str, reason_code: str = None) -> dict:
     """Stop entering for the rest of the session. Both sides. One-way.
 
     CALLED BY range_breaker.market_check(), live as of 2026-10-16. This said
@@ -171,9 +203,15 @@ def stand_down(kind: str, detail: str) -> dict:
     st = _load()
     if st.get("stood_down"):
         return state()
+    # reason_code DEFAULTS TO THE RANGE-BREAK CODE, because that is what every
+    # stand-down was until 2026-10-22 and an omission here must not invent a new
+    # bucket. A caller firing for another reason passes its own; rbe_engine's
+    # feed-death path passes REASON_FEED_STALE.
     st.update({"stood_down": True,
                "at": _now_ist().isoformat(timespec="seconds"),
-               "kind": str(kind), "detail": str(detail)})
+               "kind": str(kind),
+               "reason_code": str(reason_code or REASON_STAND_DOWN),
+               "detail": str(detail)})
     _save(st)
     s = state()
     _alert(s)

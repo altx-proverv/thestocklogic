@@ -26,6 +26,10 @@ to each one because a rule whose cost is invisible gets argued with.
 - **Never invent an expected value in a check. Derive it.** A guessed
   expectation makes the check worthless — and a guess that happens to be wrong
   reads as a product bug.
+- **A reported freshness or health value is a claim, not evidence.**
+  `live_sentiment` logged `[quote 0.0s old]` for all 360 cycles of a dead feed
+  because Upstox stamps a current time onto a frozen price. Difference the
+  value itself, never trust a vendor's or a counter's self-report.
 - **Verify where the thing actually runs**: the box for engine changes, the
   Vercel build for anything user-facing. A local pass proves the local file.
 - **A test that matches nothing passes.** When a pattern stops matching because

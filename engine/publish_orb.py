@@ -33,7 +33,7 @@ import os
 import sys
 import logging
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 # THE BOOTSTRAP IS INLINE, deliberately. cron invokes this BY FILE PATH, so
 # the repo root is not on sys.path and `from atlas...` cannot resolve without
@@ -86,6 +86,23 @@ def _change_pct(symbols: list) -> dict:
 
 def run() -> int:
     st = state()
+
+    # THE SESSION THE BREAKER IS REPORTING MUST BE A REAL ONE. On 2026-10-21
+    # and 2026-10-22, both NSE holidays, this ran and printed "no
+    # opening-range breaks to publish (session 2026-10-22)" -- which read as a
+    # quiet day and meant a closed market. It published nothing only because
+    # the breaker had nothing; with a live-looking feed behind it (rbe_engine
+    # was producing 6M phantom ticks on exactly those two days) it would have
+    # published breaks for a session that never opened.
+    from engine.trading_calendar import require_trading_day
+    try:
+        _day = date.fromisoformat(str(st["session_date"])[:10])
+    except Exception:
+        _day = None
+    if _day is None or not require_trading_day(_day, "publish_orb", log):
+        log.info(f"not publishing orb_breaks for session "
+                 f"{st.get('session_date')!r} — not an NSE trading day")
+        return 0
     rows = [b for b in breaks() if b["scope"] == "symbol" and b["symbol"]]
     log.info(f"breaker session {st['session_date']}: {len(rows)} symbol "
              f"break(s), {st['ranges_held']} range(s) held")

@@ -72,6 +72,10 @@ QUIET_MOVE_PCT = 0.5
 # curve point, so the ratio divides by a number nobody measured. Two curve
 # points in, it means something.
 HEAVY_QUIET_FROM = (9, 45)
+# The heartbeat cadence, and the interval atlas/freshness.py measured its
+# threshold on. Changing this invalidates that derivation -- the monitor says so
+# out loud if the two stop agreeing.
+HEARTBEAT_SECONDS = 60
 BREAKOUT_BUFFER = 0.002   # 0.2% beyond range boundary
 RVOL_MIN        = 1.5
 MARKET_OPEN     = (9, 15)
@@ -88,10 +92,42 @@ def now_ist():
     return datetime.now(IST)
 
 
+_trading_day_memo = {}
+
+
+def is_session_today() -> bool:
+    """Is today an NSE trading day? Memoised per date, fails closed.
+
+    THIS WAS THE HOLE. market_is_open() below tested `weekday() >= 5` and the
+    clock and nothing else, so every NSE holiday that falls on a weekday looked
+    like a full session. On 2026-10-21 and 2026-10-22 this process ran both days
+    end to end -- 5,920,860 and 6,007,262 ticks, 89 signals fired against a
+    closed market -- and wrote breadth_snapshots and heavy_quiet rows for two
+    sessions that never happened. market_flash read those rows and published a
+    sentence about a market that did not open.
+
+    The calendar is not copied here. engine/trading_calendar.require_trading_day
+    is the one gate; this is a memo in front of it, because market_is_open() is
+    reached from the tick path and the answer cannot change within a day.
+    """
+    day = now_ist().date()
+    if day not in _trading_day_memo:
+        try:
+            from engine.trading_calendar import require_trading_day
+            _trading_day_memo[day] = require_trading_day(day, "rbe_engine", log)
+        except Exception as e:
+            # Fails closed, same as the gate itself: a scanner that cannot tell
+            # whether the market is open must not publish a session.
+            log.error(f"trading calendar unreadable ({e}) — treating today as "
+                      f"CLOSED")
+            _trading_day_memo[day] = False
+    return _trading_day_memo[day]
+
+
 def market_is_open():
-    t = now_ist()
-    if t.weekday() >= 5:
+    if not is_session_today():
         return False
+    t = now_ist()
     mins = t.hour * 60 + t.minute
     return MARKET_OPEN[0]*60+MARKET_OPEN[1] <= mins <= MARKET_CLOSE[0]*60+MARKET_CLOSE[1]
 
@@ -430,10 +466,76 @@ class RBEngine:
         log.error(f"WebSocket error: {code} {reason}")
 
 
+def feed_is_dead(engine, kws, verdict: dict) -> None:
+    """The WebSocket has stopped delivering. Stand the session down. Never raises.
+
+    THREE THINGS, IN THIS ORDER, and the order is the point: stop ATLAS from
+    entering, tell the operator, then stop this process. The stand-down goes
+    first because it is the only one of the three that protects money -- an
+    alert nobody reads at 09:18 and a process that exits quietly both leave the
+    entry engine evaluating a frozen price, which is what happened for six
+    hours on 2026-10-20.
+
+    WHAT IT DOES NOT TOUCH. Exits. sentiment_window's stand-down is an entry
+    control by construction -- stops, targets, trailing and the 15:20 GTT
+    handover all continue through it. A dead price feed is a reason to stop
+    opening risk and never a reason to stop protecting what is already open.
+    """
+    detail = verdict.get("detail", "")
+    log.error("=" * 70)
+    log.error(f"FEED DEAD — {detail}")
+    log.error("=" * 70)
+
+    # 1. STAND ATLAS DOWN. One-way, persisted, entry-only, expires at the date
+    #    rollover. Carries its own reason code so a frozen feed is countable
+    #    separately from a market reversal in atlas_entry_log.blocked_by.
+    try:
+        from atlas.execution import sentiment_window as SD
+        SD.stand_down("FEED_STALE", detail,
+                      reason_code=SD.REASON_FEED_STALE)
+    except Exception as e:
+        log.error(f"could not stand ATLAS down ({e}) — the entry engine may "
+                  f"still be evaluating a frozen price. Halt it by hand.")
+
+    # 2. TELL THE OPERATOR. stand_down() sends its own message; this one names
+    #    the feed and the numbers, because "ATLAS stood down" and "the Zerodha
+    #    WebSocket stopped at 09:18 after 498 ticks" call for different actions.
+    try:
+        from atlas.reporting.telegram import send
+        send("📉 <b>RBE FEED IS DEAD</b>\n"
+             f"<code>{str(detail)[:400]}</code>\n\n"
+             f"Ticks received this session: {engine.tick_count}\n"
+             f"Signals fired: {len(engine.fired)}\n\n"
+             "ATLAS has been stood down for the session — no new entries "
+             "either side. EXITS ARE UNAFFECTED. The range scanner is "
+             "stopping; it does not re-arm if the feed comes back.")
+    except Exception as e:
+        log.error(f"could not send the feed-dead alert: {e}")
+
+    # 3. STOP SCANNING. A socket that has delivered nothing for
+    #    MAX_IDENTICAL_INTERVALS cannot produce a breakout, and every further
+    #    cycle against a frozen price is a decision made on a number that is
+    #    not a price.
+    try:
+        kws.close()
+    except Exception as e:
+        log.warning(f"could not close the websocket cleanly: {e}")
+
+
 def main():
     log.info("=" * 50)
     log.info("RBE ENGINE — Range Breakout Scanner")
     log.info("=" * 50)
+
+    # NOT A TRADING DAY, NOTHING TO SCAN. This refusal did not exist until
+    # 2026-10-22 and its absence published two holidays as sessions; see
+    # is_session_today(). It sits before the token read and the socket so a
+    # holiday costs one log line rather than a connection and 6M phantom ticks.
+    if not is_session_today():
+        log.info("Not an NSE trading day — not connecting. Nothing to scan, "
+                 "and nothing may be published for a session that does not "
+                 "exist.")
+        sys.exit(0)
 
     if not RANGE_MAP_FILE.exists():
         log.error("No range map — run rbe_startup.py first")
@@ -473,14 +575,47 @@ def main():
 
     kws.connect(threaded=True)
 
-    # Run until market close
+    # ── THE HEARTBEAT, DIFFERENCED ────────────────────────────────
+    #
+    # This loop used to log engine.tick_count and nothing else. On 2026-10-20 it
+    # printed "Heartbeat — ticks: 498" three hundred and sixty times: the
+    # WebSocket had delivered one tick per subscribed token at 09:14 and then
+    # stopped, and because the number was reported rather than DIFFERENCED,
+    # six hours of total silence read exactly like a busy session. Monday had
+    # delivered 5,770,958 ticks.
+    #
+    # The monitor owns the threshold and the evidence for it; see
+    # atlas/freshness.py. All this loop does is hand it one number per interval
+    # and act on the verdict.
+    from atlas.freshness import Monitor
+    # baseline=0: no ticks yet. Anything above it proves the socket delivered,
+    # even if the delivery happened before the first heartbeat -- which is
+    # exactly what happened on 2026-10-20.
+    ticks = Monitor("rbe tick count", interval_seconds=HEARTBEAT_SECONDS,
+                    baseline=0)
+    prev_count = engine.tick_count
+
     while True:
-        time.sleep(60)
+        time.sleep(HEARTBEAT_SECONDS)
         if not market_is_open():
             log.info(f"Market closed — shutting down. Ticks processed: {engine.tick_count}")
             kws.close()
             break
-        log.info(f"Heartbeat — ticks: {engine.tick_count}, signals fired: {len(engine.fired)}")
+
+        count = engine.tick_count
+        delta = count - prev_count
+        prev_count = count
+        verdict = ticks.observe(count)
+
+        # THE DELTA IS IN THE LINE. A heartbeat whose number a reader has to
+        # difference against the previous line by eye is exactly the thing that
+        # failed on 2026-10-20, and "+0" is the whole finding in two characters.
+        log.info(f"Heartbeat — ticks: {count} (+{delta} this "
+                 f"{HEARTBEAT_SECONDS}s), signals fired: {len(engine.fired)}")
+
+        if verdict["stale"]:
+            feed_is_dead(engine, kws, verdict)
+            break
 
     sys.exit(0)
 
