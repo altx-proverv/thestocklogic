@@ -386,9 +386,27 @@ def main() -> int:
               bool(_fd), True,
               f"{[str(d) for d in _fd]} — a missing session, not a split")
     ig_types = {r["level_type"] for r in levels.compute_all(ig, CFG, None)}
-    for dropped in ("w52_high", "w52_low", "dma_50", "dma_200", "rsi_14"):
-        check(f"  {dropped} is dropped across the split",
-              dropped in ig_types, False)
+    # PER-LOOKBACK, DERIVED FROM THE CONTRACT. This was a flat list of five
+    # level types that all had to be absent, and on the real ex-date that is
+    # wrong: INDIAGLYCO split on 2026-09-02 and this frame ends 2026-10-07, so
+    # the 15-session RSI window does NOT contain the action and rsi_14 is
+    # legitimately computed. The old list only passed because the old detector
+    # dated the split 15 sessions later, at the gap artifact.
+    #
+    # levels.py's rule is "each level gates on its OWN lookback" -- w52 on 252,
+    # dma on its period, rsi on period+1 -- so that is what is asserted, for
+    # every level at once, against bars.action_in_last. It holds on either
+    # archive and it fails if any level stops consulting its own window.
+    for lt, look in (("w52_high", levels.SESSIONS_52W),
+                     ("w52_low", levels.SESSIONS_52W),
+                     ("dma_200", 200), ("dma_50", 50), ("rsi_14", 15)):
+        spans = bars.action_in_last(ig, look)
+        check(f"  {lt} present == window({look}) is clean",
+              lt in ig_types, not spans,
+              f"action in last {look}: {spans}")
+    check("  and the 252-session levels ARE dropped here",
+          ("w52_high" in ig_types, "w52_low" in ig_types), (False, False),
+          "the split is 24 sessions back, well inside 252")
     for kept in ("event_high", "event_low", "pre_event_close"):
         check(f"  {kept} survives (single-session, unaffected)",
               kept in ig_types, True)
