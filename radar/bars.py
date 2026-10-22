@@ -237,51 +237,28 @@ def session_vwap(symbol: str, on: date) -> float | None:
 
 # ── CORPORATE ACTIONS ─────────────────────────────────────────────
 #
-# THE PARQUETS ARE NOT SPLIT-ADJUSTED, and that makes every multi-session level
-# wrong across an action rather than slightly off. INDIAGLYCO split on
-# 2026-09-17: its 52-week high is a pre-split 1219.00, its close is a post-split
-# 382.70, and radar/levels.py would have put "52-week high, +218.53% from here"
-# on a card. That is not a rounding error, it is a fabricated number with
-# exactly the right shape to be believed -- the failure the hard rules exist to
-# prevent.
+# ── THE DETECTOR LIVES IN engine/price_basis.py ───────────────────
 #
-# BHAVCOPY DETECTS IT ITSELF, so no second source is needed: NSE ADJUSTS
-# PREV_CLOSE on the ex-date while the previous row's CLOSE stays unadjusted. A
-# material disagreement between the two is an action, whatever kind it was. We
-# do not need to know the ratio -- only that the series is not comparable
-# across that date.
+# IT WAS HERE, AND HAVING IT HERE WAS HALF THE PROBLEM. radar gated its levels
+# on one copy while engine/02b published high_52w and engine/03b scored
+# pct_from_52w_high with no gate at all, so the same split was refused on a card
+# and acted on in the signal. One detector, two consumers, one place.
 #
-# 15% is well above any ordinary close-to-close discontinuity in the field
-# (prev_close and the prior close agree exactly on a normal session; they differ
-# only on an adjustment) and well below the smallest action worth catching.
-CORP_ACTION_TOLERANCE_PCT = 15.0
-
-
-def corporate_actions(df: pd.DataFrame) -> list:
-    """Dates where the series stops being comparable. [] when clean.
-
-    A MODULE CONSTANT, NOT A CONFIG KEY, deliberately. radar_config is the
-    operator's surface for thresholds that are judgement calls; this is a
-    data-integrity test with one defensible value, and making it editable would
-    invite turning it off to make a card render.
-    """
-    if df is None or len(df) < 2:
-        return []
-    close = df["close"].astype(float).to_numpy()
-    prev = df["prev_close"].astype(float).to_numpy()
-    out = []
-    # Plain loop with an explicit zero guard. The vectorised form needed
-    # mode.use_inf_as_na to keep a division by a zero prior close from becoming
-    # inf, and pandas 3 removed that option -- the box runs pandas 3.0.3, so a
-    # clever one-liner here would have been a local pass and a production
-    # crash. This project has had three of those.
-    for i in range(1, len(df)):
-        prior, p = close[i - 1], prev[i]
-        if not prior or pd.isna(prior) or pd.isna(p):
-            continue
-        if abs((p / prior - 1.0) * 100.0) > CORP_ACTION_TOLERANCE_PCT:
-            out.append(df["date"].iloc[i])
-    return out
+# engine/ is the right home because radar reads engine and never the reverse --
+# the same direction as engine/universe.py and engine/trading_calendar.py. The
+# derivation of the threshold, the 31-of-31 measurement, and what the test still
+# cannot see are all documented there.
+#
+# These are re-exported rather than wrapped so that `bars.corporate_actions` and
+# `bars.discontinuities` keep working for every existing caller.
+from engine.price_basis import (            # noqa: F401
+    CORP_ACTION_GAP_PCT,
+    FEED_CONTINUITY_TOLERANCE_PCT,
+    corporate_actions,
+    feed_discontinuities,
+    discontinuities,
+    spans_discontinuity,
+)
 
 
 def action_in_last(df: pd.DataFrame, sessions: int) -> bool:
@@ -291,14 +268,12 @@ def action_in_last(df: pd.DataFrame, sessions: int) -> bool:
     spans an adjustment and the level must be DROPPED -- not scaled, not
     approximated. Adjusting the series ourselves would mean inventing a ratio
     from a price gap, which is a guess wearing a number's clothes.
+
+    GATES ON THE UNION, via discontinuities(). A changed price basis and a hole
+    in the record both make the window uncomparable, and gating on one while
+    forgetting the other is how this failed the first time.
     """
-    if df is None or len(df) < 2:
-        return False
-    window = df.iloc[-int(sessions):] if sessions < len(df) else df
-    if len(window) < 2:
-        return False
-    first = window["date"].iloc[0]
-    return any(d >= first for d in corporate_actions(df))
+    return spans_discontinuity(df, sessions)
 
 
 def vol_average(df: pd.DataFrame, window: int, through_prior: bool = True) -> float | None:

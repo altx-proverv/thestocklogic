@@ -125,10 +125,11 @@ def ipo_price(df: pd.DataFrame, max_age_years: int, download_floor,
         return None                      # the floor, not a listing
     if (last - first).days > max_age_years * 365:
         return None                      # listed, but too long ago to be useful
-    from radar.bars import corporate_actions
-    if corporate_actions(df):
+    from radar.bars import discontinuities
+    if discontinuities(df):
         # The listing price is on a pre-action scale. There is no honest way to
-        # show it next to today's price.
+        # show it next to today's price. Gates on the union: a hole in the
+        # record makes the first close just as unusable as an adjustment does.
         return None
     return round(_f(df["close"].iloc[0]) or 0, 2) or None
 
@@ -227,8 +228,8 @@ def swing_pivots(df: pd.DataFrame, bars: int = 5, want: int = 3) -> dict:
     # individually rather than dropping the whole set: a stock that split three
     # months ago still has real swing pivots since, and they are the ones a
     # reader cares about.
-    from radar.bars import corporate_actions
-    acts = corporate_actions(df)
+    from radar.bars import discontinuities
+    acts = discontinuities(df)
     floor_date = max(acts) if acts else None
     highs = df["high"].astype(float).to_numpy()
     lows = df["low"].astype(float).to_numpy()

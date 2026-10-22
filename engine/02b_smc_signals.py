@@ -629,6 +629,52 @@ def compute_technicals(df: pd.DataFrame) -> pd.DataFrame:
     df["high_52w"]         = h.rolling(252, min_periods=50).max()
     df["pct_from_52w_high"] = ((c - df["high_52w"]) / df["high_52w"] * 100).round(2)
 
+    # ── EVERY LEVEL THAT SPANS A DISCONTINUITY IS SUPPRESSED ──────
+    #
+    # NULL, never a pre-split figure and never a neutral stand-in. A zero on
+    # something measured is information; a number on something unmeasurable is
+    # a lie, and this column feeds both a public page and the scorer.
+    #
+    # WHAT IT COST TO NOT DO THIS. On 2026-10-19 daily_closes published a
+    # high_52w that NO post-split session had traded at, for 31 of 31 symbols
+    # with an action in the window -- INDIAGLYCO 1219.00 against a post-split
+    # high of 399.00, MCX 11219.00 against 3481.40, ZFCVINDIA 16665.00 against
+    # 3044.00. pct_from_52w_high then handed 03b_score a -70% to -90% reading,
+    # which is the maximum rr_ext bonus for a long, on 20 symbols that were in
+    # the enterable batch.
+    #
+    # THE WINDOW PER COLUMN IS ITS OWN LOOKBACK, not one global flag: a stock
+    # can lose its 200-EMA and keep its 20. high_52w is a true rolling max, so
+    # 252 is exact. The EMAs and RSI are exponentially smoothed, so a bar's
+    # influence DECAYS rather than ending -- the nominal period is the
+    # convention here, not a proof of purity, and the authoritative protection
+    # is 03b's exclusion of the symbol from the enterable universe entirely.
+    from engine.price_basis import discontinuities
+    acts = discontinuities(df)
+    df["history_discontinuity"] = False
+    if acts:
+        import numpy as _np
+        dates = list(df["date"])
+        pos = [i for i, d in enumerate(dates) if d in set(acts)]
+        # low_52w is NOT here: publish_closes computes it from ALL_ROWS and
+        # owns it. Adding a second source for one column is the shape of the
+        # defect being fixed, so that one is suppressed at its own writer.
+        for col, win in (("high_52w", 252), ("pct_from_52w_high", 252),
+                         ("ema200", 200), ("ema50", 50),
+                         ("ema20", 20), ("rsi", 14)):
+            if col not in df.columns:
+                continue
+            mask = _np.zeros(len(df), dtype=bool)
+            for ia in pos:
+                mask[ia:ia + win] = True
+            df.loc[mask, col] = _np.nan
+        # The widest window decides whether the ROW is usable at all. 252,
+        # because that is the longest level published off this frame.
+        flag = _np.zeros(len(df), dtype=bool)
+        for ia in pos:
+            flag[ia:ia + 252] = True
+        df["history_discontinuity"] = flag
+
     return df
 
 

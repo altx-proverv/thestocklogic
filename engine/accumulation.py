@@ -83,7 +83,18 @@ def apply_accumulation_screen(df: pd.DataFrame,
         df.attrs["accumulation_undone"] = n_undo
 
     # ── 2. Footprint components ───────────────────────────────────
-    off_high  = _col(df, "pct_from_52w_high", 0.0)      # negative = below high
+    # NO DEFAULT ON THIS ONE. It was _col(df, "pct_from_52w_high", 0.0), which
+    # turns an unmeasurable reading into "exactly at the 52-week high" -- a
+    # number the discount test then evaluates. 02b now publishes NULL here for
+    # any symbol whose 252-session window spans a corporate action or a hole in
+    # the record, and the test below requires a real measurement rather than
+    # inheriting a convenient zero.
+    #
+    # The outcome was already safe by luck: the discount band is -5% to -20%
+    # and a split reads -70% to -90%, outside it either way. Luck is not a
+    # guard, and the band could move.
+    off_high  = (df["pct_from_52w_high"] if "pct_from_52w_high" in df.columns
+                 else pd.Series(np.nan, index=df.index))      # negative = below high
     rvol      = _col(df, "rvol", 1.0)
     delivery  = _col(df, "delivery_pct", 0.0)
     inst_buy  = _col(df, "institutional_buying", 0).astype(float)
@@ -93,7 +104,9 @@ def apply_accumulation_screen(df: pd.DataFrame,
     wk_bear   = _col(df, "weekly_bearish", 0).astype(float)
     zone_hi   = _col(df, "active_zone_high", np.nan)
 
-    discount = (off_high <= -DISCOUNT_MIN_PCT) & (off_high >= -DISCOUNT_MAX_PCT)
+    discount = (off_high.notna()
+                & (off_high <= -DISCOUNT_MIN_PCT)
+                & (off_high >= -DISCOUNT_MAX_PCT))
     quiet    = rvol <= MAX_RVOL
     deliv_ok = delivery >= MIN_DELIVERY_PCT
     basing   = (ranging == 1) | (wk_bear == 0)

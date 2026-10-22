@@ -107,6 +107,7 @@ _EXPECTED_SCORING_COLS = (
     "vix_close", "ad_ratio", "rsi", "macd_hist_rising", "macd_positive",
     "price_above_ema20", "ema20_above_ema50", "ema50_above_ema200",
     "institutional_buying", "high_delivery", "rs_positive", "pct_from_52w_high",
+    "history_discontinuity",
 )
 _warned_missing = set()
 
@@ -259,6 +260,50 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
 
     df["disqualified"]      = False
     df["disqualify_reason"] = ""
+
+    # ── A SERIES THAT IS NOT COMPARABLE CANNOT BE SCORED ──────────
+    #
+    # FIRST, BEFORE EVERY MARKET GATE, because this is not a market opinion. If
+    # the 252-session window spans a corporate action or a hole in the record,
+    # the levels over it are not weak evidence -- they are not evidence.
+    #
+    # EXCLUDE, DO NOT SUBSTITUTE. The tempting fix is a neutral
+    # pct_from_52w_high so the row still scores. That is worse: a made-up
+    # middle value is still a number the scorer acts on, and choosing which
+    # middle silently chooses a bias. On 2026-10-19 the real reading handed
+    # every affected long the MAXIMUM rr_ext bonus -- 3.0 of 3.0 -- because a
+    # pre-split high_52w makes a stock look 70-90% below its peak. Twenty of
+    # them were in the enterable batch. 38 of 745 symbols is 5%; dropping them
+    # is cheap and verifiable, and fudging them is neither.
+    #
+    # NOT A FUNNEL GATE, deliberately. gates_failed_mask bit i is GATE_ORDER[i]
+    # and those bits are persisted in reject_sample, so inserting a tenth gate
+    # would reinterpret every stored row. Same shape as the entry_valid
+    # exclusion further down: a row that cannot be evaluated is not a row that
+    # failed a test.
+    # THE COLUMN'S ABSENCE IS REPORTED, NOT RAISED, and the choice is
+    # deliberate. 02b's compute_technicals writes it for every symbol, so in the
+    # production chain it is always present and _warn_missing_cols above names
+    # it the moment it is not. Raising instead was the first attempt and it was
+    # wrong twice over: it killed the whole nightly chain on a missing column
+    # -- a guard with a larger blast radius than the defect -- and it broke
+    # every legitimate caller that builds a synthetic frame, including
+    # tests/test_gate_audit.py, which would then have had to add the column as
+    # False and defeat the guard to stay green.
+    #
+    # Presence in the REAL artifact is asserted where the real artifact exists:
+    # tests/test_price_basis_guard.py checks ALL_ROWS carries it, which is a
+    # test that can actually tell "nobody wrote it" from "nothing to flag".
+    #
+    # A NaN, by contrast, IS treated as discontinuous: the column exists and
+    # the value is unknown, which is precisely the case to refuse.
+    _disc = df.get("history_discontinuity")
+    if _disc is None:
+        _disc = pd.Series(False, index=df.index)
+    _bad = _disc.fillna(True).astype(bool)
+    df.loc[_bad, "disqualified"]      = True
+    df.loc[_bad, "disqualify_reason"] = "history_discontinuity"
+
     for name, cond in conds.items():
         mask = (~df["disqualified"]) & cond
         df.loc[mask, "disqualified"]      = True

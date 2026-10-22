@@ -309,17 +309,82 @@ def main() -> int:
     check("  and no level carries a None price",
           any(r["price"] is None for r in lv_short), False)
 
-    # CORPORATE ACTIONS DROP A LEVEL RATHER THAN SCALING IT. INDIAGLYCO split
-    # on 2026-09-17 and the first generated card said "52-week high, +218.53%
-    # from here" -- a pre-split 1219.00 against a post-split close of 382.70.
-    # Found while populating the page for real, which is the only reason it was
-    # found: no synthetic fixture had a split in it.
+    # CORPORATE ACTIONS DROP A LEVEL RATHER THAN SCALING IT. INDIAGLYCO's first
+    # generated card said "52-week high, +218.53% from here" -- a pre-split
+    # 1219.00 against a post-split close of 382.70. Found while populating the
+    # page for real, which is the only reason it was found: no synthetic
+    # fixture had a split in it.
+    #
+    # REPOINTED 2026-10-22, BECAUSE THIS SECTION ENCODED AN ACCIDENT. It
+    # asserted the ex-date was 2026-09-17 and that "bhavcopy's PREV_CLOSE was
+    # adjusted to 266.20 against a prior close of 1111.70". Both were wrong:
+    #
+    #   the ex-date is 2026-09-02      close 1111.70 -> open 225.00
+    #   PREV_CLOSE was never adjusted  it read 1111.70 on the ex-date, the same
+    #                                  as the prior close, and 266.20 on 17 Sep
+    #                                  is simply 16 Sep's true close
+    #
+    # The 1111.70-vs-266.20 comparison only existed because eleven sessions
+    # (02-16 Sep, while the stock sat in the BE series) were missing from the
+    # parquet until INGEST_SERIES accepted BE. The old detector was reading a
+    # hole in the record as an adjustment, and filling the hole silently
+    # un-detected the only split it had ever caught -- which is what put a
+    # pre-split high_52w back into daily_closes for 31 symbols.
+    #
+    # The measurement across the universe: 31 split/bonus events in the last
+    # 252 sessions, NSE adjusted prev_close on 0 of them. So the assertion is
+    # now on the real ex-date and the real mechanism -- the gap in the OPENING
+    # print, which trading cannot produce because the price band would have
+    # stopped it.
     ig = bars.frame_through("INDIAGLYCO", date(2026, 10, 7))
     acts = bars.corporate_actions(ig)
-    check("INDIAGLYCO's 2026-09-17 action is detected",
-          date(2026, 9, 17) in acts, True,
-          "bhavcopy's PREV_CLOSE was adjusted to 266.20 against a prior close "
-          "of 1111.70 -- a -76% adjustment the parquet prices do not carry")
+    check("INDIAGLYCO's split IS detected", bool(acts), True,
+          "the whole point: the old detector returned [] on complete data")
+    # THE DATE IS DERIVED FROM THE FRAME, NOT HARDCODED. data/processed is
+    # gitignored, so the archive differs between the box (which has
+    # INDIAGLYCO's 11 BE-series sessions) and a development machine (which may
+    # not). Hardcoding 2026-09-02 asserts the archive's completeness, not the
+    # detector's correctness -- and the previous version of this test hardcoded
+    # a date that was an artifact of exactly that incompleteness. So: the
+    # detected date must be the session whose OPEN gapped beyond the band.
+    _c = ig["close"].astype(float).to_numpy()
+    _o = ig["open"].astype(float).to_numpy()
+    _band = bars.CORP_ACTION_GAP_PCT / 100.0
+    gapped = [ig["date"].iloc[i] for i in range(1, len(ig))
+              if _c[i - 1] and _o[i]
+              and abs(_o[i] / _c[i - 1] - 1.0) > _band
+              and abs(_c[i] / _c[i - 1] - 1.0) > _band]
+    check("  and dated on the session whose OPEN gapped", sorted(acts),
+          sorted(gapped), "mechanism, not a remembered date")
+    # Strict where the data supports strictness: the real ex-date is 2026-09-02
+    # and 17 Sep is an ordinary session. Only assertable when the archive
+    # actually holds the sessions between them.
+    _have = set(ig["date"])
+    if date(2026, 9, 2) in _have and date(2026, 9, 16) in _have:
+        check("  the real ex-date is 2026-09-02", date(2026, 9, 2) in acts, True,
+              "close 1111.70 -> open 225.00")
+        check("  and 2026-09-17 is NOT an action", date(2026, 9, 17) in acts,
+              False, "its prev_close 266.20 IS 16 Sep's close")
+    else:
+        print("  (archive lacks the 02-16 Sep BE sessions on this machine — "
+              "the exact-date assertions are skipped; the mechanism one above "
+              "is not)")
+    check("  the feed-continuity test is a separate, named thing",
+          callable(getattr(bars, "feed_discontinuities", None)), True)
+    # AND IT IS THE TEST THAT PROVES THE RENAME WAS RIGHT. Where the archive
+    # holds the 02-16 Sep BE sessions the record is whole and the continuity
+    # test is silent; where it does not, the test FIRES on the hole. Same
+    # function, two archives, and in both cases it is reporting a gap in our
+    # record rather than a corporate action -- which is the job its old name
+    # hid.
+    _fd = bars.feed_discontinuities(ig)
+    if date(2026, 9, 2) in _have and date(2026, 9, 16) in _have:
+        check("  the continuity test is silent on a whole record", _fd, [],
+              "nothing missing between 01 Sep and 17 Sep")
+    else:
+        check("  the continuity test FIRES on the 11-session hole",
+              bool(_fd), True,
+              f"{[str(d) for d in _fd]} — a missing session, not a split")
     ig_types = {r["level_type"] for r in levels.compute_all(ig, CFG, None)}
     for dropped in ("w52_high", "w52_low", "dma_50", "dma_200", "rsi_14"):
         check(f"  {dropped} is dropped across the split",
@@ -327,16 +392,30 @@ def main() -> int:
     for kept in ("event_high", "event_low", "pre_event_close"):
         check(f"  {kept} survives (single-session, unaffected)",
               kept in ig_types, True)
-    # PER-LOOKBACK, not all-or-nothing: V2RETAIL's action is 2026-03-26, inside
-    # 252 and 200 sessions but outside 50.
+    # PER-LOOKBACK, not all-or-nothing: V2RETAIL's action is 2026-03-25 (the old
+    # detector said 03-26, one session late, because it was reading the stale
+    # prev_close on T+1 rather than the gap on T).
     v2 = bars.frame_through("V2RETAIL", date(2026, 10, 7))
+    check("V2RETAIL's action is dated on the ex-date, not the day after",
+          (date(2026, 3, 25) in bars.corporate_actions(v2),
+           date(2026, 3, 26) in bars.corporate_actions(v2)), (True, False))
     v2_types = {r["level_type"] for r in levels.compute_all(v2, CFG, None)}
     check("a stock can lose its 200-DMA and keep its 50",
           ("dma_200" in v2_types, "dma_50" in v2_types), (False, True),
-          "V2RETAIL, action 2026-03-26")
+          "V2RETAIL, action 2026-03-25")
     check("  and the scanner will not call a split a new 52-week low",
           levels.is_new_52w_extreme(ig, "low"), False)
-    # POLICYBZR has no action, so nothing above weakened its levels.
+    # POLICYBZR IS THE CRASH FIXTURE, and the one that proves the detector
+    # separates a corporate action from a bad day. It fell 36.0% on 2026-09-24
+    # -- further than several real splits -- but it OPENED at -10.0% and fell
+    # during the session, so the gap is not in the first print and the basis
+    # never changed. Its levels must all survive.
+    pb = bars.frame_through("POLICYBZR", date(2026, 10, 7))
+    check("POLICYBZR's -36% crash is NOT a corporate action",
+          bars.corporate_actions(pb), [],
+          "opened -10.0%, closed -36.0%: an intraday fall, not a new basis")
+    check("  so its 252-session window stays comparable",
+          bars.action_in_last(pb, 252), False)
     check("a clean series keeps every level",
           len([r for r in lv if r["level_type"] in
                ("w52_high", "w52_low", "dma_50", "dma_200")]), 4,

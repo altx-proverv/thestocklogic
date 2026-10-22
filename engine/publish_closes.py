@@ -89,6 +89,7 @@ def run(session_date: str = None) -> int:
     # INCLUDING TODAY, so the window and the close beside it cannot disagree.
     STOCKS = ROOT / "data" / "processed" / "stocks"
     hi20, lo20, lo52, hist = {}, {}, {}, {}
+    suppressed = []
     missing = 0
     for sym in day["symbol"].astype(str):
         f = STOCKS / f"{sym}.parquet"
@@ -96,14 +97,36 @@ def run(session_date: str = None) -> int:
             missing += 1
             continue
         try:
-            h = pd.read_parquet(f, columns=["date", "high", "low"])
+            # open/close/prev_close are read so the discontinuity detector can
+            # run here. They are not published; they are the evidence that the
+            # window is comparable at all.
+            h = pd.read_parquet(f, columns=["date", "high", "low", "open",
+                                            "close", "prev_close"])
             h["date"] = pd.to_datetime(h["date"])
             upto = h[h["date"] <= pd.Timestamp(stamp)]
             # HOW MUCH HISTORY EXISTS AT ALL, which is what guards the level
             # phrases: "a one-month high" needs more than a month behind it.
             hist[sym] = int(len(upto))
+
+            # ── A LEVEL OVER A DISCONTINUITY IS PUBLISHED AS NULL ──
+            #
+            # PER WINDOW, not one flag for the symbol: a split eight months ago
+            # ruins the 52-week pair and leaves the 20-day pair untouched, and
+            # suppressing both would throw away a good number to protect a bad
+            # one.
+            #
+            # On 2026-10-19 this job published a high_52w that NO post-split
+            # session had traded at, for 31 of 31 symbols with an action in the
+            # window. The tape could not render it as a claim only because
+            # "px >= high_52w*0.999" is unreachable when the high is five times
+            # the price -- the number was wrong and the page was saved by the
+            # wrongness. That is luck, not a guard.
+            from engine.price_basis import spans_discontinuity
+            bad20 = spans_discontinuity(upto, 20)
+            bad252 = spans_discontinuity(upto, 252)
+
             w = upto.tail(20)
-            if len(w) >= 10:        # too short a window is not a month
+            if len(w) >= 10 and not bad20:   # too short a window is not a month
                 hi20[sym] = float(w["high"].max())
                 lo20[sym] = float(w["low"].min())
             # THE 52-WEEK LOW, on the SAME window high_52w uses. 252 sessions
@@ -113,12 +136,22 @@ def run(session_date: str = None) -> int:
             # computed on a different window from the high beside it would be
             # a pair that cannot be compared.
             y = upto.tail(252)
-            if len(y) >= 240:       # the same bar the level guard already sets
+            if len(y) >= 240 and not bad252:
                 lo52[sym] = float(y["low"].min())
+            # high_52w arrives on the ALL_ROWS row rather than being computed
+            # here, and 02b already NULLs it for the same condition. Recorded
+            # so the suppression is visible in this job's own log.
+            if bad252:
+                suppressed.append(sym)
         except Exception:
             missing += 1
     log.info(f"20-day window built for {len(hi20)} symbol(s)"
              + (f"; {missing} without usable history" if missing else ""))
+    if suppressed:
+        log.info(f"52-week levels SUPPRESSED for {len(suppressed)} symbol(s) "
+                 f"whose window spans a corporate action or a record hole: "
+                 f"{', '.join(sorted(suppressed)[:12])}"
+                 + (" ..." if len(suppressed) > 12 else ""))
 
     rows = []
     skipped = 0
