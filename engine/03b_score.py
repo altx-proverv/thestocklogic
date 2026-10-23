@@ -348,11 +348,24 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
         # and every later gate the row also failed was never the reason, so
         # nothing ever re-applied it.
         #
-        # Measured on the 2026-10-22 batch: 60 of 125 qualifying rows still
-        # failed at least one gate, every one of them LONG, and 50 still failed
-        # no_recent_bos_choch -- bit 8, after adq_ranging_market at bit 5.
-        # Seven of the eleven entries taken on 2026-10-23 came through this
-        # hole, including both SOLARINDS and CSBBANK.
+        # MEASURED BY REGENERATING BOTH BATCHES AND DIFFING THEM, which is
+        # also a correction: an earlier read of this put it at 60 of 125 rows
+        # and 7 of 11 entries, and both figures were wrong.
+        #
+        #   2026-10-23 batch   qualifying 119 -> 91   long 56 -> 28
+        #                      short 63 -> 63, because the undo is long-only
+        #                      so there was never anything to re-check there
+        #   2026-10-22 batch   qualifying  86 -> 53   long 33 -> 0
+        #
+        # EVERY LONG IN THE 10-22 BATCH WAS FAILING A GATE THE UNDO HAS NO
+        # BUSINESS FORGIVING -- all 33 of them. no_recent_bos_choch is bit 8,
+        # after adq_ranging_market at bit 5, so the funnel never named it.
+        #
+        # Of the eleven entries taken on 2026-10-23, THREE came through this
+        # hole: PATANJALI and SOLARINDS on no_recent_bos_choch, PRESTIGE on
+        # bear_regime_no_reversal and no_recent_bos_choch. The other eight were
+        # not qualifying 10-22 signals at all -- they came from the candidate
+        # path, which this does not touch.
         #
         # WHAT IS FORGIVEN STAYS FORGIVEN. very_low_volume and
         # adq_ranging_market are not oversights in the undo: a quiet, ranging
