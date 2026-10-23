@@ -977,19 +977,26 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     sizing = size_for_trade(entry_price=ltp, stop_price=stop_price,
                             direction=direction, available_funds=spendable)
     if sizing.get("qty", 0) <= 0:
-        return {"status": "REJECTED_SIZE", "reason": sizing.get("error", "zero qty")}
+        # A DISTINCT STATUS WHEN THE SIZER NAMES ONE. Every zero-quantity
+        # refusal used to collapse into REJECTED_SIZE, which cannot answer "how
+        # often did share price exclude a symbol" -- it reads the same as a bad
+        # stop or an empty balance. The sizer supplies reason_code when it has a
+        # specific one; the generic path is unchanged.
+        _rc = sizing.get("reason_code")
+        return {"status": f"SKIPPED_{_rc}" if _rc else "REJECTED_SIZE",
+                "reason": sizing.get("error", "zero qty"),
+                **({"blocked_by": _rc} if _rc else {}),
+                **({"notional_pct": sizing["notional_pct"]}
+                   if "notional_pct" in sizing else {})}
     if sizing.get("binding_cap") == "funds":
         log.info(f"{symbol}: sized to the balance — {sizing['qty']} shares, "
                  f"Rs{sizing['capital_required']:,.0f} of Rs{spendable:,.0f} spendable "
                  f"(risk Rs{sizing['risk_actual']:,.0f})")
-    if sizing.get("oversized"):
-        # The share price exceeds the whole target, so one share was taken anyway.
-        # Deliberate -- the instrument must not be blind to MRF or MARUTI because of
-        # its own test size -- but the record has to say so.
-        log.warning(f"{symbol}: OVERSIZED — one share at Rs{ltp:,.0f} is "
-                    f"{sizing['notional_pct']:.0f}% of the Rs"
-                    f"{sizing['target_notional']:,.0f} target, risk "
-                    f"Rs{sizing['risk_actual']:,.0f}")
+    # NO `oversized` BRANCH HERE ANY MORE. It used to log a warning and fall
+    # through to Gate 6, which is how SOLARINDS was entered at 188% of target.
+    # size_fixed_notional now refuses before returning a quantity, so the
+    # zero-quantity branch above carries it as SKIPPED_OVERSIZED and there is
+    # nothing left for this gate to decide.
 
     # GATE 6 -- live broker funds, net of resting GTTs. FAILS CLOSED at Gate 5,
     # where the balance is read: unreadable means BLOCKED_NO_FUNDS_DATA before a

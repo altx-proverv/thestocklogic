@@ -57,6 +57,14 @@ MIN_STOP_FRAC = MIN_STOP_PCT / 100.0
 MAX_STOP_FRAC = MAX_STOP_PCT / 100.0
 
 
+# THE REASON CODE FOR A SYMBOL PRICE CANNOT SIZE. Defined here because this
+# module owns the concept, and named so a count over atlas_entry_log.status
+# answers "how often did share price exclude a symbol" without a log trawl.
+# `oversized` below was computed and ignored until 2026-10-23: SOLARINDS was
+# entered at Rs18,808 for one share against a Rs10,000 target.
+REASON_OVERSIZED = "OVERSIZED"
+
+
 def _floor_to_multiple(n: float, m: int = QUANTITY_MULTIPLE) -> int:
     return int(floor(n / m) * m)
 
@@ -216,6 +224,31 @@ def size_fixed_notional(entry_price: float, stop_price: float, direction: str,
     if not ok:
         return {"qty": 0, "error": reason, "stop_pct": stop_pct,
                 "sizing_basis": SIZING_BASIS}
+
+    # ── ONE SHARE ALREADY EXCEEDS THE TARGET: REFUSE ──────────────
+    #
+    # `oversized` was computed at the bottom of this function and returned, and
+    # the entry gate only logged it. SOLARINDS was entered on 2026-10-23 at
+    # Rs18,808 for one share against a Rs10,000 target -- 188% of target and
+    # the largest position of the day. MRF at Rs118,860 would have been 1,189%.
+    #
+    # REFUSED HERE RATHER THAN AT THE GATE, so the sizer cannot hand anyone a
+    # quantity it knows breaks the rule, and so this is provable by calling the
+    # function instead of by reading the caller.
+    #
+    # THE TARGET IS STILL NOT A CEILING. Only the case where a SINGLE share
+    # exceeds it is refused; the round-half-up is untouched, so 33 shares of a
+    # Rs303 stock at Rs10,004 remains intended behaviour.
+    if entry_price > target_notional:
+        return {"qty": 0,
+                "error": (f"one share at Rs{entry_price:,.2f} exceeds the "
+                          f"Rs{target_notional:,.0f} target notional "
+                          f"({100.0 * entry_price / target_notional:.0f}% of "
+                          f"target); the position cannot be sized to the rule"),
+                "reason_code": REASON_OVERSIZED,
+                "oversized": True,
+                "notional_pct": round(100.0 * entry_price / target_notional, 1),
+                "stop_pct": stop_pct, "sizing_basis": SIZING_BASIS}
 
     risk_per_share = abs(entry_price - stop_price)
     qty = _round_to_multiple(target_notional / entry_price)

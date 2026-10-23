@@ -10,9 +10,26 @@ ones a risk-budget sizer has:
   flooring to a multiple of 5 put the median position 10.7% off target; rounding to
   the nearest single share puts it 1.7% off.
 
-  NEVER ZERO, NO PRICE CEILING. A share costing more than the whole target is bought
-  anyway -- the instrument must not be blind to MRF, MARUTI or ABBOTINDIA because of
-  its own test size -- and flagged, because the record has to know.
+  NEVER ZERO WHILE THE RULE IS APPLICABLE -- BUT ONE SHARE OVER THE TARGET IS
+  REFUSED. This reverses the earlier ruling and the reversal is the point, so it
+  is recorded rather than quietly replaced.
+
+  The old property was "no price ceiling": a share costing more than the whole
+  target was bought anyway and merely FLAGGED, on the argument that the
+  instrument must not be blind to MRF or MARUTI because of its own test size.
+  What the flag actually bought was nothing -- atlas_entry logged a warning on
+  `oversized` and fell through to the funds gate. SOLARINDS was entered on
+  2026-10-23 at Rs18,808 for a single share, 188% of target and the largest
+  position of the day, and MRF at Rs118,860 was enterable at 1,189%.
+
+  A position that cannot be expressed in the size being measured is not a
+  measurement at that size. So it is REFUSED, with REASON_OVERSIZED, which
+  makes it countable instead of a warning in a log nobody greps.
+
+  THE ROUNDING IS UNTOUCHED, and that distinction is the whole of the change:
+  FIXED_NOTIONAL_PER_TRADE is a TARGET, not a ceiling (config.py:130), so 33
+  shares of a Rs303 stock at Rs10,004 is intended and stays. Only the case where
+  a SINGLE share already exceeds the target is refused.
 
   NO RISK BUDGET. Risk is an OUTPUT. Reporting Rs3,000 while sizing from Rs10,000 of
   notional would be false and atlas_trades.risk_inr reads risk_actual straight
@@ -68,15 +85,31 @@ check("Rs6,666 is the 1.5-share boundary: just above takes 1",
       size(6700.0)["qty"] == 1)
 check("  just below takes 2", size(6600.0)["qty"] == 2)
 
-print("\n── never zero, no price ceiling ──")
+print("\n── one share over the target is REFUSED, not flagged and taken ──")
+# REPOINTED, not loosened. These three asserted qty == 1 under the old "no
+# price ceiling" ruling; they now assert the refusal. The flag and the realised
+# percentage are still carried, because the record still has to know.
+from atlas.risk.position_sizing import REASON_OVERSIZED
 for px, label in ((11549.0, "ULTRACEMCO"), (43610.0, "PAGEIND"), (129290.0, "MRF")):
     r = size(px)
-    check(f"{label} at Rs{px:,.0f} takes one share", r["qty"] == 1, str(r["qty"]))
-    check(f"  and is flagged oversized", r["oversized"] is True)
+    check(f"{label} at Rs{px:,.0f} is refused", r["qty"] == 0, str(r["qty"]))
+    check(f"  with its own reason code, so it stays countable",
+          r.get("reason_code") == REASON_OVERSIZED, str(r.get("reason_code")))
+    check(f"  and is still flagged oversized", r["oversized"] is True)
     check(f"  with its realised size recorded ({r['notional_pct']:.0f}% of target)",
           r["notional_pct"] > 100)
 check("a normal position is NOT flagged oversized", size(1400.0)["oversized"] is False)
-check("_round_to_multiple never returns zero", _round_to_multiple(0.001, 1) == 1)
+check("  and is not given the oversized code",
+      size(1400.0).get("reason_code") is None)
+# THE BOUNDARY, derived from the constant rather than chosen: the refusal is
+# strict >, so a share priced exactly at the target is still one share.
+check(f"exactly Rs{FIXED_NOTIONAL_PER_TRADE:,.0f} still takes one share",
+      size(FIXED_NOTIONAL_PER_TRADE)["qty"] == 1,
+      str(size(FIXED_NOTIONAL_PER_TRADE)["qty"]))
+check("  one paisa above it does not",
+      size(FIXED_NOTIONAL_PER_TRADE + 0.01)["qty"] == 0)
+check("_round_to_multiple never returns zero", _round_to_multiple(0.001, 1) == 1,
+      "the rounding rule itself is unchanged")
 
 print("\n── risk is an output, never a budget ──")
 r = size(1000.0)

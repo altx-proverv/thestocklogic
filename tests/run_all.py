@@ -136,6 +136,9 @@ SUITES = [
     ("tape vocabulary", [sys.executable, "tests/test_tape_vocabulary.py"]),
     ("tab bar shared", [sys.executable, "tests/test_tab_bar_shared.py"]),
     ("gates intact",    [sys.executable, "tests/test_gates_intact.py"]),
+    # The two paths that bypassed the gates: the accumulation undo leaving
+    # later gate failures unapplied, and `oversized` computed and ignored.
+    ("gate bypass",     [sys.executable, "tests/test_gate_bypass.py"]),
     ("page cannot write breaker",
                         [sys.executable, "tests/test_page_cannot_write_breaker.py"]),
     ("sizing",           [sys.executable, "tests/test_sizing.py"]),

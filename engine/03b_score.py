@@ -339,6 +339,51 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
     if screen is not None:
         df = screen(df)
 
+        # ── RE-CHECK EVERY GATE THE UNDO MAY NOT FORGIVE ──────────
+        #
+        # THE FUNNEL SHORT-CIRCUITS, AND THAT IS WHAT LEAKED. The loop above
+        # stops at a row's FIRST failing gate, so disqualify_reason names only
+        # that one. accumulation.apply_accumulation_screen then clears the
+        # disqualification whenever that reason is in ACCUMULATION_KILLERS --
+        # and every later gate the row also failed was never the reason, so
+        # nothing ever re-applied it.
+        #
+        # Measured on the 2026-10-22 batch: 60 of 125 qualifying rows still
+        # failed at least one gate, every one of them LONG, and 50 still failed
+        # no_recent_bos_choch -- bit 8, after adq_ranging_market at bit 5.
+        # Seven of the eleven entries taken on 2026-10-23 came through this
+        # hole, including both SOLARINDS and CSBBANK.
+        #
+        # WHAT IS FORGIVEN STAYS FORGIVEN. very_low_volume and
+        # adq_ranging_market are not oversights in the undo: a quiet, ranging
+        # stock is what accumulation looks like, so those two are the whole
+        # point of the screen. Every OTHER gate is re-applied, which closes the
+        # hole without undoing the feature.
+        #
+        # NO NEW GATE AND NO RENUMBERING. This re-uses the same `conds` built
+        # above, so GATE_ORDER is untouched and bit i in gates_failed_mask still
+        # means GATE_ORDER[i]. Those bits are persisted in reject_sample and a
+        # renumbering would reinterpret every stored row.
+        # Imported from the module that owns it, never re-listed here: two
+        # copies of this tuple would drift and the hole would reopen on one
+        # side only.
+        try:
+            from engine.accumulation import ACCUMULATION_KILLERS
+        except ModuleNotFoundError:
+            from accumulation import ACCUMULATION_KILLERS
+        _forgiven = set(ACCUMULATION_KILLERS)
+        _recheck = [(n, c) for n, c in conds.items() if n not in _forgiven]
+        _before = int((~df["disqualified"].fillna(False).astype(bool)).sum())
+        for name, cond in _recheck:
+            mask = (~df["disqualified"]) & cond
+            df.loc[mask, "disqualified"]      = True
+            df.loc[mask, "disqualify_reason"] = name
+        _after = int((~df["disqualified"].fillna(False).astype(bool)).sum())
+        if _after != _before:
+            log.info(f"post-screen gate re-check: {_before - _after} row(s) "
+                     f"re-disqualified on a gate the undo does not forgive "
+                     f"(forgiven: {sorted(_forgiven)})")
+
     # ── SCORE DIMENSIONS (vectorized) ────────────────────────────
 
     # 1. Market regime score (max 15)
