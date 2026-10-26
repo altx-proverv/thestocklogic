@@ -19,7 +19,16 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
 def send(message: str, parse_mode: str = "HTML", reply_markup: dict = None) -> bool:
-    """Send a message to the ATLAS Telegram channel."""
+    """Send a message to the ATLAS Telegram channel.
+
+    TRUE MEANS ACCEPTED, NOT DELIVERED. It is True when Telegram answered HTTP
+    200, i.e. it took the message for TELEGRAM_CHAT_ID. It says nothing about
+    whether a person saw it: the hop from the chat to a notification on a phone
+    (muted chat, archived chat, do-not-disturb) is invisible to the Bot API.
+    Every caller that logs "delivered" or "ALERT NOT DELIVERED" on this value
+    is reporting acceptance. A claim of receipt needs a human act recorded
+    server-side -- see docs/learnings.md, "HTTP 200 is not delivery".
+    """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram not configured — skipping message")
         return False

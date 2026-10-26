@@ -83,6 +83,16 @@ class FakeStore:
         return {k[:3] for k in self.rows if k[3] == session.isoformat()}
 
     def log_capture(self, row):
+        # The live table's CHECKs (20261026185608 + 20261026195429), mirrored:
+        # a row the database would refuse must fail here too.
+        if row["ok"]:
+            assert row["error"] is None
+            assert None not in (row["asm_rows"], row["gsm_rows"],
+                                row["rows_received"], row["rows_stored"])
+            assert row["rows_stored"] <= row["rows_received"]
+            assert row["rows_stored"] == row["asm_rows"] + row["gsm_rows"]
+        else:
+            assert row["error"] is not None
         self.captures.append(row)
 
     def captured(self, session):
@@ -144,6 +154,25 @@ check("  and the log holds three ok captures",
       [c["run_label"] for c in st.captures if c["ok"]], ["morning", "afternoon", "close"])
 check("  each row keeps the FIRST capture's time",
       {r["captured_at"][11:16] for r in st.rows.values()}, {"10:30"})
+
+# NSE'S OWN DUPLICATE, as on 2026-10-26: AAATECH twice in long-term ASM,
+# identical in every stored field.
+def payload_dup():
+    asm, gsm = payload()
+    asm["longterm"]["data"].append(dict(asm["longterm"]["data"][0],
+                                        companyName="Aaa (other casing)"))
+    return asm, gsm
+
+
+std = FakeStore()
+ss.capture("morning", store=std, fetcher=payload_dup, clock=at(10, 30),
+           raw_dir=Path(tempfile.mkdtemp(prefix="surv_dup_")), is_session=always)
+cap = std.captures[-1] if std.captures else {}
+check("NSE sends 5 rows for 4 listings: 4 snapshot rows stored", len(std.rows), 4)
+check("  the capture records BOTH: rows_received 5, rows_stored 4",
+      (cap.get("ok"), cap.get("rows_received"), cap.get("rows_stored")), (True, 5, 4))
+check("  and asm_rows/gsm_rows are the stored, distinct counts",
+      (cap.get("asm_rows"), cap.get("gsm_rows")), (3, 1), "3 + 1 = rows_stored")
 
 st2 = FakeStore()
 ss.capture("morning", store=st2, fetcher=lambda: payload(), clock=at(10, 30),

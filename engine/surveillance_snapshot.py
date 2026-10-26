@@ -237,21 +237,39 @@ class Store:
 
 
 def store_capture(store, rows, session: date, fetched: datetime, label: str) -> int:
-    """Insert, read back, log ok. -> rows NSE listed. Raises if any row is not
-    stored -- a 201 is not evidence the rows are there."""
+    """Insert, read back, log ok. -> distinct listings stored. Raises if any
+    listing is not stored -- a 201 is not evidence the rows are there.
+
+    NSE'S LIST CAN CARRY DUPLICATES. On 2026-10-26 it listed AAATECH twice in
+    long-term ASM (same ISIN and survCode, company-name casing aside, which is
+    not stored): 266 rows, 265 listings. Both numbers are logged --
+    rows_received is NSE's count, rows_stored the distinct listings read back
+    -- so neither "one row lost" nor "NSE sent a duplicate" can be mistaken for
+    the other. asm_rows / gsm_rows are the stored, distinct counts.
+    """
+    distinct = {}
+    for r in rows:                          # first occurrence wins
+        distinct.setdefault((r["symbol"], r["framework"], r["stage"]), r)
+    if len(distinct) != len(rows):
+        dups = sorted({k[0] for k in distinct
+                       if sum((r["symbol"], r["framework"], r["stage"]) == k
+                              for r in rows) > 1})
+        log.warning(f"NSE sent {len(rows)} rows for {len(distinct)} listings — "
+                    f"duplicated: {dups[:5]}")
     payload = [{**r, "session_date": session.isoformat(),
-                "captured_at": fetched.isoformat()} for r in rows]
+                "captured_at": fetched.isoformat()} for r in distinct.values()]
     store.insert_snapshots(payload)
-    want = {(r["symbol"], r["framework"], r["stage"]) for r in rows}
+    want = set(distinct)
     missing = want - store.keys(session)
     if missing:
         raise RuntimeError(f"{len(missing)} row(s) not stored, e.g. {sorted(missing)[:3]}")
     store.log_capture({"session_date": session.isoformat(),
                        "captured_at": fetched.isoformat(), "run_label": label,
                        "ok": True, "error": None,
-                       "asm_rows": sum(r["framework"] == "ASM" for r in rows),
-                       "gsm_rows": sum(r["framework"] == "GSM" for r in rows)})
-    return len(rows)
+                       "rows_received": len(rows), "rows_stored": len(want),
+                       "asm_rows": sum(k[1] == "ASM" for k in want),
+                       "gsm_rows": sum(k[1] == "GSM" for k in want)})
+    return len(want)
 
 
 # ── THE RUN ───────────────────────────────────────────────────────
@@ -289,7 +307,8 @@ def _log_failure(store, session, t, label, err):
         store.log_capture({"session_date": session.isoformat(),
                            "captured_at": t.isoformat(), "run_label": label,
                            "ok": False, "error": err[:500],
-                           "asm_rows": None, "gsm_rows": None})
+                           "asm_rows": None, "gsm_rows": None,
+                           "rows_received": None, "rows_stored": None})
     except Exception as e:
         log.error(f"and the failure could not be logged either: {e}")
 

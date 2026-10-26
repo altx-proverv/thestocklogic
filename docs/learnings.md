@@ -800,3 +800,42 @@ backtest or a scoring view is not "is the P&L computed correctly" but "could thi
 position have been held". And when two systems score the same events to different
 answers, reconciling them is not housekeeping — one of them is wrong about what it is
 measuring, and finding out which is the whole of the work.
+
+---
+
+## HTTP 200 is not delivery (2026-10-27)
+
+**The shape.** The GSM/ASM alarm was "proven" by a temporary cron line that
+fired, called `telegram.send`, got HTTP 200, and logged `alarm sent`. The
+operator then reported it had not reached his phone. The check was aimed left
+of the thing it named: it measured that Telegram *accepted* a message, and the
+claim was that a *person received* it.
+
+**What the diagnosis found.** Nothing was misrouted. `getMe` is
+`@thestocklogic_bot` (8648312331); the full `sendMessage` body returned
+`chat.id` 900798502, type `private`, username `hemalify` — exactly the
+configured `TELEGRAM_CHAT_ID`. The messages were in the chat. What failed was
+the last hop, from the chat to a notification the operator saw, and no Bot API
+call can observe that hop.
+
+**The first human-confirmed receipt on this project:** the operator found the
+alarm, the diagnostic and a third message in the bot chat and replied `SEEN`;
+`bot.log` recorded it at **2026-10-26 19:52:10.953 UTC (2026-10-27 01:22:10
+IST)**. The log line carries no chat id — it is from 900798502 because
+`bot_listener` drops every other chat before logging. Before that, from June to
+October, every "delivered" on this project meant HTTP 200. Seventy-six inbound
+commands prove the operator *uses* the chat; none proves any alert was *seen*.
+
+**The rule.** `send()` returning True means Telegram accepted the message for
+the configured chat. It is not delivery, and it is not receipt. All 33 senders
+share that one definition, including every `ALERT NOT DELIVERED` log line,
+which is really "not accepted". A claim that an alert reached a human needs a
+human act recorded server-side — a reply, a button tap — tied to the message
+that was sent. Log the returned `message_id` and `chat.id` with every alert, so
+"did this one arrive" can be asked of a specific message rather than of the
+channel.
+
+**Still unverified.** The systemd units (`atlas-market-hours`, the ATLAS
+trading loop; `atlas-engine-report`; `atlas-mis-squareoff`) read
+`TELEGRAM_*` from `/etc/atlas.env`, which is root-only. Whether ATLAS's live
+alerts go to the same bot and chat as the cron jobs has not been checked.
