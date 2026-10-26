@@ -125,6 +125,7 @@ SUITES = [
                               "tests/test_sentiment_standdown.py"]),
     ("range breaker", [sys.executable, "tests/test_range_breaker.py"]),
     ("feed freshness", [sys.executable, "tests/test_feed_freshness.py"]),
+    ("surveillance",   [sys.executable, "tests/test_surveillance.py"]),
     ("bhavcopy dates", [sys.executable, "tests/test_bhavcopy_dates.py"]),
     ("price basis guard", [sys.executable, "tests/test_price_basis_guard.py"]),
     ("calendar source", [sys.executable, "tests/test_calendar_source.py"]),

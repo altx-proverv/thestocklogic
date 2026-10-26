@@ -438,6 +438,7 @@ GATED = {
     "engine/07_sector_momentum.py": "sector_heatmap",
     "engine/upstox_ws.py":          "live_prices sector_heatmap",
     "engine/btst_engine.py":        "live_signals live_prices",
+    "engine/surveillance_snapshot.py": "surveillance_snapshots surveillance_captures",
 }
 
 # EXEMPT, each with the reason it is exempt. An exemption is a decision and has

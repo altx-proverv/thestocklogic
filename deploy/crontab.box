@@ -212,6 +212,15 @@ MAILTO=""
 # 19:25 IST — the detection hypothesis, read off the paths written 15 minutes ago.
 # Report only; writes nothing and is wired to no threshold.
 55 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.score_live_outcomes >> /home/ubuntu/thestocklogic/reports/detection_hypothesis.log 2>&1
+# GSM/ASM SNAPSHOTS, THREE TIMES A SESSION: 10:30, 14:35 and 16:30 IST.
+# NSE serves only the current list, so a session with no capture is gone for
+# good and every observation window containing it scores surveillance_unknown.
+# Three runs so one network failure cannot cost the day; the table's unique key
+# makes the repeats a no-op. The close run SENDS A TELEGRAM ALARM naming the date
+# if the session still has no ok capture.
+0 5 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.surveillance_snapshot --run morning >> /home/ubuntu/thestocklogic/reports/surveillance.log 2>&1
+5 9 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.surveillance_snapshot --run afternoon >> /home/ubuntu/thestocklogic/reports/surveillance.log 2>&1
+0 11 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.surveillance_snapshot --run close >> /home/ubuntu/thestocklogic/reports/surveillance.log 2>&1
 
 # 19:35 IST — THE LEARNING LOOP. Extends every standing hypothesis by the
 # observations that arrived since the last run, writes a ledger row either way, and

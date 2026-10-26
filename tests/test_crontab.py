@@ -202,7 +202,8 @@ print("\n── everything the repo ships is scheduled ──")
 # job that is broken: the table stays empty either way.
 MUST_RUN = ["engine.market_flash", "engine.reject_sample", "engine.excursions",
             "engine.score_live_outcomes", "engine.learning_loop",
-            "meridian.iv_recorder", "engine.tier1_fetch", "engine.fundamentals"]
+            "meridian.iv_recorder", "engine.tier1_fetch", "engine.fundamentals",
+            "engine.surveillance_snapshot"]
 for mod in MUST_RUN:
     check(f"  {mod} is scheduled", mod in EXEC)
 for script in ["engine/rbe_startup.py", "engine/rbe_engine.py",
@@ -236,6 +237,13 @@ check("reject_sample is after the chain",
       after(minute_of("reject_sample"), chain))
 check("excursions runs AFTER reject_sample, so tonight's sample is walked tonight",
       after(minute_of("engine.excursions"), minute_of("reject_sample")))
+_surv = [l for l in jobs if "engine.surveillance_snapshot" in l]
+_runs = sorted(l.split("--run")[1].split()[0] for l in _surv if "--run" in l)
+check("surveillance_snapshot runs three times: morning, afternoon, close",
+      _runs == ["afternoon", "close", "morning"], str(_runs))
+check("  the close run is after the 15:30 IST close (10:00 UTC)",
+      after(minute_of("surveillance_snapshot --run close"), (10, 0)),
+      str(minute_of("surveillance_snapshot --run close")))
 check("score_live_outcomes runs after excursions",
       after(minute_of("score_live_outcomes"), minute_of("engine.excursions")))
 # The learning loop reads what every other job wrote, so it must be last.
