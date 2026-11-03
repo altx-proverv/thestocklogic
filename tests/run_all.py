@@ -126,6 +126,7 @@ SUITES = [
     ("range breaker", [sys.executable, "tests/test_range_breaker.py"]),
     ("feed freshness", [sys.executable, "tests/test_feed_freshness.py"]),
     ("rbe windows",    [sys.executable, "tests/test_rbe_windows.py"]),
+    ("disk alarm",     [sys.executable, "tests/test_disk_alarm.py"]),
     ("data rights",    [sys.executable, "tests/test_data_rights.py"]),
     ("observations",   [sys.executable, "tests/test_observations.py"]),
     ("ledger alerts",  [sys.executable, "tests/test_ledger_alerts.py"]),

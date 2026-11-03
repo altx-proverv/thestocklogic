@@ -387,3 +387,7 @@ MAILTO=""
 #
 # 03:00-10:55 UTC = 08:30-16:25 IST
 */15 3-10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/publish_protection.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1
+# THE BOX'S DISK, HOURLY, EVERY DAY -- a disk fills at weekends too. Telegram below
+# 500 MB free (engine/disk_alarm.py has the evidence for the number); every run
+# writes a heartbeat line to reports/disk_alarm.log, alarm or not.
+23 * * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.disk_alarm >> /home/ubuntu/thestocklogic/reports/disk_alarm.log 2>&1
