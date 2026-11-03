@@ -81,6 +81,7 @@ nav a[aria-current="page"]{color:var(--ink,#FFFFFF); font-weight:600;
 .state{margin-left:auto; display:flex; align-items:center; gap:8px; min-width:0}
 .dot{width:7px; height:7px; border-radius:50%; background:var(--closed,#8CA3C4); flex:0 0 auto}
 .dot.on{background:var(--brand,#3BA9EE)}
+.dot.stale{background:var(--amber,#F58445)}
 .state-txt{font-size:11px; color:var(--ink2,#9FB3D0); white-space:nowrap}
 
 /* THE ACCOUNT MENU. Hidden until a session is confirmed, so a signed-out
@@ -141,6 +142,9 @@ nav a[aria-current="page"]{color:var(--ink,#FFFFFF); font-weight:600;
   margin-left:8px; white-space:nowrap; vertical-align:middle;
   text-transform:uppercase}
 .tag-live{color:var(--brand,#3BA9EE); border-color:rgba(59,169,238,.5)}
+/* STALE: the market is open and the feed has stopped. The stale tile's amber
+   and dashed border, so the page has one look for "this should be newer". */
+.tag-stale{color:var(--amber,#F58445); border:1px dashed rgba(227,159,127,0.75)}
 
 /* 2 THE READING */
 .reading{padding-block:26px 18px}
@@ -807,7 +811,8 @@ var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
        flash:[], radar:[], view:'market', detail:null, stock:null,
        tapeFilter:'all', tapeDir:'up',
        svSort:'move', tapeCache:[],
-       src:{prices:null, priceDate:null, tape:null, events:null, landed:null}};
+       src:{prices:null, priceDate:null, priceSource:null, priceAsOf:null,
+            ageS:null, tape:null, events:null, landed:null}};
 
 /* ── WHERE THE DAY CHANGE COMES FROM, IN ORDER ───────────────────
    1. intraday_prices  — the websocket, ~498 symbols, live during a session
@@ -822,6 +827,61 @@ var S={prices:[],idx:[],orb:[],breadth:[],events:[],heavy:[],intraday:[],
    out-of-hours view is the more complete one.
 
    NOT live_prices.change_pct, at any point: it is 0.0 for all 745 rows. */
+/* ── LIVE, STALE OR CLOSED: FROM THE FEED'S OWN TIMESTAMPS ───────
+   intraday_prices is upserted by the detection engine and never cleared, so
+   its rows outlive the session. Counting them as live put a LIVE badge, a
+   ticking clock and a present-tense headline on the 15:15 snapshot every
+   night, weekend and holiday. Whether a row is live is a property of its
+   snapshot_at, which this page already fetches -- so the check cannot go
+   missing on its own, and there is no job or watchdog to fall over.
+
+   THE THRESHOLD IS MEASURED, NOT CHOSEN. The engine writes every 300s: over
+   11 sessions (19 Oct - 3 Nov 2026, 73 writes each, 792 gaps in rbe.log) the
+   gap was 289s at least, 300s at the median, 304s at p99 and 311s at worst.
+   A healthy feed therefore never shows a row older than ~311s. 360s is that
+   worst gap rounded up to the whole minute, the 49s spare absorbing the
+   reader's clock, which is what this age is measured against. One missed
+   write takes the age past 360s before the next one is due. */
+var LIVE_MAX_AGE_S=360;
+
+function ageSeconds(iso){
+  var t=Date.parse(iso||'');
+  return isNaN(t) ? null : Math.max(0,(Date.now()-t)/1000);
+}
+function snapFresh(iso){
+  var a=ageSeconds(iso);
+  return a!==null && a<=LIVE_MAX_AGE_S;
+}
+/* THE ONLY ROUTE TO 'live'. Market open and the newest snapshot fresh, or it
+   is not live: 'stale' while the market is open, 'closed' when it is not. */
+function feedState(newestIso){
+  if(!marketOpen())return 'closed';
+  return snapFresh(newestIso) ? 'live' : 'stale';
+}
+function fmtAge(s){
+  if(s===null||s===undefined)return 'no feed';
+  var m=Math.floor(s/60);
+  if(m<60)return m+'m';
+  var h=Math.floor(m/60);
+  if(h<24)return h+'h'+(m%60?' '+(m%60)+'m':'');
+  return Math.floor(h/24)+'d';
+}
+function istHhmm(iso){
+  var t=Date.parse(iso||'');
+  return isNaN(t) ? '' : new Date(t+5.5*3600*1000).toISOString().substr(11,5);
+}
+function istDay(iso){
+  var t=Date.parse(iso||'');
+  return isNaN(t) ? '' : new Date(t+5.5*3600*1000).toISOString().slice(0,10);
+}
+function newestStamp(rows,key){
+  var n='';
+  (rows||[]).forEach(function(r){
+    var v=String(r[key]||''); if(Date.parse(v)>(Date.parse(n)||0))n=v;
+  });
+  return n||null;
+}
+
 function resolvePrices(){
   var intra={}, close={};
   S.intraday.forEach(function(r){intra[r.symbol]=r;});
@@ -836,13 +896,30 @@ function resolvePrices(){
     if(String(r.session_date||'').slice(0,10)===newest)close[r.symbol]=r;
   });
 
-  var liveCount=0;
+  var snap=newestStamp(S.intraday,'snapshot_at');
+  var state=feedState(snap);
+  /* A handful of live rows is the session starting, not a live session. The
+     grid flips to live only when the feed is actually carrying the market. */
+  var freshN=S.intraday.filter(function(r){return snapFresh(r.snapshot_at);}).length;
+  if(state==='live' && freshN<50)state='stale';
+  /* NOT LIVE: SHOW THE NEWER OF THE TWO, SAID AS WHAT IT IS. A completed
+     close beats a snapshot of the same day; a snapshot from a day the closes
+     have not reached yet (15:30 to the evening chain) is shown, but as
+     "as of 15:15", never as "the close". */
+  var useSnap = state!=='live' && !!snap && (!newest || istDay(snap)>newest);
+
   S.prices.forEach(function(p){
     var i=intra[p.symbol];
-    if(i){
+    /* A ROW IS LIVE ON ITS OWN TIMESTAMP, not on the table's: a symbol the
+       engine stopped writing keeps an old row, and falls back below. */
+    if(i && state==='live' && snapFresh(i.snapshot_at)){
       p.change_pct=i.change_pct; p.ltp=i.ltp;
       p.volume_ratio=i.volume_ratio; p.covered=true; p.live=true;
-      liveCount++;
+      return;
+    }
+    if(i && useSnap){
+      p.change_pct=i.change_pct; p.ltp=i.ltp;
+      p.volume_ratio=i.volume_ratio; p.covered=true; p.live=false;
       return;
     }
     var c=close[p.symbol];
@@ -859,10 +936,12 @@ function resolvePrices(){
     p.change_pct=null; p.covered=false; p.live=false;
   });
 
-  /* A handful of live rows is the session starting, not a live session. The
-     grid flips to live only when the feed is actually carrying the market. */
-  S.src.prices = liveCount>=50 ? 'live' : (newest ? 'close' : null);
-  S.src.priceDate = S.src.prices==='live' ? istDate() : (newest||null);
+  S.src.prices = (snap||newest) ? state : null;
+  S.src.ageS = ageSeconds(snap);
+  S.src.priceSource = state==='live' || useSnap ? 'snapshot' : (newest ? 'close' : null);
+  S.src.priceAsOf = S.src.priceSource==='snapshot' ? snap : null;
+  S.src.priceDate = state==='live' ? istDate()
+                  : useSnap ? istDay(snap) : (newest||null);
   S.covered=S.prices.filter(function(p){return p.covered;}).length;
   S.uncovered=S.prices.length-S.covered;
 }
@@ -884,8 +963,13 @@ function dayName(iso){
 }
 /* The label every block carries, so a reader never has to guess whether a
    number is live or a close. */
-function sessionTag(kind,iso){
+function sessionTag(kind,iso,asOf,ageS){
   if(kind==='live')return '<span class="tag tag-live">LIVE</span>';
+  if(kind==='stale')return '<span class="tag tag-stale">STALE &middot; '+
+    esc(fmtAge(ageS))+'</span>';
+  /* A snapshot is not a close: it says the time it was taken. */
+  if(asOf)return '<span class="tag">AS OF '+esc(istHhmm(asOf))+' &middot; '+
+    esc(dayName(istDay(asOf)))+'</span>';
   if(!iso)return '';
   return '<span class="tag">CLOSE &middot; '+esc(dayName(iso))+'</span>';
 }
@@ -901,16 +985,43 @@ function marketOpen(){
 
 function renderState(){
   var dot=document.getElementById('dot'), txt=document.getElementById('state');
-  var live=S.src.prices==='live';
-  if(live){
+  var st=S.src.prices, asOf=S.src.priceAsOf;
+  if(st==='live'){
+    /* The feed's time, not the reader's clock: a ticking clock says the
+       numbers are this second's, and they are up to five minutes old. */
     dot.className='dot on';
-    txt.textContent='Live · '+hhmmss(istNow())+' IST';
+    txt.textContent='Live · prices as of '+istHhmm(asOf)+' IST';
+  }else if(st==='stale'){
+    dot.className='dot stale';
+    txt.textContent='STALE · '+fmtAge(S.src.ageS)+' · '+(asOf
+      ? 'prices as of '+istHhmm(asOf)+' IST'
+      : 'showing the close of '+dayName(S.src.priceDate));
   }else{
     dot.className='dot';
-    txt.textContent = S.src.priceDate
+    txt.textContent = asOf
+      ? 'Market closed · showing prices as of '+istHhmm(asOf)+' IST, '+
+        dayName(istDay(asOf))
+      : S.src.priceDate
       ? 'Market closed · showing the close of '+dayName(S.src.priceDate)
       : 'Market closed';
   }
+}
+
+function renderAll(){
+  renderState(); renderReading(); renderIdx(); renderTape();
+  renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
+  renderTags();
+  renderPhone();
+}
+
+/* THE STATE MOVES WITH THE CLOCK. A page left open goes from LIVE to STALE as
+   its snapshot ages, and to CLOSED at 15:30, without a reload. When the state
+   changes, everything that speaks in its tense is redrawn. */
+function tick(){
+  var was=S.src.prices;
+  resolvePrices();
+  if(S.src.prices!==was){ buildSectors(); renderAll(); }
+  else { renderState(); renderTags(); }
 }
 
 /* EVERY BLOCK SAYS WHICH SESSION IT IS SHOWING. A reader must never have to
@@ -922,13 +1033,19 @@ function renderTags(){
     var e=document.getElementById(id); if(e)e.innerHTML=html||'';
   }
   set('sc-tag', S.src.prices
-      ? sessionTag(S.src.prices, S.src.priceDate) : '');
-  set('ix-tag', S.idx.length
-      ? sessionTag(marketOpen()?'live':'close',
-          S.idx.length?String(S.idx[0].updated_at||'').slice(0,10):null) : '');
-  set('bd-tag', S.breadth.length
-      ? sessionTag('close', String(S.breadth[0].session_date||'').slice(0,10))
+      ? sessionTag(S.src.prices, S.src.priceDate,
+                   S.src.prices==='live' ? null : S.src.priceAsOf, S.src.ageS)
       : '');
+  /* THE INDEX STRIP BY THE SAME RULE. It said LIVE whenever the clock said
+     the market was open, while index_quotes refreshes four times a session. */
+  var ixAt=newestStamp(S.idx,'updated_at');
+  var ixSt=feedState(ixAt);
+  set('ix-tag', S.idx.length
+      ? sessionTag(ixSt, istDay(ixAt), ixAt, ageSeconds(ixAt)) : '');
+  var bdAt=newestStamp(S.breadth,'at'), bdSt=feedState(bdAt);
+  set('bd-tag', S.breadth.length
+      ? sessionTag(bdSt, String(S.breadth[0].session_date||'').slice(0,10),
+                   bdAt, ageSeconds(bdAt)) : '');
   set('hv-tag', S.heavy.length
       ? sessionTag('close', String(S.heavy[0].session_date||'').slice(0,10))
       : '');
@@ -976,13 +1093,22 @@ function renderReading(){
   /* THE READING DESCRIBES WHAT IS ON SCREEN, not the clock. If the grid is
      showing Friday's close then this is about Friday, in the past tense,
      with the date on it. */
+  /* PRESENT TENSE IS A CLAIM ABOUT NOW. "are leading" is only true in LIVE;
+     in STALE and CLOSED the sentence is about the moment on screen, in the
+     past tense, with that moment named. */
   var live=S.src.prices==='live';
   var when=dayName(S.src.priceDate);
+  var asOf=S.src.priceAsOf;
   var txt = live
     ? ('Breadth '+adv.toLocaleString('en-IN')+' to '+dec.toLocaleString('en-IN')+
        ', and '+green+' of '+secs.length+' sectors are green. '+
        lead.join(' and ')+' are leading; '+lag.join(' and ')+
        ' are under pressure.')
+    : asOf
+    ? ('As of '+istHhmm(asOf)+' IST on '+when+', breadth was '+
+       adv.toLocaleString('en-IN')+' to '+dec.toLocaleString('en-IN')+', and '+
+       green+' of '+secs.length+' sectors were green. '+lead.join(' and ')+
+       ' were leading; '+lag.join(' and ')+' were under pressure.')
     : ('At the close on '+when+', breadth was '+adv.toLocaleString('en-IN')+
        ' to '+dec.toLocaleString('en-IN')+', and '+green+' of '+secs.length+
        ' sectors finished green. '+lead.join(' and ')+' led; '+
@@ -997,6 +1123,15 @@ function renderReading(){
        S.orb.length+' opening-range '+(S.orb.length===1?'move':'moves')+
        ' and '+S.events.length+' disclosed '+
        (S.events.length===1?'event':'events')+' so far today.')
+    : S.src.prices==='stale'
+    ? ('The live feed has not updated for '+fmtAge(S.src.ageS)+'. '+
+       (asOf ? 'Showing prices as of '+istHhmm(asOf)+' IST'
+             : 'Showing the close of '+when)+' across '+S.covered+' of '+
+       S.prices.length+' symbols until it does.')
+    : asOf
+    ? ('Showing prices as of '+istHhmm(asOf)+' IST on '+when+' across '+
+       S.covered+' of '+S.prices.length+' symbols; the close lands this '+
+       'evening. Live prices resume at 09:15.')
     : ('Showing the close of '+when+' across '+S.covered+' of '+
        S.prices.length+' symbols. '+S.orb.length+' opening-range '+
        (S.orb.length===1?'move':'moves')+' and '+S.events.length+
@@ -2169,7 +2304,9 @@ async function load(){
     sbGet('/rest/v1/live_prices?select=symbol,ltp,change_pct,updated_at&limit=2000'),
     sbGet('/rest/v1/index_quotes?select=*'),
     sbGet('/rest/v1/orb_breaks?select=*&order=detected_at.desc&limit=60'),
-    sbGet('/rest/v1/breadth_snapshots?select=*&order=at.asc&limit=200'),
+    /* NEWEST FIRST. at.asc returned the OLDEST 200 rows -- 19 Oct while the
+       table held 3 Nov -- and the panel drew them as one session. */
+    sbGet('/rest/v1/breadth_snapshots?select=*&order=at.desc&limit=200'),
     sbGet('/rest/v1/v_radar_card_latest?select=*&order=event_date.desc&limit=40', true),
     sbGet('/rest/v1/heavy_quiet?select=*&order=snapshot_at.desc&limit=120'),
     sbGet('/rest/v1/intraday_prices?select=*&limit=1000'),
@@ -2178,20 +2315,23 @@ async function load(){
     sbGet('/rest/v1/radar_events?select=symbol,event_date&order=event_date.desc&limit=600', true)
   ]);
   S.prices=res[0]; S.idx=res[1]; S.orb=res[2];
-  S.breadth=res[3]; S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
+  /* ONE SESSION, THE NEWEST. The panel is "through the session": 200 rows
+     span about three sessions at 73 a day, and drawn as one line they splice
+     different days into a single opening and close. */
+  var bdDay=res[3].length ? String(res[3][0].session_date||'').slice(0,10) : '';
+  S.breadth=res[3].filter(function(r){
+    return String(r.session_date||'').slice(0,10)===bdDay;});
+  S.events=res[4]; S.heavy=res[5]; S.intraday=res[6];
   S.closes=res[7]; S.flash=res[8]; S.radar=res[9];
   resolvePrices();
 
   buildSectors();
-  renderState(); renderReading(); renderIdx(); renderTape();
-  renderSectors(); renderEvents(); renderBreadth(); renderHeavy(); renderCal();
-  renderTags();
-  renderPhone();
+  renderAll();
   /* A tab on /atlas links to /home#view, so the hash decides which view
      opens. Anything else in the hash is ignored rather than trusted. */
   var want=(location.hash||'').replace('#','');
   setView(['market','tape','sectors'].indexOf(want)>=0 ? want : (S.view||'market'));
-  if(marketOpen())setInterval(renderState,1000);
+  setInterval(tick,15000);
 
   /* The track width changes with the viewport, so the duration has to be
      recomputed or the rate drifts on resize. */

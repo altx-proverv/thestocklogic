@@ -201,11 +201,13 @@ if shutil.which("node"):
         ("signals batch state", ["node", "tests/signals_batch_state.js"]),
         ("signals live view",   ["node", "tests/signals_live_view.js"]),
         ("signals holidays",    ["node", "tests/signals_holidays.js"]),
+        ("home live means fresh", ["node", "tests/home_freshness.js"]),
     ]
 else:
     SUITES += [("signals page logic (SKIPPED — node not installed)",
                 [sys.executable, "-c",
-                 "print('node is not installed; tests/signals_*.js did not run')"])]
+                 "print('node is not installed; tests/signals_*.js and "
+                 "tests/home_freshness.js did not run')"])]
 
 
 def main() -> int:
