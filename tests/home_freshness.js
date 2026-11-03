@@ -55,7 +55,8 @@ const FNS = ['esc', 'istNow', 'istDate', 'hhmmss', 'dayName', 'marketOpen',
              'renderHeavy', 'flashText', 'renderFlash', 'num', 'pct', 'sign',
              'priceUnchangedS', 'priceFrozen', 'renderIdx'];
 const CODE = [extractVar('LIVE_MAX_AGE_S'), extractVar('NO_PRICE'),
-              extractVar('VALUE_MAX_UNCHANGED_MIN'), extractVar('VALUE_CHECK_LAST_MIN')]
+              extractVar('VALUE_MAX_UNCHANGED_MIN'), extractVar('VALUE_CHECK_LAST_MIN'),
+              extractVar('IDX_NAME')]
   .concat(FNS.map(extract)).join('\n');
 
 /* A page at a given instant: the real functions, a fake clock, a stub DOM. */
@@ -376,6 +377,21 @@ Object.keys(MEASURED_MAX).forEach((k) => check(
 check('every instrument on the strip has a measured N',
       ['NIFTY50', 'NIFTYBANK', 'NIFTYFIN', 'NIFTYMIDCAP', 'NIFTYSMLCAP', 'INDIAVIX', 'USDINR']
         .every((k) => typeof NMAP[k] === 'number'), JSON.stringify(NMAP));
+
+// ════════════════════════════════════════════════════════════════
+head('12. THE USDINR LABEL COMES FROM THE CONTRACT, NOT FROM A TYPED WORD');
+// ════════════════════════════════════════════════════════════════
+const usdRow = (inst) => ({ symbol: 'USDINR', display_name: 'USDINR FUT', instrument: inst,
+  ltp: 96.21, change_pct: 0, is_future: true, expiry: '2026-11-06',
+  updated_at: '2026-11-03T09:45:03+00:00', price_changed_at: null });
+p = scene('2026-11-03T18:48:55Z', '2026-11-03T09:45:08Z', '2026-11-03', { idx: [usdRow('USDINR26N06FUT')] });
+check('a weekly contract is labelled weekly', /weekly future/.test(tileOf(p, 'USDINR FUT')) &&
+      !/monthly/.test(tileOf(p, 'USDINR FUT')), tileOf(p, 'USDINR FUT'));
+p = scene('2026-11-03T18:48:55Z', '2026-11-03T09:45:08Z', '2026-11-03', { idx: [usdRow('USDINR26NOVFUT')] });
+check('the monthly is labelled monthly', /monthly future/.test(tileOf(p, 'USDINR FUT')),
+      tileOf(p, 'USDINR FUT'));
+check('a tile with no row shows the exchange name, not the internal key',
+      /NIFTY FIN SERVICE/.test(p.els.idx.innerHTML) && !/>NIFTYFIN</.test(p.els.idx.innerHTML));
 
 console.log('\n' + '='.repeat(100));
 if (fails) { console.log(`FAILED -- ${fails} check(s)`); process.exit(1); }

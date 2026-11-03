@@ -1195,16 +1195,26 @@ function priceFrozen(r){
   return u===null || u>=n*60;
 }
 
+/* Exchange names for a tile that has no row yet. */
+var IDX_NAME={NIFTY50:'NIFTY 50', NIFTYBANK:'NIFTY BANK', NIFTYFIN:'NIFTY FIN SERVICE',
+              NIFTYMIDCAP:'NIFTY MIDCAP 100', NIFTYSMLCAP:'NIFTY SMLCAP 100',
+              INDIAVIX:'INDIA VIX', USDINR:'USDINR FUT'};
+
 function renderIdx(){
   var want=['NIFTY50','NIFTYBANK','NIFTYFIN','NIFTYMIDCAP','NIFTYSMLCAP',
             'INDIAVIX','USDINR'];
   var by={}; S.idx.forEach(function(r){by[r.symbol]=r;});
   document.getElementById('idx').innerHTML=want.map(function(k){
     var r=by[k];
-    if(!r)return '<div class="idx-t"><div class="idx-n">'+esc(k)+
+    if(!r)return '<div class="idx-t"><div class="idx-n">'+esc(IDX_NAME[k]||k)+
       '</div><div class="idx-l fig">—</div>'+
       '<div class="fut">first reading at 08:45</div></div>';
     var frozen=priceFrozen(r), u=priceUnchangedS(r);
+    /* THE CONTRACT SAYS WHICH IT IS. The writer moved to the monthly on
+       2026-11-04, but a row written before that is still a weekly; a label
+       typed as "monthly" would be false on exactly that row. */
+    var kind=/^USDINR\d{2}[A-Z]{3}FUT$/.test(String(r.instrument||''))
+      ? 'monthly future' : 'weekly future';
     return '<div class="idx-t'+(frozen?' stale':'')+'"><div class="idx-n">'+
       esc(r.display_name)+'</div>'+
       '<div class="idx-l fig">'+num(r.ltp)+'</div>'+
@@ -1212,7 +1222,7 @@ function renderIdx(){
       pct(r.change_pct)+'</div>'+
       (frozen?'<div class="stale-tag">'+(u===null?'NO PRICE CHANGE SEEN YET'
         :'PRICE UNCHANGED '+esc(fmtAge(u)).toUpperCase())+'</div>':'')+
-      (r.is_future?'<div class="fut">monthly future · expires '+
+      (r.is_future?'<div class="fut">'+kind+' · expires '+
         esc(r.expiry)+' · not the spot rate</div>':'')+
       '</div>';
   }).join('');
