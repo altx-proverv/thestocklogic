@@ -1046,9 +1046,12 @@ function renderTags(){
   set('bd-tag', S.breadth.length
       ? sessionTag(bdSt, String(S.breadth[0].session_date||'').slice(0,10),
                    bdAt, ageSeconds(bdAt)) : '');
+  /* THE SAME THREE STATES, on the sweep's clock (see heavyState). Closed, it
+     names the time of the set it is showing. */
+  var hv=heavyState();
   set('hv-tag', S.heavy.length
-      ? sessionTag('close', String(S.heavy[0].session_date||'').slice(0,10))
-      : '');
+      ? sessionTag(hv.state, String(S.heavy[0].session_date||'').slice(0,10),
+                   hv.at, ageSeconds(hv.sweep)) : '');
   set('ev-tag', S.src.events ? sessionTag('close', S.src.events) : '');
   set('lb-tag', S.src.landed ? sessionTag('close', S.src.landed) : '');
 }
@@ -1747,11 +1750,31 @@ function renderBreadth(){
    stock heavy and quiet at 10:00 may have moved 3% by 15:00 -- so rows carry
    the timestamp of the sweep that found them and anything older is history,
    not the current set. */
+/* THE HEAVY PANEL'S STATE COMES FROM THE SWEEP, NOT ITS OWN ROWS.
+   heavy_quiet is written only when a stock qualifies, so its newest
+   snapshot_at can be hours old on a perfectly live feed: it says nothing about
+   freshness. The sweep that writes it is the one that writes intraday_prices,
+   every five minutes, so that timestamp is the panel's clock. And while live,
+   the set on screen is current only if the LATEST sweep found it; a set from
+   14:40 is not "right now" because no later sweep found anything. */
+function heavyState(){
+  var sweep=newestStamp(S.intraday,'snapshot_at');
+  var at=newestStamp(S.heavy,'snapshot_at');
+  var current=!!at && !!sweep && Date.parse(at)>=Date.parse(sweep)-60000;
+  return {state:feedState(sweep), at:at, sweep:sweep, current:current};
+}
+
 function renderHeavy(){
   var el=document.getElementById('heavy');
-  if(!S.heavy.length){
+  var hv=heavyState(), d=istNow(), m=d.getUTCHours()*60+d.getUTCMinutes();
+  if(!S.heavy.length || (hv.state==='live' && !hv.current && m<585)){
     el.innerHTML='<div class="empty">Stocks trading on unusually heavy '+
       'volume while barely moving. This starts filling at 09:45.</div>';
+    return;
+  }
+  if(hv.state==='live' && !hv.current){
+    el.innerHTML='<div class="empty">Nothing is trading on unusual volume '+
+      'without moving right now.</div>';
     return;
   }
   var newest=S.heavy[0].snapshot_at;
@@ -1980,12 +2003,32 @@ function closeStock(){
    The flash paragraph is the reading. It is read from market_flash, which the
    EOD job writes once per session after its own validator has passed it.
    Nothing is composed in the browser. */
+/* THE FLASH NAMES ITS SESSION. It is written at 18:50 IST about a session that
+   has ended, and the model is handed "atlas entries today", so the stored text
+   says "today" -- which after midnight, or under tomorrow's live headline, is
+   a present-tense claim about the wrong day. Two things, both from the row:
+   the line always leads with its session, and "today" becomes that session's
+   date -- but only when generated_at falls on session_date in IST, the one
+   case where that is provably what "today" meant. Otherwise the words stand. */
+function flashText(row){
+  var day=String(row.session_date||'').slice(0,10);
+  var when=dayName(day);
+  var t=String(row.flash_text||'');
+  if(when && istDay(row.generated_at)===day){
+    t=t.replace(/\btoday('s)?\b/gi, function(w,poss){
+      if(poss)return when+"'s";
+      return (w.charAt(0)==='T' ? 'On ' : 'on ')+when;
+    });
+  }
+  return when ? when+' · '+t : t;
+}
+
 function renderFlash(){
   var el=document.getElementById('flashP');
   var row=(S.flash||[])[0];
   if(!el) return;
   if(!row||!row.flash_text){ el.hidden=true; return; }
-  el.textContent=row.flash_text;
+  el.textContent=flashText(row);
   el.hidden=false;
 }
 

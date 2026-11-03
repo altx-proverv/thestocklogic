@@ -79,7 +79,19 @@ HEARTBEAT_SECONDS = 60
 BREAKOUT_BUFFER = 0.002   # 0.2% beyond range boundary
 RVOL_MIN        = 1.5
 MARKET_OPEN     = (9, 15)
-MARKET_CLOSE    = (15, 15)
+# TWO WINDOWS, NOT ONE. Until 2026-11-04 a single MARKET_CLOSE = (15, 15) ended
+# the whole process, because this began (adfb324, 11 Jun) as a breakout SCANNER
+# -- "continuous scan 9:15 AM - 3:15 PM", a window for breakouts still tradeable
+# before MIS square-off. Breadth, heavy_quiet and intraday_prices were added to
+# the process later and inherited that window, so the last fifteen minutes of
+# every session -- the closing auction, the heaviest volume of the day -- were
+# never captured. NSE trades until 15:30.
+#
+#   MARKET_CLOSE  NSE's close. Data capture and the process's life run to it.
+#   SCAN_CLOSE    the trading window. Breakout signals and the feed-dead
+#                 stand-down of ATLAS stop here, exactly as they did before.
+MARKET_CLOSE    = (15, 30)
+SCAN_CLOSE      = (15, 15)
 
 
 def _headers():
@@ -130,6 +142,22 @@ def market_is_open():
     t = now_ist()
     mins = t.hour * 60 + t.minute
     return MARKET_OPEN[0]*60+MARKET_OPEN[1] <= mins <= MARKET_CLOSE[0]*60+MARKET_CLOSE[1]
+
+
+def scan_is_open():
+    """The trading window: a session and not yet past SCAN_CLOSE. Built on
+    market_is_open() so it inherits the holiday gate rather than repeating it.
+    Governs what can lead to a trade or an ATLAS stand-down; capture does not
+    ask this."""
+    if not market_is_open():
+        return False
+    return not past_scan_close()
+
+
+def past_scan_close():
+    """Later today than SCAN_CLOSE. The end of the trading window only."""
+    t = now_ist()
+    return t.hour * 60 + t.minute > SCAN_CLOSE[0]*60 + SCAN_CLOSE[1]
 
 
 def volume_bucket(curve: dict) -> float:
@@ -211,6 +239,13 @@ class RBEngine:
         self.last_px[sym] = ltp
         self.last_vol[sym] = vol
         self._maybe_write_breadth()
+
+        # NO BREAKOUT AFTER SCAN_CLOSE. The price above is still captured until
+        # 15:30; a signal is not. Before the two windows were split, the
+        # process exiting at 15:15 was the only thing that stopped firing.
+        # The END only: what fires before 09:15 is untouched by this change.
+        if past_scan_close():
+            return
 
         r = self.ranges[sym]
         rh, rl = r["range_high"], r["range_low"]
@@ -629,7 +664,17 @@ def main():
                  f"{HEARTBEAT_SECONDS}s), signals fired: {len(engine.fired)}")
 
         if verdict["stale"]:
-            feed_is_dead(engine, kws, verdict)
+            if scan_is_open():
+                feed_is_dead(engine, kws, verdict)
+            else:
+                # AFTER SCAN_CLOSE THE FEED ONLY FEEDS CAPTURE. Standing ATLAS
+                # down here would be a new trading action in a window that
+                # never had one before the windows were split; it does not
+                # happen. Capture ends early, and the page's own freshness rule
+                # shows the gap as STALE.
+                log.error(f"feed stopped after scan close — capture ends early. "
+                          f"{verdict.get('detail', '')}")
+                kws.close()
             break
 
     sys.exit(0)

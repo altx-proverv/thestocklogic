@@ -51,7 +51,8 @@ function extractVar(name) {
 const FNS = ['esc', 'istNow', 'istDate', 'hhmmss', 'dayName', 'marketOpen',
              'ageSeconds', 'snapFresh', 'feedState', 'fmtAge', 'istHhmm', 'istDay',
              'newestStamp', 'sessionTag', 'resolvePrices', 'renderState',
-             'renderTags', 'changeFeedDead', 'renderReading'];
+             'heavyState', 'renderTags', 'changeFeedDead', 'renderReading',
+             'renderHeavy', 'flashText', 'renderFlash', 'num', 'pct', 'sign'];
 const CODE = [extractVar('LIVE_MAX_AGE_S'), extractVar('NO_PRICE')]
   .concat(FNS.map(extract)).join('\n');
 
@@ -67,14 +68,19 @@ function page(nowIso, data) {
     (els[id] = els[id] || { textContent: '', className: '', innerHTML: '' }) };
   const S = {
     prices: data.prices, idx: data.idx || [], orb: [], breadth: data.breadth || [],
-    events: [], heavy: [], intraday: data.intraday, closes: data.closes,
+    events: [], heavy: data.heavy || [], intraday: data.intraday, closes: data.closes,
+    flash: data.flash || [],
     sectors: data.sectors, covered: 0, uncovered: 0,
     src: { prices: null, priceDate: null, priceSource: null, priceAsOf: null,
            ageS: null, tape: null, events: null, landed: null } };
   const ctx = vm.createContext({ Date: FakeDate, Math, String, isNaN, parseFloat,
-                                 S, document });
+                                 S, document, Object,
+                                 /* only counted by renderHeavy; the real map is the
+                                    universe, asserted by tests/test_home_page.py */
+                                 SECTOR_MAP: { HV1: 'X' } });
   vm.runInContext(CODE, ctx);
   ctx.resolvePrices(); ctx.renderState(); ctx.renderTags(); ctx.renderReading();
+  ctx.renderHeavy(); ctx.renderFlash();
   return { S, els, ctx };
 }
 
@@ -239,6 +245,67 @@ check('the index tag takes its state from feedState',
       /ixSt=feedState\(/.test(extract('renderTags')));
 check('the old clock-only index tag is gone',
       !/sessionTag\(marketOpen\(\)\?'live'/.test(code));
+
+// ════════════════════════════════════════════════════════════════
+head('9. THE HEAVY-VOLUME PANEL: THE SAME THREE STATES, ON THE SWEEP\'S CLOCK');
+// ════════════════════════════════════════════════════════════════
+const hvRow = (iso, day) => ({ session_date: day, symbol: 'HV1', snapshot_at: iso,
+                               volume_ratio: 4, change_pct: 0.2, ltp: 10, tracked: 497 });
+p = scene('2026-11-03T18:48:55Z' /* 00:18:55 IST Wed 4 Nov */, '2026-11-03T09:45:08Z',
+          '2026-11-03', { heavy: [hvRow('2026-11-03T09:45:08+00:00', '2026-11-03')] });
+check('post-close: AS OF 15:15 · Tue 3 Nov, not LIVE, not a bare CLOSE',
+      /AS OF 15:15 &middot; Tue 3 Nov/.test(p.els['hv-tag'].innerHTML), p.els['hv-tag'].innerHTML);
+p = scene('2026-11-03T05:32:00Z', '2026-11-03T05:30:00Z', '2026-11-02',
+          { heavy: [hvRow('2026-11-03T05:30:01+00:00', '2026-11-03')] });
+check('live sweep that found the set: LIVE', /tag-live/.test(p.els['hv-tag'].innerHTML),
+      p.els['hv-tag'].innerHTML);
+check('  and the set is current', p.ctx.heavyState().current === true);
+p = scene('2026-11-03T05:44:00Z', '2026-11-03T05:30:00Z', '2026-11-02',
+          { heavy: [hvRow('2026-11-03T05:30:01+00:00', '2026-11-03')] });
+check('sweep 14 minutes old in session: STALE · 14m',
+      /tag-stale">STALE &middot; 14m</.test(p.els['hv-tag'].innerHTML), p.els['hv-tag'].innerHTML);
+/* 14:40 set, sweeps since have found nothing: live, but that set is not "now". */
+p = scene('2026-11-03T09:42:00Z', '2026-11-03T09:40:00Z', '2026-11-02',
+          { heavy: [hvRow('2026-11-03T09:10:00+00:00', '2026-11-03')] });
+check('a 14:40 set under a 15:10 sweep is not current', p.ctx.heavyState().current === false);
+check('  so the panel says nothing qualifies right now, not the old set',
+      /Nothing is trading on unusual volume without moving right now/.test(p.els.heavy.innerHTML),
+      p.els.heavy.innerHTML);
+p = scene('2026-11-03T03:50:00Z' /* 09:20 IST */, '2026-11-03T03:50:00Z', '2026-11-02',
+          { heavy: [hvRow('2026-11-02T09:45:08+00:00', '2026-11-02')] });
+check('09:20 with yesterday\'s set: it starts filling at 09:45, not yesterday as now',
+      /starts filling at 09:45/.test(p.els.heavy.innerHTML), p.els.heavy.innerHTML);
+const hvStmt = (extract('renderTags').replace(/\/\*[\s\S]*?\*\//g, '')
+                .match(/set\('hv-tag'[\s\S]*?\);/) || [''])[0];
+check('the heavy tag takes its state from heavyState, never a literal',
+      /sessionTag\(hv\.state/.test(hvStmt) && !/sessionTag\('/.test(hvStmt), hvStmt);
+
+// ════════════════════════════════════════════════════════════════
+head('10. THE FLASH LINE NAMES ITS SESSION');
+// ════════════════════════════════════════════════════════════════
+const FL = 'Breadth held at 59.7% advancing. ATLAS is watching 450 setups, though no entries triggered today.';
+p = scene('2026-11-03T18:48:55Z', '2026-11-03T09:45:08Z', '2026-11-03',
+          { flash: [{ session_date: '2026-11-03 00:00:00+00', generated_at: '2026-11-03T13:20:31+00:00',
+                      flash_text: FL }] });
+const shown = p.els.flashP.textContent;
+check('after midnight it leads with its session', shown.startsWith('Tue 3 Nov · '), shown);
+check('  and "today" became the session it meant', / triggered on Tue 3 Nov\.$/.test(shown), shown);
+check('  so it makes no present-tense claim about today', !/\btoday\b/i.test(shown), shown);
+const fx = (text, gen) => p.ctx.flashText({ session_date: '2026-11-03', generated_at: gen, flash_text: text });
+check('"Today ..." at a sentence start keeps its capital',
+      fx('Today breadth held.', '2026-11-03T13:20:31Z') === 'Tue 3 Nov · On Tue 3 Nov breadth held.',
+      fx('Today breadth held.', '2026-11-03T13:20:31Z'));
+check('"today\'s" becomes the session\'s',
+      fx("today's move", '2026-11-03T13:20:31Z') === "Tue 3 Nov · Tue 3 Nov's move",
+      fx("today's move", '2026-11-03T13:20:31Z'));
+check('generated on a later day: "today" is NOT rewritten, only labelled',
+      fx('no entries today.', '2026-11-03T19:30:00Z') === 'Tue 3 Nov · no entries today.',
+      fx('no entries today.', '2026-11-03T19:30:00Z'));
+check('text with no "today" is labelled and otherwise untouched',
+      fx('Breadth held.', '2026-11-03T13:20:31Z') === 'Tue 3 Nov · Breadth held.',
+      fx('Breadth held.', '2026-11-03T13:20:31Z'));
+check('a word containing it is left alone',
+      fx('todays and yesterday-today', '2026-11-03T13:20:31Z').indexOf('todays') >= 0);
 
 console.log('\n' + '='.repeat(100));
 if (fails) { console.log(`FAILED -- ${fails} check(s)`); process.exit(1); }
