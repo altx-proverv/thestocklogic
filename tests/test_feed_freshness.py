@@ -430,7 +430,7 @@ head("THE REGISTRY — EVERY PUBLIC-TABLE WRITER IS CLASSIFIED")
 # ══════════════════════════════════════════════════════════════════
 # GATED: writes a claim about a market session. Must call the gate.
 GATED = {
-    "engine/rbe_engine.py":         "breadth_snapshots heavy_quiet intraday_prices live_signals",
+    "engine/rbe_engine.py":         "breadth_snapshots heavy_quiet intraday_prices live_signals index_quotes",
     "engine/market_flash.py":       "market_flash",
     "engine/index_quotes.py":       "index_quotes",
     "engine/publish_orb.py":        "orb_breaks",

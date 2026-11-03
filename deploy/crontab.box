@@ -346,10 +346,16 @@ MAILTO=""
 #
 # INDEX TILES. Nothing wrote NIFTY 50 / NIFTY BANK / NIFTY MIDCAP 100 /
 # NIFTY SMLCAP 100 / INDIA VIX / USDINR before this; live_prices holds 745
-# equities and not one index. Aligned to the live_prices refreshes so the strip
-# and the heatmap are never from different moments. USDINR is resolved from the
-# instrument master on every run, never pinned — it is a CDS future and it
-# rolls; a pinned token goes stale on expiry and then dies.
+# equities and not one index. USDINR is resolved from the instrument master on
+# every run, never pinned — it is a CDS future and it rolls — and since
+# 2026-11-04 it is the MONTHLY contract: the weeklies do not trade.
+#
+# SINCE 2026-11-04 THE STRIP IS LIVE FROM rbe_engine, written once a minute off
+# the WebSocket it already holds (engine/rbe_engine.py, write_index_quotes).
+# These runs remain for two things: the 08:45 run writes the previous close the
+# live writer reads, and the later three are a fallback if rbe_engine is down.
+# The old reason for this schedule -- aligning the strip to the live_prices
+# refreshes -- became obsolete when the heatmap moved to intraday_prices.
 #
 # 03:15 UTC = 08:45 IST · 04:15 = 09:45 · 06:00 = 11:30 · 09:45 = 15:15
 15 3 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 engine/index_quotes.py >> /home/ubuntu/thestocklogic/reports/home_page.log 2>&1

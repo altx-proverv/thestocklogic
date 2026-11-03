@@ -52,8 +52,10 @@ const FNS = ['esc', 'istNow', 'istDate', 'hhmmss', 'dayName', 'marketOpen',
              'ageSeconds', 'snapFresh', 'feedState', 'fmtAge', 'istHhmm', 'istDay',
              'newestStamp', 'sessionTag', 'resolvePrices', 'renderState',
              'heavyState', 'renderTags', 'changeFeedDead', 'renderReading',
-             'renderHeavy', 'flashText', 'renderFlash', 'num', 'pct', 'sign'];
-const CODE = [extractVar('LIVE_MAX_AGE_S'), extractVar('NO_PRICE')]
+             'renderHeavy', 'flashText', 'renderFlash', 'num', 'pct', 'sign',
+             'priceUnchangedS', 'priceFrozen', 'renderIdx'];
+const CODE = [extractVar('LIVE_MAX_AGE_S'), extractVar('NO_PRICE'),
+              extractVar('VALUE_MAX_UNCHANGED_MIN'), extractVar('VALUE_CHECK_LAST_MIN')]
   .concat(FNS.map(extract)).join('\n');
 
 /* A page at a given instant: the real functions, a fake clock, a stub DOM. */
@@ -80,7 +82,7 @@ function page(nowIso, data) {
                                  SECTOR_MAP: { HV1: 'X' } });
   vm.runInContext(CODE, ctx);
   ctx.resolvePrices(); ctx.renderState(); ctx.renderTags(); ctx.renderReading();
-  ctx.renderHeavy(); ctx.renderFlash();
+  ctx.renderHeavy(); ctx.renderFlash(); ctx.renderIdx();
   return { S, els, ctx };
 }
 
@@ -306,6 +308,74 @@ check('text with no "today" is labelled and otherwise untouched',
       fx('Breadth held.', '2026-11-03T13:20:31Z'));
 check('a word containing it is left alone',
       fx('todays and yesterday-today', '2026-11-03T13:20:31Z').indexOf('todays') >= 0);
+
+// ════════════════════════════════════════════════════════════════
+head('11. A FRESH ROW WITH A FROZEN PRICE IS NOT LIVE');
+// ════════════════════════════════════════════════════════════════
+/* The thresholds are the page's own, read from it -- never typed here. */
+const NMAP = vm.runInNewContext(extractVar('VALUE_MAX_UNCHANGED_MIN') + ' VALUE_MAX_UNCHANGED_MIN');
+const LAST = +extractVar('VALUE_CHECK_LAST_MIN').match(/=(\d+)/)[1];
+const NOW11 = '2026-11-03T05:30:00Z';                      /* 11:00 IST, session */
+const ago = (base, s) => new Date(Date.parse(base) - s * 1000).toISOString();
+function idxRow(sym, changedAgoS, base = NOW11) {
+  return { symbol: sym, display_name: sym, ltp: 100, prev_close: 99, change_pct: 1.01,
+           is_future: sym === 'USDINR', expiry: null,
+           updated_at: ago(base, 20),                        /* the row: 20s old, fresh */
+           price_changed_at: changedAgoS === null ? null : ago(base, changedAgoS) };
+}
+const strip = (now, rows) => scene(now, ago(now, 60), '2026-11-02', { idx: rows });
+const tileOf = (p, sym) => (p.els.idx.innerHTML.split('<div class="idx-t').find(
+  (t) => t.indexOf('>' + sym + '<') >= 0) || '');
+
+const n50 = NMAP.NIFTY50, nUsd = NMAP.USDINR;
+p = strip(NOW11, [idxRow('NIFTY50', n50 * 60 - 1)]);
+check(`NIFTY 50 unchanged ${n50 * 60 - 1}s (under N=${n50} min): LIVE, tile not stale`,
+      /tag-live/.test(p.els['ix-tag'].innerHTML) && !/stale/.test(tileOf(p, 'NIFTY50').slice(0, 20)),
+      p.els['ix-tag'].innerHTML);
+p = strip(NOW11, [idxRow('NIFTY50', n50 * 60)]);
+check(`NIFTY 50 unchanged ${n50} min under a 20s-old row: NOT live`,
+      /tag-stale/.test(p.els['ix-tag'].innerHTML), p.els['ix-tag'].innerHTML);
+check('  the tile is marked stale and says how long',
+      /^ stale"/.test(tileOf(p, 'NIFTY50')) && /PRICE UNCHANGED 4M/.test(tileOf(p, 'NIFTY50')),
+      tileOf(p, 'NIFTY50').slice(0, 160));
+p = strip(NOW11, [idxRow('USDINR', 7 * 86400)]);
+check('USDINR: fresh row, price a week old (the weekly-contract defect): NOT live',
+      /tag-stale/.test(p.els['ix-tag'].innerHTML) && /^ stale"/.test(tileOf(p, 'USDINR')),
+      p.els['ix-tag'].innerHTML);
+p = strip(NOW11, [idxRow('USDINR', (nUsd - 1) * 60)]);
+check(`USDINR unchanged ${nUsd - 1} min (its measured N is ${nUsd}): still live`,
+      /tag-live/.test(p.els['ix-tag'].innerHTML), p.els['ix-tag'].innerHTML);
+p = strip(NOW11, [idxRow('NIFTY50', 30), idxRow('USDINR', nUsd * 60)]);
+check('one frozen tile makes the strip STALE even when the rest move',
+      /tag-stale/.test(p.els['ix-tag'].innerHTML) && !/^ stale"/.test(tileOf(p, 'NIFTY50')),
+      p.els['ix-tag'].innerHTML);
+p = strip(NOW11, [idxRow('NIFTY50', null)]);
+check('a price never seen to change is not evidence of live',
+      /tag-stale/.test(p.els['ix-tag'].innerHTML) && /NO PRICE CHANGE SEEN YET/.test(tileOf(p, 'NIFTY50')),
+      tileOf(p, 'NIFTY50').slice(0, 160));
+/* LAST + 6 minutes IST, i.e. 15:20 on 3 Nov; IST is UTC + 330 minutes. */
+const after = new Date(Date.parse('2026-11-03T00:00:00Z') + ((LAST + 6) - 330) * 60000).toISOString();
+p = strip(after, [idxRow('NIFTY50', 6 * 60, after)]);
+check(`after ${Math.floor(LAST / 60)}:${LAST % 60} the closing hold is not called stale (no daily false alarm)`,
+      /tag-live/.test(p.els['ix-tag'].innerHTML), `${after} ${p.els['ix-tag'].innerHTML}`);
+p = strip('2026-11-03T18:48:55Z', [idxRow('NIFTY50', 3 * 3600, '2026-11-03T18:48:55Z')]);
+check('market closed: the value check does not apply',
+      !/^ stale"/.test(tileOf(p, 'NIFTY50')), tileOf(p, 'NIFTY50').slice(0, 60));
+/* THE EVIDENCE, NOT THE PAGE'S OWN NUMBER. The boundary checks above read N
+   from the page, so a loosened N would move them with it. This pins each N to
+   the measurement it came from: longest run of identical one-minute values
+   before 15:15, 6 Oct - 3 Nov 2026 (Upstox one-minute candles, carried forward
+   through minutes with no trade), plus the margin of 3 that atlas/freshness.py
+   took. Changing an N means changing this evidence, on purpose. */
+const MEASURED_MAX = { NIFTY50: 1, NIFTYBANK: 1, NIFTYFIN: 1, NIFTYMIDCAP: 1,
+                       NIFTYSMLCAP: 1, INDIAVIX: 8, USDINR: 41 };
+const MARGIN = 3;
+Object.keys(MEASURED_MAX).forEach((k) => check(
+  `${k}: N = measured max ${MEASURED_MAX[k]} + ${MARGIN}`, NMAP[k] === MEASURED_MAX[k] + MARGIN,
+  NMAP[k]));
+check('every instrument on the strip has a measured N',
+      ['NIFTY50', 'NIFTYBANK', 'NIFTYFIN', 'NIFTYMIDCAP', 'NIFTYSMLCAP', 'INDIAVIX', 'USDINR']
+        .every((k) => typeof NMAP[k] === 'number'), JSON.stringify(NMAP));
 
 console.log('\n' + '='.repeat(100));
 if (fails) { console.log(`FAILED -- ${fails} check(s)`); process.exit(1); }

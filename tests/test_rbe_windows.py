@@ -78,6 +78,7 @@ def engine():
     e.curve = {"09:15": 0.05}
     e.fired, e.tick_count = set(), 0
     e.last_px, e.last_vol, e.breadth_last_write = {}, {}, 0.0
+    e.index_tokens, e.index_px, e.index_prev = {}, {}, {}
     e.fires, e.writes = [], []
     e.fire_signal = lambda *a: e.fires.append(a[:2])
     e._maybe_write_breadth = lambda: None
@@ -145,6 +146,99 @@ loop_exit = [ast.unparse(n.test) for n in ast.walk(main) if isinstance(n, ast.If
              and any(isinstance(c, ast.Break) for c in n.body)]
 check("the process exits on market_is_open(), i.e. at 15:30",
       "not market_is_open()" in loop_exit, True)
+
+# ══════════════════════════════════════════════════════════════════
+head("THE INDEX STRIP RIDES THE SOCKET WITHOUT TOUCHING WHAT ATLAS DEPENDS ON")
+# ══════════════════════════════════════════════════════════════════
+at("11:00")
+NIFTY_TOK, USD_TOK = 256265, 999777
+e = engine()
+e.index_tokens = {NIFTY_TOK: {"symbol": "NIFTY50", "display_name": "NIFTY 50",
+                              "instrument": "NIFTY 50", "exchange": "NSE",
+                              "is_future": False, "expiry": None},
+                  USD_TOK: {"symbol": "USDINR", "display_name": "USDINR FUT",
+                            "instrument": "USDINR26NOVFUT", "exchange": "CDS",
+                            "is_future": True, "expiry": "2026-11-26"}}
+e.process_tick = R.RBEngine.process_tick.__get__(e)
+e.on_ticks(None, [{"instrument_token": NIFTY_TOK, "last_price": 23700.5},
+                  {"instrument_token": USD_TOK, "last_price": 96.2},
+                  dict(BREAKOUT)])
+check("index ticks do NOT feed tick_count (the feed-dead monitor's input)",
+      e.tick_count, 1, "a live index stream must not mask a dead equity feed")
+check("  the equity tick still does", "ABC" in e.last_px, True)
+check("an index tick is a price for the strip", e.index_px.get(NIFTY_TOK), 23700.5)
+check("  and reaches no equity state", (NIFTY_TOK in e.last_px, "NIFTY50" in e.last_px),
+      (False, False))
+check("  and fires nothing", [f for f in e.fires if f[0] != "ABC"], [])
+
+posted = []
+requests.post = lambda url, **k: (posted.append((url, k.get("json"))) or _Ok())
+e.index_prev = {"NIFTY50": 23440.8}
+e.write_index_quotes()
+requests.post = _post
+rows = {r["symbol"]: r for r in (posted[0][1] if posted else [])}
+check("one write to index_quotes per heartbeat", [u.rsplit("/", 1)[-1] for u, _ in posted],
+      ["index_quotes"])
+check("prev_close is the 08:45 row's, carried as read",
+      rows.get("NIFTY50", {}).get("prev_close"), 23440.8)
+check("  and the change is against it",
+      rows.get("NIFTY50", {}).get("change_pct"), round((23700.5 - 23440.8) / 23440.8 * 100, 2))
+check("no known prev_close: the change is unknown, not zero",
+      (rows.get("USDINR", {}).get("prev_close"), rows.get("USDINR", {}).get("change_pct")),
+      (None, None))
+check("the payload never carries price_changed_at (the database sets it)",
+      any("price_changed_at" in r for r in rows.values()), False)
+
+
+class _R:
+    status_code = 200
+
+    def __init__(self, b): self._b = b
+
+    def json(self): return self._b
+
+
+_get = requests.get
+requests.get = lambda *a, **k: _R([
+    {"symbol": "NIFTY50", "instrument": "NIFTY 50", "prev_close": 23440.8,
+     "updated_at": "2026-11-03T08:45:02+05:30"},
+    {"symbol": "USDINR", "instrument": "USDINR26N06FUT", "prev_close": 96.21,
+     "updated_at": "2026-11-03T08:45:02+05:30"}])
+check("prev_close from today's row is used",
+      e._index_prev_closes().get("NIFTY50"), 23440.8)
+check("  a USDINR prev_close for a DIFFERENT contract is not",
+      "USDINR" in e._index_prev_closes(), False, "a weekly's close against the monthly's price")
+requests.get = lambda *a, **k: _R([
+    {"symbol": "NIFTY50", "instrument": "NIFTY 50", "prev_close": 23000.0,
+     "updated_at": "2026-11-02T08:45:02+05:30"}])
+check("  a prev_close written on an EARLIER day is not", e._index_prev_closes(), {})
+requests.get = _get
+
+
+class _WS:
+    def __init__(self): self.subs, self.closed = [], False
+
+    def subscribe(self, t): self.subs = list(t)
+
+    def set_mode(self, m, t): pass
+
+    def close(self): self.closed = True
+
+    MODE_QUOTE = "quote"
+
+
+ws = _WS()
+R.ZERODHA_TOKEN_MAP["ABC"] = 999001
+e.on_connect(ws, None)
+check("on_connect subscribes the equities AND the strip",
+      sorted(ws.subs), sorted([999001, NIFTY_TOK, USD_TOK]))
+e2 = engine()
+e2.ranges = {}
+e2.index_tokens = e.index_tokens
+ws2 = _WS()
+e2.on_connect(ws2, None)
+check("  no equities: the socket still closes rather than idle on indices alone",
+      (ws2.closed, ws2.subs), (True, []))
 
 print("\n" + "=" * 110)
 if failures:

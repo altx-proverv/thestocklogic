@@ -197,6 +197,11 @@ class RBEngine:
         self.last_px = {}
         self.last_vol = {}
         self.breadth_last_write = 0.0
+        # THE INDEX STRIP (see add_index_instruments). Kept apart from the
+        # equity state above so nothing that scans equities can see them.
+        self.index_tokens = {}
+        self.index_px = {}
+        self.index_prev = {}
         log.info(f"Range map loaded: {len(self.ranges)} stocks | "
                  f"generated {self.generated_at or 'unknown'} | "
                  f"Already fired today: {len(self.fired)}")
@@ -215,7 +220,13 @@ class RBEngine:
             return set()
 
     def on_ticks(self, ws, ticks):
-        self.tick_count += len(ticks)
+        # EQUITY TICKS ONLY. tick_count is what the feed-dead monitor differences
+        # to decide whether to stand ATLAS down. Counting index ticks would let
+        # a live index stream mask a dead equity feed, and ATLAS would keep
+        # entering against frozen prices -- so the count means what it meant
+        # before the indices were subscribed.
+        self.tick_count += sum(1 for t in ticks
+                               if t.get("instrument_token") not in self.index_tokens)
         for tick in ticks:
             try:
                 self.process_tick(tick)
@@ -224,6 +235,13 @@ class RBEngine:
 
     def process_tick(self, tick):
         token = tick["instrument_token"]
+        # AN INDEX TICK IS A PRICE FOR THE STRIP AND NOTHING ELSE: no breadth,
+        # no range, no breakout. It returns before any of that is reached.
+        if token in self.index_tokens:
+            px = tick.get("last_price")
+            if px:
+                self.index_px[token] = px
+            return
         sym = TOKEN_SYMBOL_MAP.get(token)
         if not sym or sym not in self.ranges:
             return
@@ -495,6 +513,121 @@ class RBEngine:
         except Exception as e:
             log.error(f"Push error {sym}: {e}")
 
+    # ── THE INDEX STRIP, LIVE ─────────────────────────────────────
+    #
+    # index_quotes was written four times a session by engine/index_quotes.py,
+    # "aligned to the live_prices refreshes so the strip and the heatmap are
+    # never from different moments". The heatmap moved to intraday_prices at
+    # five minutes, so that alignment came to guarantee the mismatch it was
+    # meant to prevent. This socket already streams all session; the indices
+    # cost six tokens and the near-month USDINR future one more.
+    #
+    # ONE MINUTE, ON ITS OWN CADENCE: write_index_quotes is called from the
+    # main loop's 60s heartbeat. The equity five-minute writer is untouched.
+    #
+    # PREVIOUS CLOSE FROM THE 08:45 RUN, not from the tick. index_quotes.py
+    # writes prev_close from Kite's quote ohlc.close before the open; what an
+    # INDEX tick carries in its own close field has not been verified, so it
+    # is not used.
+
+    def add_index_instruments(self, kite) -> None:
+        """Resolve the strip's instruments. Never raises: the equity scanner must
+        start whether or not this can."""
+        try:
+            from index_quotes import INDICES, near_month_usdinr
+        except Exception as e:
+            log.error(f"index strip disabled — cannot import index_quotes: {e}")
+            return
+        # BY NAME, as index_quotes.py reads them: a recorded token that drifted
+        # would silently point a tile at the wrong index.
+        try:
+            master = {r["tradingsymbol"]: r["instrument_token"]
+                      for r in kite.instruments("NSE") if r.get("segment") == "INDICES"}
+        except Exception as e:
+            log.warning(f"NSE instrument master unreadable ({e}) — using recorded tokens")
+            master = {}
+        for sym, name, instrument, recorded in INDICES:
+            tok = master.get(name, recorded)
+            if master and tok != recorded:
+                log.warning(f"{name}: token {tok} in the master, {recorded} recorded")
+            self.index_tokens[tok] = {"symbol": sym, "display_name": name,
+                                      "instrument": instrument, "exchange": "NSE",
+                                      "is_future": False, "expiry": None}
+        try:
+            usd = near_month_usdinr(kite)
+            if usd:
+                self.index_tokens[usd["token"]] = {
+                    "symbol": "USDINR", "display_name": "USDINR FUT",
+                    "instrument": usd["tradingsymbol"], "exchange": "CDS",
+                    "is_future": True, "expiry": usd["expiry"].isoformat()}
+        except Exception as e:
+            log.error(f"USDINR not added to the strip: {e}")
+        self.index_prev = self._index_prev_closes()
+        log.info(f"index strip: {len(self.index_tokens)} instrument(s), previous close "
+                 f"known for {len(self.index_prev)}")
+
+    def _index_prev_closes(self) -> dict:
+        """{symbol: prev_close} from rows written TODAY, for the same instrument.
+        A prev_close from an earlier day, or from a USDINR contract we are not
+        streaming, would put a wrong change on the tile; it is left unknown."""
+        today = now_ist().date().isoformat()
+        want = {m["symbol"]: m["instrument"] for m in self.index_tokens.values()}
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/index_quotes",
+                             params={"select": "symbol,instrument,prev_close,updated_at"},
+                             headers=_headers(), timeout=10)
+            rows = r.json() if r.status_code == 200 else []
+        except Exception as e:
+            log.warning(f"index prev_close unreadable: {e}")
+            return {}
+        out = {}
+        for row in rows:
+            sym, prev = row.get("symbol"), row.get("prev_close")
+            if sym not in want or not prev:
+                continue
+            if str(row.get("instrument")) != str(want[sym]):
+                continue
+            ts = str(row.get("updated_at") or "")
+            try:
+                day = datetime.fromisoformat(ts).astimezone(IST).date().isoformat()
+            except ValueError:
+                continue
+            if day == today:
+                out[sym] = float(prev)
+        return out
+
+    def write_index_quotes(self) -> None:
+        """Upsert every instrument that has ticked. Called once a heartbeat.
+        Never raises -- a failed write must not take the scanner down.
+
+        The row's freshness is updated_at; whether the PRICE moved is decided
+        by the database (index_quotes.price_changed_at), not here."""
+        if not self.index_px:
+            return
+        stamp = now_ist().replace(microsecond=0).isoformat()
+        rows = []
+        for tok, px in self.index_px.items():
+            meta = self.index_tokens.get(tok)
+            if not meta:
+                continue
+            prev = self.index_prev.get(meta["symbol"])
+            rows.append({**meta, "ltp": float(px), "prev_close": prev,
+                         "change_pct": (round((px - prev) / prev * 100.0, 2)
+                                        if prev else None),
+                         "updated_at": stamp})
+        if not rows:
+            return
+        try:
+            resp = requests.post(f"{SUPABASE_URL}/rest/v1/index_quotes",
+                                 headers={**_headers(),
+                                          "Prefer": "resolution=merge-duplicates"},
+                                 json=rows, timeout=10)
+            if resp.status_code not in (200, 201, 204):
+                log.warning(f"index quotes rejected: HTTP {resp.status_code} "
+                            f"{resp.text[:120]}")
+        except Exception as e:
+            log.warning(f"index quotes write failed: {e}")
+
     def on_connect(self, ws, response):
         tokens = [ZERODHA_TOKEN_MAP[s] for s in self.ranges if s in ZERODHA_TOKEN_MAP]
         if not tokens:
@@ -505,9 +638,13 @@ class RBEngine:
                       "subscribing to an empty list.")
             ws.close()
             return
-        ws.subscribe(tokens)
-        ws.set_mode(ws.MODE_QUOTE, tokens)
-        log.info(f"WebSocket connected — subscribed {len(tokens)} tokens (quote mode)")
+        # The indices ride the same socket: six index tokens and one CDS future
+        # beside ~498 equities, under Kite's documented 3,000 per connection.
+        idx = list(self.index_tokens)
+        ws.subscribe(tokens + idx)
+        ws.set_mode(ws.MODE_QUOTE, tokens + idx)
+        log.info(f"WebSocket connected — subscribed {len(tokens)} tokens (quote mode)"
+                 f" + {len(idx)} index/FX token(s) for the strip")
 
     def on_close(self, ws, code, reason):
         log.info(f"WebSocket closed: {code} {reason}")
@@ -617,6 +754,17 @@ def main():
                   f"Re-run rbe_startup.py.")
         sys.exit(1)
 
+    # THE STRIP'S INSTRUMENTS, resolved before the socket opens so on_connect
+    # subscribes them with the equities. A failure here leaves the strip on
+    # its 08:45 row and the scanner untouched.
+    try:
+        from kiteconnect import KiteConnect
+        _kite = KiteConnect(api_key=ZERODHA_API_KEY)
+        _kite.set_access_token(token)
+        engine.add_index_instruments(_kite)
+    except Exception as e:
+        log.error(f"index strip not started: {e}")
+
     kws = KiteTicker(ZERODHA_API_KEY, token)
     kws.on_ticks   = engine.on_ticks
     kws.on_connect = engine.on_connect
@@ -651,6 +799,9 @@ def main():
             log.info(f"Market closed — shutting down. Ticks processed: {engine.tick_count}")
             kws.close()
             break
+
+        # THE STRIP'S OWN CADENCE: once a heartbeat, i.e. once a minute.
+        engine.write_index_quotes()
 
         count = engine.tick_count
         delta = count - prev_count

@@ -22,6 +22,7 @@ Writes public.index_quotes, which the browser can only SELECT.
 """
 
 import os
+import re
 import sys
 import logging
 from pathlib import Path
@@ -58,7 +59,17 @@ INDICES = [
     ("NIFTYMIDCAP", "NIFTY MIDCAP 100", "NIFTY MIDCAP 100", 256777),
     ("NIFTYSMLCAP", "NIFTY SMLCAP 100", "NIFTY SMLCAP 100", 267017),
     ("INDIAVIX",    "INDIA VIX",        "INDIA VIX",        264969),
+    # Never in the strip before 2026-11-04. Token 257801 confirmed against the
+    # NSE instrument master (segment INDICES) on that date.
+    ("NIFTYFIN",    "NIFTY FIN SERVICE", "NIFTY FIN SERVICE", 257801),
 ]
+
+# THE MONTHLY CONTRACT, BY NAME. Kite lists USDINR monthlies as
+# USDINR26NOVFUT and weeklies as USDINR26N06FUT. The weeklies do not trade:
+# USDINR26N06FUT had no one-minute candle at all from 6 Oct to 3 Nov, and the
+# three weeklies this picked showed one price at +0.00% for their whole week.
+# The monthly traded in 458-480 of 480 minutes a session over the same span.
+_MONTHLY = re.compile(r"^USDINR\d{2}[A-Z]{3}FUT$")
 
 
 def _headers():
@@ -69,10 +80,13 @@ def _headers():
 
 
 def near_month_usdinr(kite) -> dict:
-    """The nearest UNEXPIRED USDINR future on CDS. {} if none resolvable.
+    """The nearest unexpired MONTHLY USDINR future on CDS. {} if none.
 
-    Weekly and monthly contracts both exist, so this takes the nearest expiry
-    that has not passed rather than assuming a monthly.
+    Weekly and monthly contracts both exist. This took the nearest expiry of
+    either until 2026-11-04, which made it a weekly almost every week -- and
+    the weeklies do not trade (see _MONTHLY). It rolls on the expiry day itself,
+    as live_sentiment rolls the NIFTY future: an expiring contract stops
+    trading at midday and would freeze the tile for the afternoon.
     """
     today = datetime.now(IST).date()
     try:
@@ -87,11 +101,13 @@ def near_month_usdinr(kite) -> dict:
         exp = r.get("expiry")
         if isinstance(exp, datetime):
             exp = exp.date()
-        if not isinstance(exp, date) or exp < today:
+        if not isinstance(exp, date) or exp <= today:
+            continue
+        if not _MONTHLY.match(str(r.get("tradingsymbol") or "")):
             continue
         live.append((exp, r))
     if not live:
-        log.error("no unexpired USDINR future found on CDS")
+        log.error("no unexpired monthly USDINR future found on CDS")
         return {}
     live.sort(key=lambda t: t[0])
     exp, r = live[0]

@@ -155,7 +155,7 @@ nav a[aria-current="page"]{color:var(--ink,#FFFFFF); font-weight:600;
 .prov{margin-top:10px; font-size:11px; color:var(--micro,#8CA3C4); max-width:72ch}
 
 /* 3 INDEX STRIP */
-.idx{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px;
+.idx{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:10px;
   padding-bottom:18px}
 .idx-t{background:var(--card,#16294A); border:1px solid var(--hair,rgba(255,255,255,0.10)); border-radius:10px;
   padding:11px 12px; min-width:0}
@@ -230,6 +230,8 @@ nav a[aria-current="page"]{color:var(--ink,#FFFFFF); font-weight:600;
 .t-p{font-size:12.5px; font-weight:600; color:var(--tile-ink,#FFFFFF)}
 .t-l{font-size:9.5px; color:var(--tile-sub,rgba(255,255,255,0.70))}
 .tile.stale{background:var(--stale-fill,#16294A); border:1px dashed rgba(227,159,127,0.75)}
+/* An index tile whose PRICE has stopped (see priceFrozen): the same look. */
+.idx-t.stale{background:var(--stale-fill,#16294A); border:1px dashed rgba(227,159,127,0.75)}
 .tile.stale .t-s{color:var(--stale-ink,#9FB3D0)}
 .tile.stale .t-p,.tile.stale .t-l{color:var(--stale-sub,#8CA3C4)}
 .stale-tag{font-size:8.5px; font-weight:600; letter-spacing:.06em;
@@ -282,7 +284,7 @@ footer p{margin:0 0 6px; max-width:88ch}
 @media (max-width:1099px){
   .floor{grid-template-columns:minmax(0,1fr); height:auto}
   .centre,.flash{overflow:visible; height:auto}
-  .idx{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .idx{grid-template-columns:repeat(4,minmax(0,1fr))}
   .sect{grid-template-columns:repeat(3,minmax(0,1fr))}
   .d-row{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
@@ -1039,9 +1041,17 @@ function renderTags(){
   /* THE INDEX STRIP BY THE SAME RULE. It said LIVE whenever the clock said
      the market was open, while index_quotes refreshes four times a session. */
   var ixAt=newestStamp(S.idx,'updated_at');
-  var ixSt=feedState(ixAt);
+  var ixSt=feedState(ixAt), ixAge=ageSeconds(ixAt);
+  /* A FRESH ROW IS NOT ENOUGH. If any tile's price has stopped, the strip is
+     not live; the tag gives the longest a price has gone unchanged. */
+  var frozen=S.idx.filter(priceFrozen);
+  if(ixSt==='live' && frozen.length){
+    ixSt='stale';
+    ixAge=Math.max.apply(null, frozen.map(function(r){
+      var u=priceUnchangedS(r); return u===null ? 0 : u; }));
+  }
   set('ix-tag', S.idx.length
-      ? sessionTag(ixSt, istDay(ixAt), ixAt, ageSeconds(ixAt)) : '');
+      ? sessionTag(ixSt, istDay(ixAt), ixAt, ixAge) : '');
   var bdAt=newestStamp(S.breadth,'at'), bdSt=feedState(bdAt);
   set('bd-tag', S.breadth.length
       ? sessionTag(bdSt, String(S.breadth[0].session_date||'').slice(0,10),
@@ -1144,19 +1154,65 @@ function renderReading(){
 }
 
 /* ── 3 INDEX STRIP ────────────────────────────────────────────── */
+/* ── A PRICE THAT HAS NOT MOVED IS NOT LIVE, WHATEVER ITS ROW SAYS ──
+   updated_at is the writer's heartbeat. USDINR showed one price at +0.00% for
+   a week at a time under a fresh updated_at -- the weekly contracts do not
+   trade -- which is live_sentiment's 2026-10-20 defect again: a check aimed at
+   the row, not the value (atlas/freshness.py). price_changed_at is stamped by
+   a database trigger only when ltp actually differs, so (now - it) is how
+   long the VALUE has been unchanged.
+
+   N IS MEASURED, PER INSTRUMENT. One-minute closes, 6 Oct - 3 Nov 2026 (19-20
+   sessions), carried forward through minutes with no trade -- which is what a
+   writer sampling once a minute sees. Longest run of identical values before
+   15:15: 1 minute for NIFTY 50, NIFTY BANK, NIFTY FIN SERVICE, NIFTY MIDCAP 100
+   and NIFTY SMLCAP 100; 8 for INDIA VIX; 41 for the USDINR monthly future.
+   N is that maximum plus 3 -- three intervals beyond anything recorded, the
+   margin atlas/freshness.py took. The weekly USDINR future had no one-minute
+   candle at all across the same span.
+
+   NOT FROM 15:15. NIFTY 50, BANK and FIN SERVICE hold one value from 15:14-15:15
+   to the close in every session measured, in the history AND in the live
+   Upstox quote (23731.85 from 15:15 on 3 Nov, the value the strip shows as the
+   close). Checking there would call the strip stale every afternoon, so the
+   value check stops at 15:14 for every instrument. A feed that freezes after
+   15:15 is caught only by the row-age rule. That is the known blind spot. */
+var VALUE_MAX_UNCHANGED_MIN={NIFTY50:4, NIFTYBANK:4, NIFTYFIN:4, NIFTYMIDCAP:4,
+                             NIFTYSMLCAP:4, INDIAVIX:11, USDINR:44};
+var VALUE_CHECK_LAST_MIN=914;            /* 15:14 IST, as minutes */
+
+function priceUnchangedS(r){ return ageSeconds(r && r.price_changed_at); }
+/* True when the market is open, inside the checked window, and this tile's
+   price has not changed for its measured N minutes -- or has never been seen
+   to change, which is not evidence that it is live. */
+function priceFrozen(r){
+  if(!r || !marketOpen())return false;
+  var d=istNow(), m=d.getUTCHours()*60+d.getUTCMinutes();
+  if(m>VALUE_CHECK_LAST_MIN)return false;
+  var n=VALUE_MAX_UNCHANGED_MIN[r.symbol];
+  if(n===undefined)return false;
+  var u=priceUnchangedS(r);
+  return u===null || u>=n*60;
+}
+
 function renderIdx(){
-  var want=['NIFTY50','NIFTYBANK','NIFTYMIDCAP','NIFTYSMLCAP','INDIAVIX','USDINR'];
+  var want=['NIFTY50','NIFTYBANK','NIFTYFIN','NIFTYMIDCAP','NIFTYSMLCAP',
+            'INDIAVIX','USDINR'];
   var by={}; S.idx.forEach(function(r){by[r.symbol]=r;});
   document.getElementById('idx').innerHTML=want.map(function(k){
     var r=by[k];
     if(!r)return '<div class="idx-t"><div class="idx-n">'+esc(k)+
       '</div><div class="idx-l fig">—</div>'+
       '<div class="fut">first reading at 08:45</div></div>';
-    return '<div class="idx-t"><div class="idx-n">'+esc(r.display_name)+'</div>'+
+    var frozen=priceFrozen(r), u=priceUnchangedS(r);
+    return '<div class="idx-t'+(frozen?' stale':'')+'"><div class="idx-n">'+
+      esc(r.display_name)+'</div>'+
       '<div class="idx-l fig">'+num(r.ltp)+'</div>'+
       '<div class="idx-c fig" style="color:'+sign(r.change_pct)+'">'+
       pct(r.change_pct)+'</div>'+
-      (r.is_future?'<div class="fut">near-month future · expires '+
+      (frozen?'<div class="stale-tag">'+(u===null?'NO PRICE CHANGE SEEN YET'
+        :'PRICE UNCHANGED '+esc(fmtAge(u)).toUpperCase())+'</div>':'')+
+      (r.is_future?'<div class="fut">monthly future · expires '+
         esc(r.expiry)+' · not the spot rate</div>':'')+
       '</div>';
   }).join('');
