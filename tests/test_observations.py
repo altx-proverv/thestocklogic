@@ -434,7 +434,15 @@ check("  the move it describes is kept, in computed_values",
       _radar["computed_values"]["direction"], "up")
 
 import os                                                      # noqa: E402
+import tempfile                                                # noqa: E402
 import requests                                                # noqa: E402
+from engine import ledger_alerts                               # noqa: E402
+# Every refusal below sends an alert. Capture it here: a suite that reaches the
+# real Telegram is an alarm crying wolf.
+_sent = []
+ledger_alerts.send = lambda m: (_sent.append(m) or (True, 1, 1))
+ledger_alerts.STATE_DIR = Path(tempfile.mkdtemp())
+ledger_alerts.HOLD_MINUTES = 0
 _key = os.environ.pop("SUPABASE_SERVICE_KEY", None)
 check("no service key: record() refuses", obs.record([r1]), False)
 os.environ["SUPABASE_SERVICE_KEY"] = "test-key-not-real"
@@ -463,6 +471,11 @@ check("a 201 with nothing readable back: record() refuses", obs.record([r1]), Fa
 requests.get = lambda *a, **k: _Resp(404, {"message": "relation does not exist"})
 check("the table missing (migration not applied): record() refuses",
       obs.record([r1]), False, "so no publisher runs ahead of the migration")
+check("each of those four refusals sent exactly one alert", len(_sent), 4,
+      "fail-closed is never silent")
+check("  and every alert names the publisher and the symbol",
+      all(f"LEDGER REFUSED — {r1['source_file']} did NOT publish" in m
+          and f"\nSymbols (1): {r1['symbol']}\n" in m for m in _sent), True)
 requests.get, requests.post = _get, _post
 os.environ.pop("SUPABASE_SERVICE_KEY", None)
 if _key is not None:

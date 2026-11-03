@@ -127,6 +127,7 @@ SUITES = [
     ("feed freshness", [sys.executable, "tests/test_feed_freshness.py"]),
     ("data rights",    [sys.executable, "tests/test_data_rights.py"]),
     ("observations",   [sys.executable, "tests/test_observations.py"]),
+    ("ledger alerts",  [sys.executable, "tests/test_ledger_alerts.py"]),
     ("surveillance",   [sys.executable, "tests/test_surveillance.py"]),
     ("bhavcopy dates", [sys.executable, "tests/test_bhavcopy_dates.py"]),
     ("price basis guard", [sys.executable, "tests/test_price_basis_guard.py"]),

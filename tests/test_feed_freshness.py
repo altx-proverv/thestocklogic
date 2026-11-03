@@ -487,6 +487,9 @@ EXEMPT = {
     "engine/observations.py":
         "the observation ledger records what its CALLER is about to publish; "
         "every caller is classified here and owns the gate",
+    "engine/ledger_alerts.py":
+        "only COUNTS the ledger, for the first-success message; writes nothing "
+        "and reports what its caller (observations.record) just did",
     "engine/score_observations.py":
         "scores named past sessions resolved by the calendar; claims nothing "
         "about today",

@@ -273,15 +273,24 @@ def record(rows: list, logger=None) -> bool:
     lg = logger or log
     if not rows:
         return True
+    from engine import ledger_alerts
+
+    def refuse(msg, which):
+        # Fail-closed is correct; fail-closed and SILENT is the defect. Every
+        # refusal is logged and sent to Telegram (engine/ledger_alerts.py).
+        lg.error(msg)
+        ledger_alerts.refused(which, msg)
+        return False
+
     url, key = _cfg()
     if not key:
-        lg.error("observation ledger: SUPABASE_SERVICE_KEY is not set — "
-                 "refusing to publish what cannot be recorded")
-        return False
+        return refuse("observation ledger: SUPABASE_SERVICE_KEY is not set — "
+                      "refusing to publish what cannot be recorded", rows)
     import requests
     groups = {}
     for r in rows:
         groups.setdefault((r["observation_type"], r["session_date"]), []).append(r)
+    batch, inserted = rows, []
     try:
         for (otype, sess), batch in groups.items():
             todo = plan(batch, _existing(url, key, otype, sess))
@@ -292,18 +301,18 @@ def record(rows: list, logger=None) -> bool:
                 # 409: a concurrent writer stored the same original first. The
                 # read-back below decides whether that is fine.
                 if resp.status_code not in (200, 201, 204, 409):
-                    lg.error(f"observation ledger: {otype} {sess}: HTTP "
-                             f"{resp.status_code} {resp.text[:200]}")
-                    return False
+                    return refuse(f"observation ledger: {otype} {sess}: HTTP "
+                                  f"{resp.status_code} {resp.text[:200]}", batch)
+                if resp.status_code != 409:
+                    inserted.extend(todo)
             # READ BACK. requests.post does not raise on 4xx, and this repo has
             # twice shipped a payload PostgREST discarded whole.
             after = _existing(url, key, otype, sess)
             stored = {e["natural_key"] for e in after}
             missing = sorted({b["natural_key"] for b in batch} - stored)
             if missing:
-                lg.error(f"observation ledger: {otype} {sess}: {len(missing)} "
-                         f"row(s) not stored, e.g. {missing[:3]}")
-                return False
+                return refuse(f"observation ledger: {otype} {sess}: {len(missing)} "
+                              f"row(s) not stored, e.g. {missing[:3]}", batch)
             # A 'correct' type must have the values being published IN FORCE,
             # not merely some earlier version under the same key.
             if TYPES[otype]["republish"] == "correct":
@@ -313,11 +322,12 @@ def record(rows: list, logger=None) -> bool:
                 stale = sorted(b["natural_key"] for b in batch
                                if current.get(b["natural_key"]) != b["values_sha256"])
                 if stale:
-                    lg.error(f"observation ledger: {otype} {sess}: {len(stale)} "
-                             f"row(s) stored with other values, e.g. {stale[:3]}")
-                    return False
-        return True
+                    return refuse(f"observation ledger: {otype} {sess}: {len(stale)} "
+                                  f"row(s) stored with other values, e.g. {stale[:3]}",
+                                  batch)
     except Exception as e:
-        lg.error(f"observation ledger unavailable ({type(e).__name__}: {e}) — "
-                 f"refusing to publish")
-        return False
+        return refuse(f"observation ledger unavailable ({type(e).__name__}: {e}) — "
+                      f"refusing to publish", batch)
+    if inserted:
+        ledger_alerts.first_success(inserted, url, key)
+    return True

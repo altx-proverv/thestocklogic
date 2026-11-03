@@ -361,8 +361,14 @@ def run(dry: bool = False) -> int:
     # is a separate cron line in a separate process, so a snapshot job that
     # never fired at all is still caught. Before the ledger work, so it fires
     # even while the ledger itself is not live.
+    # NOT ON A DRY RUN. check() sends a real Telegram, and a dry run before the
+    # day's 10:30 IST capture would announce a missing capture that is merely
+    # not due yet. A dry run that alarms is not dry, and an alarm that fires in
+    # testing is one people learn to mute.
     today = datetime.now(IST).date()
-    if tc.is_trading_day(today):
+    if dry:
+        log.info("dry run: surveillance alarm check skipped — no Telegram is sent")
+    elif tc.is_trading_day(today):
         from engine.surveillance_snapshot import check
         check(today, raised_by="the T+3 scorer (19:40 IST)")
     if not key:
