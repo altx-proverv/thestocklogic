@@ -428,6 +428,15 @@ def push_signals(target_date: str = None):
     log.info(f"Existing rows for {day_str}: {len(old_ids)}")
 
     _refuse_if_excluded(records, "signals")
+    # PERSIST BEFORE IT RENDERS. The ledger is written first and the batch is
+    # published only if every row reads back -- see engine/observations.py.
+    from engine import observations
+    if not observations.record(observations.from_rows(
+            "signal", records, date_key="signal_date",
+            source_file="engine/06_push_supabase.py", engine_sha=ENGINE_SHA), log):
+        log.error(f"observation ledger refused the batch — nothing published, "
+                  f"the {len(old_ids)} existing row(s) for {day_str} are intact.")
+        sys.exit(1)
     ins_r = requests.post(base_url, headers=headers, json=records, timeout=60)
     if ins_r.status_code not in (200, 201):
         log.error(f"Push failed: {ins_r.status_code} — {ins_r.text[:300]}")
@@ -810,6 +819,12 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
     # Insert BEFORE deleting, same order as the signal path: a failed insert must
     # leave the previous watchlist intact rather than emptying it.
     _refuse_if_excluded(recs, "candidates")
+    from engine import observations
+    if not observations.record(observations.from_rows(
+            "candidate", recs, date_key="signal_date",
+            source_file="engine/06_push_supabase.py", engine_sha=ENGINE_SHA), log):
+        log.error("observation ledger refused the watchlist — not published")
+        return 0
     r = requests.post(base_url, headers=headers, json=recs, timeout=60)
     if r.status_code not in (200, 201):
         log.error(f"candidate push failed: {r.status_code} — {r.text[:300]}")

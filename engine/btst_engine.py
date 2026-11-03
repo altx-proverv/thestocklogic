@@ -320,21 +320,9 @@ def run_btst_scan() -> list:
     return top
 
 
-def push_btst_signals(signals: list) -> bool:
-    """Push BTST signals to live_signals table (not EOD signals table)."""
-    if not signals:
-        log.info("No BTST signals to push")
-        return True
-
-    today = date.today().isoformat()
-
-    # Clear existing BTST signals for today from live_signals
-    requests.delete(
-        f"{SUPABASE_URL}/rest/v1/live_signals"
-        f"?signal_date=eq.{today}&session=eq.btst",
-        headers=_headers()
-    )
-
+def _btst_records(signals: list, today: str) -> list:
+    """The live_signals rows for a BTST batch. Built once and used twice: the
+    ledger records exactly the rows that are then published."""
     records = []
     for s in signals:
         def safe(v, default=0.0):
@@ -365,6 +353,33 @@ def push_btst_signals(signals: list) -> bool:
             "grade":        s.get("grade", "B"),
             "signal_time":  datetime.now(IST).strftime("%H:%M"),
         })
+    return records
+
+
+def push_btst_signals(signals: list) -> bool:
+    """Push BTST signals to live_signals table (not EOD signals table)."""
+    if not signals:
+        log.info("No BTST signals to push")
+        return True
+
+    today = date.today().isoformat()
+
+    records = _btst_records(signals, today)
+    # PERSIST BEFORE IT RENDERS, and before the delete: a refused ledger must
+    # leave the previous BTST rows in place rather than an empty list.
+    from engine import observations
+    if not observations.record(observations.from_rows(
+            "btst", records, date_key="signal_date",
+            source_file="engine/btst_engine.py"), log):
+        log.error("BTST not published: observation ledger refused it")
+        return False
+
+    # Clear existing BTST signals for today from live_signals
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/live_signals"
+        f"?signal_date=eq.{today}&session=eq.btst",
+        headers=_headers()
+    )
 
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/live_signals",

@@ -181,6 +181,12 @@ def upsert_events(events: list) -> list:
     url_base, _ = _cfg()
     if not rows:
         return []
+    from engine import observations
+    if not observations.record(observations.from_rows(
+            "radar_event", rows, date_key="event_date", key_direction=False,
+            source_file="radar/store.py"), log):
+        raise StoreUnavailable("radar_events: observation ledger refused the "
+                               "batch — not published")
     try:
         r = requests.post(
             f"{url_base}/rest/v1/radar_events?on_conflict=symbol,event_date",

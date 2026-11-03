@@ -203,7 +203,7 @@ print("\n── everything the repo ships is scheduled ──")
 MUST_RUN = ["engine.market_flash", "engine.reject_sample", "engine.excursions",
             "engine.score_live_outcomes", "engine.learning_loop",
             "meridian.iv_recorder", "engine.tier1_fetch", "engine.fundamentals",
-            "engine.surveillance_snapshot"]
+            "engine.score_observations", "engine.surveillance_snapshot"]
 for mod in MUST_RUN:
     check(f"  {mod} is scheduled", mod in EXEC)
 for script in ["engine/rbe_startup.py", "engine/rbe_engine.py",
@@ -244,6 +244,12 @@ check("surveillance_snapshot runs three times: morning, afternoon, close",
 check("  the close run is after the 15:30 IST close (10:00 UTC)",
       after(minute_of("surveillance_snapshot --run close"), (10, 0)),
       str(minute_of("surveillance_snapshot --run close")))
+check("  and the scorer's second alarm comes after the close run",
+      after(minute_of("engine.score_observations"),
+            minute_of("surveillance_snapshot --run close")))
+check("score_observations runs after the chain (T+3 bars must have landed)",
+      after(minute_of("engine.score_observations"), chain),
+      str(minute_of("engine.score_observations")))
 check("score_live_outcomes runs after excursions",
       after(minute_of("score_live_outcomes"), minute_of("engine.excursions")))
 # The learning loop reads what every other job wrote, so it must be last.

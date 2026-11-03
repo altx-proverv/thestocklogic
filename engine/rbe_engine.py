@@ -384,6 +384,12 @@ class RBEngine:
         if not rows:
             log.info(f"heavy/quiet: none of {tracked} tracked qualify")
             return
+        from engine import observations
+        if not observations.record(observations.from_rows(
+                "heavy_quiet", rows, date_key="session_date", direction_key=None,
+                price_key="ltp", source_file="engine/rbe_engine.py"), log):
+            log.warning("heavy/quiet not published: ledger refused the sweep")
+            return
         try:
             resp = requests.post(
                 f"{SUPABASE_URL}/rest/v1/heavy_quiet",
@@ -434,6 +440,15 @@ class RBEngine:
             "prev_day_low":  self.ranges[sym]["pdl"],
             "signal_time": now_ist().strftime("%H:%M"),
         }
+        # PERSIST BEFORE IT RENDERS. record() never raises; a False means the
+        # detection is not published. It stays in self.fired, so a ledger
+        # outage costs that detection rather than a retry on every tick.
+        from engine import observations
+        if not observations.record(observations.from_rows(
+                "detection", [record], date_key="signal_date", price_key="entry",
+                source_file="engine/rbe_engine.py"), log):
+            log.error(f"detection {direction} {sym} not published: ledger refused it")
+            return
         try:
             r = requests.post(f"{SUPABASE_URL}/rest/v1/live_signals",
                               headers=_headers(), json=record, timeout=10)

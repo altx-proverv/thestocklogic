@@ -324,12 +324,6 @@ def push_live_signals(signals: list, session: str):
 
     today = today_ist().isoformat()
 
-    # Delete existing live signals for today's session
-    requests.delete(
-        f"{url}/rest/v1/live_signals?signal_date=eq.{today}&session=eq.{session}",
-        headers=headers
-    )
-
     records = []
     for s in signals:
         records.append({
@@ -346,6 +340,20 @@ def push_live_signals(signals: list, session: str):
             "signal_time":  s.get("signal_time", ""),
         })
 
+    from engine import observations
+    if not observations.record(observations.from_rows(
+            "btst" if session == "btst" else "detection", records,
+            date_key="signal_date", price_key=None if session == "btst" else "ltp",
+            source_file="engine/upstox_ws.py"), log):
+        log.error(f"live signals ({session}) not published: ledger refused them")
+        return
+
+    # Delete existing live signals for today's session -- AFTER the ledger, so
+    # a refused ledger leaves the previous rows rather than an empty session.
+    requests.delete(
+        f"{url}/rest/v1/live_signals?signal_date=eq.{today}&session=eq.{session}",
+        headers=headers
+    )
     r = requests.post(f"{url}/rest/v1/live_signals", headers=headers, json=records)
     if r.status_code in (200, 201):
         log.info(f"Pushed {len(records)} live signals for session: {session}")

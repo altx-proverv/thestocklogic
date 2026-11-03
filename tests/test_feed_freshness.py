@@ -484,6 +484,12 @@ EXEMPT = {
         "protection of OPEN positions is real on a holiday and must be checked",
     "radar/store.py":
         "radar_events; radar/bars.py gates the session upstream",
+    "engine/observations.py":
+        "the observation ledger records what its CALLER is about to publish; "
+        "every caller is classified here and owns the gate",
+    "engine/score_observations.py":
+        "scores named past sessions resolved by the calendar; claims nothing "
+        "about today",
 }
 
 for mod, tables in sorted(GATED.items()):

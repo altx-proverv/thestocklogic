@@ -124,6 +124,12 @@ def run() -> int:
         "detected_at": r["at"] or datetime.now(IST).isoformat(),
     } for r in rows]
 
+    from engine import observations
+    if not observations.record(observations.from_rows(
+            "orb_break", payload, date_key="session_date", direction_key="side",
+            price_key="break_close", source_file="engine/publish_orb.py"), log):
+        log.error("orb_breaks not published: observation ledger refused them")
+        return 1
     try:
         resp = requests.post(f"{SUPABASE_URL}/rest/v1/orb_breaks",
                              headers=_headers(), json=payload, timeout=30)
