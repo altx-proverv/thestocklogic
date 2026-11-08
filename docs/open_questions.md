@@ -154,3 +154,26 @@ the record sits on two measurement bases at once.
 `PENDING_reject_sample.sql` — the negative class. Authenticated-only, unlike
 signals: this is the rejection logic row by row, not the inputs behind a published
 claim.
+
+## OPEN DEFECTS — recorded, not fixed
+
+### `engine/universe.py` misstates its own provenance
+**Recorded 2026-11-09.** The header reads "Auto-generated. Do not edit manually."
+There is no generator in the repo. The file is edited by hand: the
+2026-10-15 exclusion edit (HEG, HEGAM, JBCHEPHARM) says so itself, and the
+CHOLAFIN key was corrected by hand on 2026-11-09. This is the same defect as a
+docstring claiming a function sends Telegram (06_push `notify_atlas`, corrected
+in d183e8a): a reader who trusts the header will regenerate the file from a
+source that does not exist, or will not check an entry because "the generator
+made it".
+
+The header has not been changed. What the header should say depends on
+whether a generator is restored or the file is declared hand-maintained.
+
+The file was also never validated against an equity list. On 2026-11-09 every
+`INSTRUMENT_KEYS` ISIN was checked against NSE's EQUITY_L.csv: 745 keys, one
+non-equity (CHOLAFIN, a debenture `INE121A08PJ0`, in place since 084f1b0 on
+2026-05-27), plus two stale after corporate events (ICICIPRULI renamed,
+JSWDULUX's pre-split ISIN). The Upstox master saved on 2026-05-26 lists both
+CHOLAFIN ISINs under tradingsymbol CHOLAFIN with instrument_type EQUITY, which
+is how a symbol-keyed lookup picks the bond.
