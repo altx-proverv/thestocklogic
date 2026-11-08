@@ -391,3 +391,8 @@ MAILTO=""
 # 500 MB free (engine/disk_alarm.py has the evidence for the number); every run
 # writes a heartbeat line to reports/disk_alarm.log, alarm or not.
 23 * * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.disk_alarm >> /home/ubuntu/thestocklogic/reports/disk_alarm.log 2>&1
+# VOLUME >= 10x, ONE TELEGRAM AFTER THE CLOSE (engine/volume_alerts.py). Its own
+# entry, NOT joined to the && chain: it must speak when the chain has failed.
+# 14:20 UTC = 19:50 IST, after radar (done by ~13:52) and the chain (~13:18).
+# A quiet day still sends one line; silence means the job did not run.
+20 14 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.volume_alerts >> /home/ubuntu/thestocklogic/reports/volume_alerts.log 2>&1
