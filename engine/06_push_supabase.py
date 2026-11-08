@@ -527,9 +527,13 @@ def push_signals(target_date: str = None):
 
 def notify_atlas(records: list):
     """
-    Send qualifying signals to ATLAS trade executor.
-    Only Grade A signals (score >= 78) trigger Telegram alerts.
-    ATLAS bot listener must be running to receive.
+    Log how many zone-validated signals are available for ATLAS. Nothing else.
+
+    It sends nothing: no message and no queue write. The docstring here used to
+    say Grade A signals triggered an alert, and the body never did. That claim
+    is how the 2026-11-02 ITI volume day (103x, Hot 10 #1) went unnoticed for
+    six days. Per-symbol messages come from engine/volume_alerts.py, a separate
+    cron job. tests/test_volume_alerts.py holds this docstring to the body.
     """
     # ATLAS entry happens at 09:37 via atlas/signal/market_open.py, which
     # reads zone-validated signals from Supabase directly.
