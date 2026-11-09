@@ -116,6 +116,10 @@ def rank_and_select(candidates: list, slots: int, allowed_dirs: list,
         if len(picks) >= slots:
             break
         sec = c.get("sector", "")
+        # UNKNOWN IS NOT A SECTOR (D-071): two unclassified names are not "the
+        # same sector", so the no-duplicate rule does not apply to them.
+        if sec in ("UNKNOWN", "OTHER"):
+            sec = ""
         if sec and sec in used_sectors:
             continue  # no duplicate sectors
         picks.append(c)

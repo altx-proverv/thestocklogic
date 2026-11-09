@@ -182,7 +182,7 @@ def compute_live_sector_heatmap(quotes: dict, symbol_map: dict, sector_map: dict
 
         rows.append({
             "symbol":        sym,
-            "sector":        sector_map.get(sym, "OTHER"),
+            "sector":        sector_map.get(sym, "UNKNOWN"),
             "ltp":           ltp,
             "open":          open_p,
             "prev_close":    prev_cls,
@@ -205,6 +205,13 @@ def compute_live_sector_heatmap(quotes: dict, symbol_map: dict, sector_map: dict
         declining     = ("intraday_ret", lambda x: (x < 0).sum()),
     ).reset_index()
 
+    # UNKNOWN AND THIN GROUPS ARE NOT RANKED (engine/sector_rank.py, D-071):
+    # this table picks the short book's sectors, and neither is a sector.
+    from engine.sector_rank import split_rankable
+    sector_df, _unranked = split_rankable(sector_df)
+    if len(_unranked):
+        log.info("not ranked (UNKNOWN or < 5 members): " + ", ".join(
+            f"{r.sector} ({int(r.stock_count)})" for r in _unranked.itertuples()))
     sector_df = sector_df.sort_values("ret_median", ascending=False).reset_index(drop=True)
     sector_df["rank"] = range(1, len(sector_df) + 1)
 
@@ -483,7 +490,7 @@ def run_session_update():
     if isinstance(stock_df, pd.DataFrame) and len(stock_df):
         stock_df["sector_bias"] = stock_df["sector"].map(
             dict(zip(sector_df["sector"], sector_df["trade_bias"]))
-        )
+        ).fillna("avoid")             # an unranked (UNKNOWN / thin) group has no bias
 
         top_sectors  = sector_df[sector_df["trade_bias"]=="long"]["sector"].tolist()
         bot_sectors  = sector_df[sector_df["trade_bias"]=="short"]["sector"].tolist()

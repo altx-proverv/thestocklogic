@@ -204,6 +204,18 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> tuple:
         date          = ("date",    "max"),
     ).reset_index()
 
+    # UNKNOWN AND THIN GROUPS ARE NOT RANKED (engine/sector_rank.py, D-071).
+    # The breadth inputs below still count every measured stock.
+    _all_sectors = sector_df
+    try:
+        from engine.sector_rank import split_rankable
+    except ImportError:
+        from sector_rank import split_rankable
+    sector_df, _unranked = split_rankable(sector_df)
+    if len(_unranked):
+        log.info("not ranked (UNKNOWN or < 5 members): " + ", ".join(
+            f"{r.sector} ({int(r.stock_count)})" for r in _unranked.itertuples()))
+
     # Momentum score: weighted combination
     # 5d carries more weight than 20d for short-term trading
     sector_df["momentum_score"] = (
@@ -232,8 +244,8 @@ def compute_sector_momentum(target_date: pd.Timestamp = None) -> tuple:
     all_neg = (sector_df["ret_1d_median"] < 0).all()
     top3_1d = sector_df.head(3)["ret_1d_median"].mean()
     bot3_1d = sector_df.tail(3)["ret_1d_median"].mean()
-    adv_total = sector_df["advancing"].sum()
-    dec_total = sector_df["declining"].sum()
+    adv_total = _all_sectors["advancing"].sum()      # every measured stock,
+    dec_total = _all_sectors["declining"].sum()      # ranked sector or not
     adv_ratio = adv_total / max(adv_total + dec_total, 1)
 
     # Hard override: if majority stocks declining today = bearish

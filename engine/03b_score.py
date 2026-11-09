@@ -225,7 +225,7 @@ def score_vectorized(df: pd.DataFrame, sector_bias: dict, symbol_sector: dict,
     _warn_missing_cols(df)
 
     # ── Add sector context ────────────────────────────────────────
-    df["sector"]      = df["symbol"].map(symbol_sector).fillna("OTHER")
+    df["sector"]      = df["symbol"].map(symbol_sector).fillna("UNKNOWN")
     df["sector_bias"] = df["sector"].map(sector_bias).fillna("avoid")
 
     # ── DISQUALIFIERS (vectorized) ────────────────────────────────

@@ -1,0 +1,74 @@
+{
+ "ind_nifty500list.csv": {
+  "fetched_at": "2026-11-10T02:32:43+05:30",
+  "rows": 501,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+ },
+ "ind_nifty_privatebanklist.csv": {
+  "fetched_at": "2026-11-10T02:32:50+05:30",
+  "rows": 10,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_nifty_privatebanklist.csv"
+ },
+ "ind_niftybanklist.csv": {
+  "fetched_at": "2026-11-10T02:32:48+05:30",
+  "rows": 14,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftybanklist.csv"
+ },
+ "ind_niftyconsumerdurableslist.csv": {
+  "fetched_at": "2026-11-10T02:32:47+05:30",
+  "rows": 14,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftyconsumerdurableslist.csv"
+ },
+ "ind_niftyfinancelist.csv": {
+  "fetched_at": "2026-11-10T02:32:46+05:30",
+  "rows": 20,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftyfinancelist.csv"
+ },
+ "ind_niftyindiadefence_list.csv": {
+  "fetched_at": "2026-11-10T02:32:48+05:30",
+  "rows": 22,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftyindiadefence_list.csv"
+ },
+ "ind_niftyindiamanufacturing_list.csv": {
+  "fetched_at": "2026-11-10T02:32:47+05:30",
+  "rows": 77,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftyindiamanufacturing_list.csv"
+ },
+ "ind_niftymicrocap250_list.csv": {
+  "fetched_at": "2026-11-10T02:32:45+05:30",
+  "rows": 253,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv"
+ },
+ "ind_niftymidcap150list.csv": {
+  "fetched_at": "2026-11-10T02:32:44+05:30",
+  "rows": 150,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftymidcap150list.csv"
+ },
+ "ind_niftypsubanklist.csv": {
+  "fetched_at": "2026-11-10T02:32:49+05:30",
+  "rows": 12,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftypsubanklist.csv"
+ },
+ "ind_niftysmallcap250list.csv": {
+  "fetched_at": "2026-11-10T02:32:45+05:30",
+  "rows": 251,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftysmallcap250list.csv"
+ },
+ "ind_niftytotalmarket_list.csv": {
+  "fetched_at": "2026-11-10T02:32:42+05:30",
+  "rows": 754,
+  "status": 200,
+  "url": "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv"
+ }
+}
