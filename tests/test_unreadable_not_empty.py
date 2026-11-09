@@ -131,6 +131,56 @@ out2 = X.reconcile_exits([trade], kite=Kite(), positions=[], orders=[],
                          atlas_gtts=[], gtts_unreadable=False)
 check("readable empty list: no unreadable flag", out2.get("gtts_unreadable"), None)
 
+print("\nD-049 reconcile: unreadable PENDING rows are not a clean pass")
+import atlas.execution.reconcile as RC                          # noqa: E402
+_g = RC.requests.get
+RC.requests.get = lambda *a, **k: R(503, "down")
+check("stale_pending HTTP 503 -> None", RC.stale_pending(), None)
+s1 = RC.settle()
+check("settle reports pending_readable False", s1.get("pending_readable"), False)
+check("  and checked None, not 0", s1.get("checked"), None)
+RC.requests.get = lambda *a, **k: R(200, [])
+check("stale_pending answered empty -> []", RC.stale_pending(), [])
+check("  settle: readable, 0 checked",
+      (RC.settle().get("pending_readable"), RC.settle().get("checked")), (True, 0))
+RC.requests.get = _g
+
+print("\nD-050 daily report: unreadable positions and mode are said, not hidden")
+import atlas.reporting.daily_report as DR                       # noqa: E402
+DR._get = lambda q, what: None
+check("get_positions unreadable -> None", DR.get_positions(), None)
+check("get_agent_state unreadable -> UNREADABLE", DR.get_agent_state()["mode"], "UNREADABLE")
+DR.get_regime = lambda: {"regime": "unknown", "source": "test"}
+DR.get_funds = lambda: (None, "test")
+DR.get_today_decisions = lambda: []
+DR.get_live_prices = lambda syms: ({}, False, "")
+body = DR.build_report()
+check("the report says positions are UNREADABLE", "Positions: UNREADABLE" in body, True)
+check("  and shows the mode as UNREADABLE", "Mode: UNREADABLE" in body, True)
+
+print("\nD-051 batch date: unreadable raises; empty is ''")
+MO.requests.get = lambda *a, **k: R(503, "down")
+try:
+    MO.get_latest_batch_date(); got = "returned"
+except Exception:
+    got = "raised"
+check("HTTP 503 -> raises (SIGNALS UNREADABLE)", got, "raised")
+MO.requests.get = lambda *a, **k: R(200, [])
+check("answered, no batch -> ''", MO.get_latest_batch_date(), "")
+MO.requests.get = saved_mo_get
+
+print("\nD-052 trail: unreadable bars are 'not evaluated', not 'no move needed'")
+import atlas.execution.preclose_gtt as PG                       # noqa: E402
+from datetime import date as _date                              # noqa: E402
+check("no bars file -> None", PG._bars_for("NO_SUCH_SYMBOL_XYZ", _date(2026, 11, 6)), None)
+PG._bars_for = lambda sym, today, n=40: None
+tr = PG.trail({"symbol": "TESTSYM", "direction": "LONG", "qty": 5, "stop_price": 95.0,
+               "entry_price": 100.0, "entry_date": "2026-11-01", "id": 9,
+               "exit_legs": {"trail_trigger_id": 1, "trail_qty": 5}},
+              None, _date(2026, 11, 6), dry=True)
+check("trail: ok (stop held), but evaluated False",
+      (tr.get("ok"), tr.get("evaluated"), tr.get("moved")), (True, False, False))
+
 print("\nTHE CYCLE (structure -- the 700-line cycle is not driven here)")
 src = (ROOT / "atlas/signal/market_open.py").read_text()
 import re                                                      # noqa: E402

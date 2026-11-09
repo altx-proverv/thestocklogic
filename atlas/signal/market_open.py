@@ -287,12 +287,18 @@ class Session:
 # ══════════════════════════════════════════════════════════════════
 
 def get_latest_batch_date() -> str:
+    """The newest published batch date; "" only when the table answered with
+    no rows. RAISES when it cannot be read -- that is "SIGNALS UNREADABLE",
+    not "no published signals / EOD pipeline down?" (OPEN D-051)."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/signals?select=signal_date"
         f"&order=signal_date.desc&limit=1", headers=_headers(), timeout=15)
-    if r.status_code != 200 or not r.json():
+    if r.status_code != 200:
+        raise RuntimeError(f"signals unreadable: HTTP {r.status_code} {r.text[:150]}")
+    rows = r.json()
+    if not rows:
         return ""
-    return r.json()[0].get("signal_date", "")
+    return rows[0].get("signal_date", "")
 
 
 # Columns 06_push_supabase.py writes. That file builds the row literal, so it is
@@ -1539,6 +1545,10 @@ def serve() -> int:
         for k in ("opened", "cancelled", "unsettled"):
             state.reconcile[k] += int(summary.get(k) or 0)
         log.info(f"startup reconcile: {summary}")
+        if summary.get("pending_readable") is False:
+            alert("RECONCILE UNREADABLE",
+                  "PENDING trades could not be listed at startup — nothing was "
+                  "reconciled. This is not a clean pass.", key="pending_unreadable")
         if summary.get("opened"):
             alert("RECONCILE", f"{summary['opened']} position(s) adopted at startup")
     except Exception as e:
@@ -1591,6 +1601,11 @@ def serve() -> int:
                 state.reconcile["passes"] += 1
                 for k in ("opened", "cancelled", "unsettled"):
                     state.reconcile[k] += int(summary.get(k) or 0)
+                if summary.get("pending_readable") is False:
+                    alert("RECONCILE UNREADABLE",
+                          "PENDING trades could not be listed — nothing was "
+                          "reconciled this pass. This is not a clean pass.",
+                          key="pending_unreadable")
             except Exception as e:
                 log.exception("reconcile failed")
                 alert("RECONCILE FAILED", f"{type(e).__name__}: {e}")

@@ -83,11 +83,11 @@ def stale_pending(now=None) -> list:
     except Exception as e:
         log.error(f"could not list PENDING rows: {type(e).__name__}: {e}")
         breaker.record_read(False, "atlas_trades", str(e))
-        return []
+        return None
     if r.status_code != 200:
         log.error(f"could not list PENDING rows: HTTP {r.status_code} {r.text[:200]}")
         breaker.record_read(False, "atlas_trades", f"HTTP {r.status_code}")
-        return []
+        return None
     breaker.record_read(True, "atlas_trades")
 
     out = []
@@ -168,8 +168,20 @@ def _patch(row_id, patch: dict) -> bool:
 def settle(now=None) -> dict:
     """Resolve every stale PENDING row. Returns a summary."""
     rows = stale_pending(now)
+    if rows is None:
+        # COULD NOT LIST PENDING ROWS -- not "none pending". It returned [] and
+        # reported 0 checked, which reads as a clean pass (OPEN D-049).
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("REFUSED", "reconcile.settle", None, "PENDING_UNREADABLE",
+                 "PENDING rows could not be listed; nothing reconciled")
+        except Exception:
+            pass
+        return {"checked": None, "opened": 0, "cancelled": 0, "unsettled": 0,
+                "pending_readable": False}
     if not rows:
-        return {"checked": 0, "opened": 0, "cancelled": 0, "unsettled": 0}
+        return {"checked": 0, "opened": 0, "cancelled": 0, "unsettled": 0,
+                "pending_readable": True}
 
     log.info(f"reconcile: {len(rows)} stale PENDING row(s)")
 

@@ -106,7 +106,10 @@ def _patch_trade(trade_id, fields: dict) -> bool:
 
 
 def _bars_for(symbol: str, through: date, n: int = 40):
-    """Recent daily bars from the signals chain's parquets. [] if unavailable.
+    """Recent daily bars from the signals chain's parquets.
+
+    None if they cannot be read (no file, or the read raised); [] only when the
+    file was read and holds no bars in range (OPEN D-052).
 
     READ-ONLY, and the only thing this module takes from the signals side. The
     trail needs a swing low and bhavcopy is where one comes from; if the file
@@ -117,7 +120,8 @@ def _bars_for(symbol: str, through: date, n: int = 40):
         import pandas as pd
         p = ROOT / "data/processed/stocks" / f"{symbol}.parquet"
         if not p.exists():
-            return []
+            log.warning(f"{symbol}: no bars file — trail cannot be evaluated")
+            return None
         df = pd.read_parquet(p)
         df["date"] = pd.to_datetime(df["date"]).dt.date
         df = df[df["date"] <= through].sort_values("date").tail(n)
@@ -126,7 +130,7 @@ def _bars_for(symbol: str, through: date, n: int = 40):
                 for _, r in df.iterrows()]
     except Exception as e:
         log.warning(f"{symbol}: bars unavailable ({e})")
-        return []
+        return None
 
 
 def handover(trade: dict, kite, dry: bool = False) -> dict:
@@ -221,6 +225,12 @@ def trail(trade: dict, kite, today: date, dry: bool = False) -> dict:
         except ValueError:
             ed = None
     bars = _bars_for(sym, today)
+    if bars is None:
+        # NOT "no bars". The stop is held (the safe direction), but the trail
+        # was not evaluated and that is reported -- separately from a failed
+        # handover, which means a missing stop, which this is not.
+        return {"ok": True, "symbol": sym, "moved": False, "evaluated": False,
+                "reason": "bars UNREADABLE — trail not evaluated; stop held"}
     if not bars:
         return {"ok": True, "symbol": sym, "moved": False,
                 "reason": "no bars — stop held, which is always the safe answer"}
@@ -391,8 +401,11 @@ def run(dry: bool = False, trail_only: bool = False,
 
     print(f"\n── TRAIL — positions opened before {today} ──")
     moved = 0
+    not_evaluated = []
     for t in older:
         r = trail(t, kite, today, dry=dry)
+        if r.get("evaluated") is False:
+            not_evaluated.append(f"{r['symbol']}: {r.get('reason')}")
         flag = "ok " if r["ok"] else "FAIL"
         mv = "MOVED" if r.get("moved") else "held "
         print(f"  [{flag}] {mv} {r['symbol']:<12} "
@@ -403,7 +416,12 @@ def run(dry: bool = False, trail_only: bool = False,
             failures.append(f"{r['symbol']}: {r.get('reason')}")
 
     print(f"\n  {len(new_today)} handover(s), {moved} stop(s) moved, "
-          f"{len(failures)} failure(s)")
+          f"{len(failures)} failure(s), {len(not_evaluated)} not evaluated")
+    if not_evaluated and not dry:
+        _alert("TRAIL NOT EVALUATED",
+               "Stops are held (nothing was loosened), but the trail could not "
+               "be evaluated for:\n" + "\n".join(f"· {x}" for x in not_evaluated[:8])
+               + "\nTheir bars could not be read. This is not 'no move needed'.")
 
     if failures and not dry:
         # A FAILED HANDOVER IS AN OVERNIGHT NAKED POSITION -- and it is one

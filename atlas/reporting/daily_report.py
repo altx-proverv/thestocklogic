@@ -235,14 +235,19 @@ def get_today_decisions() -> list:
                 f"&order=run_at.asc&select=*", "entry log") or []
 
 
-def get_positions() -> list:
+def get_positions():
+    """Open ATLAS rows, or None if they could not be read -- never [] for a
+    failure, which printed "no positions" when we did not know (OPEN D-050)."""
     return _get(f"/rest/v1/atlas_trades?status=in.({','.join(OPEN_STATUSES)})"
-                f"&order=entry_date.asc&select=*", "positions") or []
+                f"&order=entry_date.asc&select=*", "positions")
 
 
 def get_agent_state() -> dict:
+    """The atlas_state row. On a failed read: mode UNREADABLE -- it returned
+    NORMAL, and the report hides the Mode line for NORMAL, so an unreadable
+    pause made the report stop saying PAUSED."""
     rows = _get("/rest/v1/atlas_state?limit=1&order=updated_at.desc", "agent state")
-    return rows[0] if rows else {"mode": DEFAULT_AGENT_MODE}
+    return rows[0] if rows else {"mode": "UNREADABLE"}
 
 
 # ── SECTIONS ──────────────────────────────────────────────────────
@@ -436,6 +441,9 @@ def build_report() -> str:
     funds, funds_err = get_funds()
     decisions = get_today_decisions()
     positions = get_positions()
+    positions_unreadable = positions is None
+    if positions_unreadable:
+        positions = []
 
     symbols = sorted({p["symbol"] for p in positions if p.get("symbol")})
     prices, stale, as_of = get_live_prices(symbols)
@@ -475,9 +483,11 @@ def build_report() -> str:
         "",
         _fmt_today(decisions),
         "",
-        _fmt_positions(positions, prices, stale, as_of),
+        ("Positions: UNREADABLE — atlas_trades could not be read. This is "
+         "not 'no positions'; check /atlas." if positions_unreadable
+         else _fmt_positions(positions, prices, stale, as_of)),
         "",
-        _fmt_gtts(positions),
+        ("" if positions_unreadable else _fmt_gtts(positions)),
     ]
     return "\n".join(parts)
 
