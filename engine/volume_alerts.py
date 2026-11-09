@@ -279,7 +279,8 @@ def compose(on: date, res: dict, hits: list, surf: dict, *, earlier: int = 0) ->
              f"signals.rvol from 02b, whose mean includes the session. range = "
              f"(H−L) ÷ prior-{VOL_WINDOW} mean (H−L), same basis.</i>")
     notes = _notes(surf)
-    tail = "\n".join([basis] + notes + [html.escape(_coverage(on))])
+    tail = "\n".join([basis] + notes + [html.escape(_coverage(on)),
+                                       html.escape(_tick_map())])
 
     entries = [_fmt_entry(h, surf) for h in hits]
     chunks, cur = [], []
@@ -307,7 +308,18 @@ def compose_zero(on: date, res: dict) -> str:
     return (f"📊 <b>VOLUME ≥{VOL_MULT:g}× — {on.isoformat()} ({on.strftime('%a')})</b>: "
             f"no symbol crossed. Measured {res['measured']} of {res['universe']} "
             f"({res['no_row']} no row for the session, {res['short']} under "
-            f"{VOL_WINDOW} prior sessions).\n{html.escape(_coverage(on))}")
+            f"{VOL_WINDOW} prior sessions).\n{html.escape(_coverage(on))}"
+            f"\n{html.escape(_tick_map())}")
+
+
+def _tick_map() -> str:
+    """Is the real tick map present and sane (tools/check_tick_map.py)? The
+    exit paths price every order through it. Never raises."""
+    try:
+        from tools.check_tick_map import line
+        return line()
+    except Exception as e:
+        return f"Tick map: could not be checked ({type(e).__name__})"
 
 
 def _coverage(on: date) -> str:

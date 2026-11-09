@@ -1,0 +1,9 @@
+{
+ "_comment": "FIXTURE for tests/test_exits.py and tests/test_exit_path_rebuild.py. Ticks copied from the box's /var/lib/atlas/tick_map.json last_known on 2026-11-09 for exactly the symbols these suites price. Tests copy this to a temp path and point ATLAS_TICK_MAP_FILE at the copy, so no test can read or write the production map. Whether the REAL map on the box is present and sane is a different question: tools/check_tick_map.py.",
+ "days": {},
+ "last_known": {
+  "BHARTIARTL": 0.1,
+  "RELIANCE": 0.1,
+  "TATASTEEL": 0.01
+ }
+}

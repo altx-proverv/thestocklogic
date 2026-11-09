@@ -48,6 +48,17 @@ from datetime import datetime, timezone, timedelta
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+# THE TICK MAP IS A COMMITTED FIXTURE, NEVER THE PRODUCTION FILE. These
+# suites read /var/lib/atlas/tick_map.json through atlas.config.TICK_MAP_FILE,
+# so they passed on the box and failed everywhere else -- reporting on the box,
+# not on the code, and they would have passed just as happily if that file were
+# wrong. A temp COPY of tests/fixtures/tick_map.json is used, so nothing here
+# can read or write the real map. Whether the real map is present and sane is
+# tools/check_tick_map.py. Set before atlas.config is imported.
+import os as _os, shutil as _sh, tempfile as _tf                # noqa: E401
+_TICK_COPY = Path(_tf.mkdtemp()) / "tick_map.json"
+_sh.copyfile(ROOT / "tests" / "fixtures" / "tick_map.json", _TICK_COPY)
+_os.environ["ATLAS_TICK_MAP_FILE"] = str(_TICK_COPY)
 logging.basicConfig(level=logging.CRITICAL)
 
 from atlas.execution import exits as X                          # noqa: E402
