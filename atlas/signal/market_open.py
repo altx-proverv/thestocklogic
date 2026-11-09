@@ -619,14 +619,21 @@ def push_live_zones(state, rows: list, entered: set) -> bool:
 # WHAT IS ALREADY COMMITTED — one query, every cycle
 # ══════════════════════════════════════════════════════════════════
 
-def open_positions_for_reconcile() -> list:
+class _SweepSkipped(Exception):
+    """The protection sweep did not run because positions were unreadable.
+    Already alerted; distinct from a sweep that ran and raised."""
+
+
+def open_positions_for_reconcile():
     """
     Open ATLAS rows, with what reconcile_exits needs to identify legs.
 
-    Returns [] on a read failure rather than raising. That is safe HERE and only
-    here: an empty list means "reconcile nothing this cycle", which leaves legs
-    resting exactly as they were. It is the opposite of committed_today(), where an
-    empty set would read as "nothing is held" and permit a duplicate entry.
+    Returns None on a read failure, never [].
+
+    It returned [] and called that "safe HERE and only here" because reconcile
+    then does nothing. But the same list feeds the per-cycle protection sweep,
+    and there [] means "no open positions" -- a failed read reported a clean,
+    fully-protected book. A failed read must never look like an empty one.
     """
     # entry_price, stop_price, entry_date and exit_legs are here for the
     # PROTECTION SWEEP below, which has to price a stop for a position that has
@@ -664,11 +671,11 @@ def open_positions_for_reconcile() -> list:
                 try:
                     from atlas.execution.order_events import record as _rec
                     _rec("CHECK_SKIPPED", "market_open.open_positions_for_reconcile", None,
-                         "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned [] -- "
+                         "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned None -- "
                          "reconcile AND the protection sweep saw no positions this cycle")
                 except Exception:
                     pass
-                return []
+                return None
             rows = r2.json() or []
             for row in rows:
                 # Derived, not guessed. position_sizing.size_by_risk sets
@@ -685,21 +692,21 @@ def open_positions_for_reconcile() -> list:
         try:
             from atlas.execution.order_events import record as _rec
             _rec("CHECK_SKIPPED", "market_open.open_positions_for_reconcile", None,
-                 "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned [] -- "
+                 "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned None -- "
                  "reconcile AND the protection sweep saw no positions this cycle")
         except Exception:
             pass
-        return []
+        return None
     except Exception as e:
         log.error(f"open positions read failed: {type(e).__name__}: {e}")
         try:
             from atlas.execution.order_events import record as _rec
             _rec("CHECK_SKIPPED", "market_open.open_positions_for_reconcile", None,
-                 "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned [] -- "
+                 "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned None -- "
                  "reconcile AND the protection sweep saw no positions this cycle")
         except Exception:
             pass
-        return []
+        return None
 
 
 def committed_today() -> tuple:
@@ -863,7 +870,11 @@ def cycle(state: Session) -> dict:
         if _mb["fired"]:
             log.error(f"cycle {state.cycle_n}: RANGE BREAK — the day is stood "
                       f"down. {_mb['detail']}")
-        for _pos in open_positions_for_reconcile() or []:
+        _rb_open = open_positions_for_reconcile()
+        if _rb_open is None:
+            log.error(f"cycle {state.cycle_n}: open positions UNREADABLE — the "
+                      f"per-position range breakers were not checked")
+        for _pos in _rb_open or []:
             _sym = _pos.get("symbol")
             _dir = str(_pos.get("direction", "LONG")).upper()
             if not _sym:
@@ -943,9 +954,31 @@ def cycle(state: Session) -> dict:
             _k = _gk()
             _rec_orders = _k.orders() if _k else None
             _rec_gtts = _k.get_gtts() if _k else None
-            rec = X.reconcile_exits(open_positions_for_reconcile(),
-                                    kite=_k, orders=_rec_orders,
-                                    atlas_gtts=list_atlas_gtts())
+            # ONE READ OF EACH, AND "COULD NOT READ" IS NEVER "NOTHING THERE".
+            # Both used to return [] on failure: reconcile then found no
+            # orphans to cancel, and the sweep below found no positions to
+            # protect, and the cycle reported a clean book.
+            _open = open_positions_for_reconcile()
+            _atlas_gtts = list_atlas_gtts()
+            if _atlas_gtts is None:
+                alert("GTT LIST UNREADABLE",
+                      "The GTT list could not be read this cycle. Orphaned "
+                      "triggers on closed symbols cannot be found, and an "
+                      "orphaned trigger can RE-ENTER a closed symbol. Only "
+                      "legs recorded on each trade were checked.",
+                      key="gtts_unreadable")
+            if _open is None:
+                out["protection_unverified"] = True
+                alert("OPEN POSITIONS UNREADABLE",
+                      "atlas_trades could not be read this cycle. Exits were "
+                      "NOT reconciled and protection was NOT verified — this "
+                      "is not a clean book. Check positions by hand.",
+                      key="positions_unreadable")
+                rec = {"checked": None, "cancelled": 0, "alerts": []}
+            else:
+                rec = X.reconcile_exits(_open, kite=_k, orders=_rec_orders,
+                                        atlas_gtts=_atlas_gtts,
+                                        gtts_unreadable=_atlas_gtts is None)
             state.exit_cancelled = getattr(state, "exit_cancelled", 0) + rec["cancelled"]
             out["exits_reconciled"] = rec["checked"]
             out["exits_cancelled"] = rec["cancelled"]
@@ -969,7 +1002,11 @@ def cycle(state: Session) -> dict:
             # older position have settled, and a GTT checks demat.
             try:
                 from atlas.execution import protection as PR
-                _open = open_positions_for_reconcile()
+                if _open is None:
+                    # Alerted above. Not 0 naked, not 0 outstanding: unknown.
+                    out["protection_naked"] = None
+                    out["unprotected_outstanding"] = None
+                    raise _SweepSkipped()
                 _prot = PR.broker_protection(orders=_rec_orders,
                                              gtts=_rec_gtts)
                 _fixed = _naked = 0
@@ -1001,6 +1038,8 @@ def cycle(state: Session) -> dict:
                 # every PR.UNPROTECTED_REPEAT_SECONDS.
                 sw = PR.sweep(_open, prot=_prot, send=send)
                 out["unprotected_outstanding"] = sw["outstanding"]
+            except _SweepSkipped:
+                pass
             except Exception as e:
                 log.exception("protection sweep raised")
                 alert("PROTECTION SWEEP FAILED",

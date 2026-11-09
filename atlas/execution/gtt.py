@@ -45,8 +45,13 @@ GTT_TAG = "ATLAS"   # still sent on any manual placement; Kite discards it
 # commits cash and must be visible to the funds check, whoever placed it.
 
 
-def list_active_gtts() -> list:
-    """EVERY active GTT on the account, unfiltered.
+def list_active_gtts():
+    """EVERY active GTT on the account, unfiltered. None if it cannot be read.
+
+    NONE IS NOT []. [] means the broker answered and nothing is resting; None
+    means we could not ask. This returned [] for both, so a failed read looked
+    like a clean book -- and orphan-trigger cleanup, which exists because an
+    orphaned trigger can RE-ENTER a closed symbol, saw nothing to clean.
 
     This is what the funds check must use. A resting BUY commits cash whoever
     placed it -- ATLAS, or the operator by hand in Kite -- so "is it ours?" is
@@ -55,21 +60,27 @@ def list_active_gtts() -> list:
     from atlas.execution.broker import get_kite
     kite = get_kite()
     if not kite:
-        return []
+        log.warning("GTT list: no broker session — UNREADABLE, not empty")
+        return None
     try:
-        return [g for g in (kite.get_gtts() or []) if g.get("status") == "active"]
+        got = kite.get_gtts()
+        if got is None:
+            log.warning("GTT list: broker returned None — UNREADABLE, not empty")
+            return None
+        return [g for g in got if g.get("status") == "active"]
     except Exception as e:
         log.warning(f"GTT list failed: {e}")
         try:
             from atlas.execution.order_events import record as _rec
-            _rec("CHECK_SKIPPED", "gtt.list_active_gtts", None, "GTT_LIST_UNREADABLE", f"broker GTT list unreadable ({e}); returned []")
+            _rec("REFUSED", "gtt.list_active_gtts", None, "GTT_LIST_UNREADABLE", f"broker GTT list unreadable ({e}); returned None")
         except Exception:
             pass
-        return []
+        return None
 
 
-def list_atlas_gtts() -> list:
+def list_atlas_gtts():
     """Active GTTs ATLAS placed, matched by trigger id recorded in atlas_trades.
+    None if either side cannot be read -- never [] for a failure.
 
     It used to match on the order `tag`. That can never work: Kite's get_gtts()
     response omits the tag field entirely -- not null, absent -- so
@@ -83,6 +94,8 @@ def list_atlas_gtts() -> list:
     from atlas.config import SUPABASE_URL, SUPABASE_KEY
 
     active = list_active_gtts()
+    if active is None:
+        return None
     if not active:
         return []
     try:
@@ -95,19 +108,19 @@ def list_atlas_gtts() -> list:
             log.warning(f"could not read recorded trigger ids: HTTP {r.status_code}")
             try:
                 from atlas.execution.order_events import record as _rec
-                _rec("CHECK_SKIPPED", "gtt.list_atlas_gtts", None, "GTT_LIST_UNREADABLE", f"recorded trigger ids unreadable (HTTP {r.status_code}); returned [] -- orphan-trigger cleanup sees none")
+                _rec("REFUSED", "gtt.list_atlas_gtts", None, "GTT_LIST_UNREADABLE", f"recorded trigger ids unreadable (HTTP {r.status_code}); returned None")
             except Exception:
                 pass
-            return []
+            return None
         known = {str(x["gtt_trigger_id"]) for x in r.json() if x.get("gtt_trigger_id")}
     except Exception as e:
         log.warning(f"could not read recorded trigger ids: {e}")
         try:
             from atlas.execution.order_events import record as _rec
-            _rec("CHECK_SKIPPED", "gtt.list_atlas_gtts", None, "GTT_LIST_UNREADABLE", f"recorded trigger ids unreadable ({e}); returned [] -- orphan-trigger cleanup sees none")
+            _rec("REFUSED", "gtt.list_atlas_gtts", None, "GTT_LIST_UNREADABLE", f"recorded trigger ids unreadable ({e}); returned None")
         except Exception:
             pass
-        return []
+        return None
 
     return [g for g in active if str(g.get("id")) in known]
 
@@ -131,6 +144,9 @@ def cancel_gtt(trigger_id: int) -> dict:
 def gtt_summary() -> str:
     """Telegram-friendly summary of pending ATLAS GTTs."""
     gtts = list_atlas_gtts()
+    if gtts is None:
+        return ("⚠️ GTT list could not be read — pending triggers are UNKNOWN, "
+                "not none. Check Kite.")
     if not gtts:
         return "No pending ATLAS GTT triggers."
     lines = [f"<b>Pending GTT triggers ({len(gtts)})</b>"]

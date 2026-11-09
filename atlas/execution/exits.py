@@ -1510,7 +1510,7 @@ def discover_legs(symbol: str, orders: list, atlas_gtts: list) -> dict:
 
 
 def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
-                    atlas_gtts=None) -> dict:
+                    atlas_gtts=None, gtts_unreadable: bool = False) -> dict:
     """
     For each protected position, cancel the leg that is now orphaned.
 
@@ -1580,6 +1580,15 @@ def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
 
         # Flat at the broker: every remaining leg is an orphan.
         out["closed"] += 1
+        if gtts_unreadable:
+            # THE GTT LIST COULD NOT BE READ, so only the legs recorded on the
+            # row are known. Any trigger not recorded there can still rest and
+            # RE-ENTER this closed symbol -- say so rather than report clean.
+            out["gtts_unreadable"] = True
+            out["alerts"].append(
+                f"{sym}: flat at the broker, but the GTT list could not be read "
+                f"— only recorded legs were checked. Confirm in Kite that no "
+                f"trigger for {sym} is resting.")
         any_filled = any(status_by.get(str(v)) == "COMPLETE" for v in legs.values())
         if not any_filled and legs:
             out["external"] += 1
