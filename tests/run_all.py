@@ -205,6 +205,7 @@ SUITES = [
     ("long sizing",         [sys.executable, "tests/test_long_sizing.py"]),
     ("long pilot",          [sys.executable, "tests/test_long_pilot.py"]),
     ("sector map",          [sys.executable, "tests/test_sector_map.py"]),
+    ("fo bhavcopy",         [sys.executable, "tests/test_fo_bhavcopy.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

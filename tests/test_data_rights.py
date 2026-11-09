@@ -82,6 +82,8 @@ DATASETS = [
      r"content/equities/sec_list"),
     ("NSE", "ETF list (api/etf)",
      r"nseindia\.com/api/etf"),
+    ("NSE", "F&O bhavcopy (content/fo/BhavCopy_NSE_FO, UDiFF)",
+     r"BhavCopy_NSE_FO"),
     ("NSE", "F&O market lots (content/fo/fo_mktlots.csv)",
      r"fo_mktlots"),
     ("NSE", "Event calendar: board meetings (api/event-calendar)",

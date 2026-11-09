@@ -391,6 +391,12 @@ MAILTO=""
 # 500 MB free (engine/disk_alarm.py has the evidence for the number); every run
 # writes a heartbeat line to reports/disk_alarm.log, alarm or not.
 23 * * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.disk_alarm >> /home/ubuntu/thestocklogic/reports/disk_alarm.log 2>&1
+# F&O BHAVCOPY (engine/fo_bhavcopy.py, 2026-11-10). NSE stamped 9 Nov's file
+# 18:09 IST. 13:15 UTC = 18:45 IST; 14:00 UTC = 19:30 IST is a retry (a no-op
+# if held), ahead of the 19:50 message that reports it held or STALE. Heartbeat
+# every run (data/raw/fo_bhavcopy/_heartbeat.json); a failed session alerts.
+15 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fo_bhavcopy >> /home/ubuntu/thestocklogic/reports/fo_bhavcopy.log 2>&1
+0 14 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fo_bhavcopy >> /home/ubuntu/thestocklogic/reports/fo_bhavcopy.log 2>&1
 # VOLUME >= 10x, ONE TELEGRAM AFTER THE CLOSE (engine/volume_alerts.py). Its own
 # entry, NOT joined to the && chain: it must speak when the chain has failed.
 # 14:20 UTC = 19:50 IST, after radar (done by ~13:52) and the chain (~13:18).

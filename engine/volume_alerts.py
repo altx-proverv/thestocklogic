@@ -281,7 +281,8 @@ def compose(on: date, res: dict, hits: list, surf: dict, *, earlier: int = 0) ->
     notes = _notes(surf)
     tail = "\n".join([basis] + notes + [html.escape(_coverage(on)),
                                        html.escape(_tick_map()),
-                                       html.escape(_exit_alarms())])
+                                       html.escape(_exit_alarms()),
+                                       html.escape(_fo_line(on))])
 
     entries = [_fmt_entry(h, surf) for h in hits]
     chunks, cur = [], []
@@ -311,7 +312,18 @@ def compose_zero(on: date, res: dict) -> str:
             f"({res['no_row']} no row for the session, {res['short']} under "
             f"{VOL_WINDOW} prior sessions).\n{html.escape(_coverage(on))}"
             f"\n{html.escape(_tick_map())}"
-            f"\n{html.escape(_exit_alarms())}")
+            f"\n{html.escape(_exit_alarms())}"
+            f"\n{html.escape(_fo_line(on))}")
+
+
+def _fo_line(on) -> str:
+    """The F&O bhavcopy's freshness (engine/fo_bhavcopy.py): the session held,
+    or STALE. Never raises."""
+    try:
+        from engine.fo_bhavcopy import daily_line
+        return daily_line(on)
+    except Exception as e:
+        return f"F&O bhavcopy: status could not be read ({type(e).__name__})"
 
 
 def _exit_alarms() -> str:
@@ -388,7 +400,8 @@ def run(on: date, *, dry_run=False, sender=None, getter=None, symbols=None,
                # The exit-alarm line rides this message on EVERY day it runs,
                # session or not: it is where outstanding alarms are seen
                # outside market hours (D-058), and Saturday exists for that.
-               f"\n{html.escape(_exit_alarms())}")
+               f"\n{html.escape(_exit_alarms())}"
+               f"\n{html.escape(_fo_line(on))}")
         if dry_run:
             printer(msg)
             return 0
