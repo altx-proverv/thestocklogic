@@ -274,6 +274,26 @@ def handle_directive(text: str) -> str:
             f"{_rules_line()}"
         )
 
+    elif text in ["/alarms", "alarms"]:
+        from atlas.execution.exit_alarms import outstanding, message
+        a = outstanding()
+        if a is None:
+            return "⚠️ The exit alarm register could not be read — alarms UNKNOWN."
+        return message(a) if a else "✅ No exit alarms outstanding."
+
+    elif text.startswith("/ack") or text.startswith("ack "):
+        # CLEARING IS A HUMAN ACT (OPEN D-058). Nothing else clears an alarm.
+        from atlas.execution.exit_alarms import ack
+        parts = text.split()
+        if len(parts) != 2:
+            return "Usage: <code>/ack &lt;id&gt;</code> or <code>/ack all</code> — /alarms lists the ids."
+        try:
+            done = ack(parts[1], by=f"telegram at {now}")
+        except Exception as e:
+            return f"⚠️ NOT cleared — the register could not be read ({e})."
+        return (f"✅ Cleared: {', '.join(done)}" if done
+                else f"Nothing matched <code>{parts[1]}</code>. /alarms lists the ids.")
+
     elif text in ["/status", "status"]:
         try:
             state = get_agent_state()

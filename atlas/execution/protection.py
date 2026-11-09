@@ -259,6 +259,17 @@ def register(trade: dict, why: str, wanted_stop=None) -> dict:
             "ordinal": d["seen_today"],
         }
         _save(d)
+    # THE NIGHT ALARM (OPEN D-058). This register's repeat lives in the
+    # market-hours engine and dies at the close; the exit alarm register is
+    # fired by cron day and night until a human acknowledges it.
+    try:
+        from atlas.execution.exit_alarms import raise_alarm
+        raise_alarm(f"unprotected:{key}", "UNPROTECTED", trade.get("symbol"),
+                    f"open with no stop confirmed at the broker — {str(why)[:300]}. "
+                    f"Wanted stop Rs{wanted_stop if wanted_stop is not None else trade.get('stop_price')}",
+                    trade.get("id"))
+    except Exception as e:
+        log.error(f"exit alarm not raised for {key}: {e}")
     return d["positions"][key]
 
 

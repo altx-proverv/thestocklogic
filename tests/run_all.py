@@ -200,6 +200,7 @@ SUITES = [
     ("cause states",        [sys.executable, "tests/test_cause_states.py"]),
     ("check tick map",      [sys.executable, "tests/test_check_tick_map.py"]),
     ("disposable paths",    [sys.executable, "tests/test_disposable.py"]),
+    ("exit alarms",         [sys.executable, "tests/test_exit_alarms.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

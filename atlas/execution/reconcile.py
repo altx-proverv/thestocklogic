@@ -243,6 +243,13 @@ def settle(now=None) -> dict:
                 fill_unreadable.append((rid, row.get("symbol"), why,
                                         row.get("stop_price")))
                 try:
+                    from atlas.execution.exit_alarms import raise_alarm
+                    raise_alarm(f"fill:{rid}", "FILL_UNREADABLE", row.get("symbol"),
+                                f"{why} — the position MAY BE OPEN and is not "
+                                f"protected. Wanted stop Rs{row.get('stop_price')}", rid)
+                except Exception:
+                    pass
+                try:
                     from atlas.execution.order_events import record as _rec
                     _rec("REFUSED", "reconcile", row.get("symbol"),
                          "FILL_UNREADABLE", why + " — NOT promoted, left PENDING",

@@ -280,7 +280,8 @@ def compose(on: date, res: dict, hits: list, surf: dict, *, earlier: int = 0) ->
              f"(H−L) ÷ prior-{VOL_WINDOW} mean (H−L), same basis.</i>")
     notes = _notes(surf)
     tail = "\n".join([basis] + notes + [html.escape(_coverage(on)),
-                                       html.escape(_tick_map())])
+                                       html.escape(_tick_map()),
+                                       html.escape(_exit_alarms())])
 
     entries = [_fmt_entry(h, surf) for h in hits]
     chunks, cur = [], []
@@ -309,7 +310,16 @@ def compose_zero(on: date, res: dict) -> str:
             f"no symbol crossed. Measured {res['measured']} of {res['universe']} "
             f"({res['no_row']} no row for the session, {res['short']} under "
             f"{VOL_WINDOW} prior sessions).\n{html.escape(_coverage(on))}"
-            f"\n{html.escape(_tick_map())}")
+            f"\n{html.escape(_tick_map())}"
+            f"\n{html.escape(_exit_alarms())}")
+
+
+def _exit_alarms() -> str:
+    try:
+        from atlas.execution.exit_alarms import daily_line
+        return daily_line()
+    except Exception as e:
+        return f"Exit alarms: could not be read ({type(e).__name__})"
 
 
 def _tick_map() -> str:

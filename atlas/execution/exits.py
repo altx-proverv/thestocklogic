@@ -1589,6 +1589,16 @@ def reconcile_exits(trades: list, kite=None, positions=None, orders=None,
                 f"{sym}: flat at the broker, but the GTT list could not be read "
                 f"— only recorded legs were checked. Confirm in Kite that no "
                 f"trigger for {sym} is resting.")
+            try:
+                from atlas.execution.exit_alarms import raise_alarm
+                from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                _d = _dt.now(_tz(_td(hours=5, minutes=30))).date().isoformat()
+                raise_alarm(f"orphan:{sym}:{_d}", "ORPHAN_UNCHECKED", sym,
+                            "closed at the broker but its resting triggers could "
+                            "not be checked (GTT list unreadable); an orphaned "
+                            "trigger can re-enter a closed symbol", t.get("id"))
+            except Exception:
+                pass
         any_filled = any(status_by.get(str(v)) == "COMPLETE" for v in legs.values())
         if not any_filled and legs:
             out["external"] += 1
