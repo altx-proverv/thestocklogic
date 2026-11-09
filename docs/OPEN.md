@@ -247,7 +247,7 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-066 · The box deploys main without running the suite (D4)
 - **Status** open · Bit twice in two days: test_page_claims red from 71f1b3d to b05196a (D-061), and nine suites written 2026-11-09/10 never registered in run_all (fixed in 4dbb3b4, with a check that fails run_all on an unregistered test). Nothing gates the five-minute `git reset --hard origin/main` on a green suite.
-
+- **FIXED 2026-11-10: a pre-push hook** (.githooks/pre-push, enabled with core.hooksPath) runs check_js.sh and the full suite on exactly the commit being pushed and refuses on red; it also refuses when tracked files are dirty or the pushed ref is not HEAD. Chosen over CI because the box resets to origin/main regardless of CI status -- a CI gate would also need the box to deploy only CI-green commits (a token on the box and a second branch) and a CI image matching py3.14/pandas 3.0.3 and the local data the tests read. Pre-existing reds cleared first so the gate can be strict: data rights (14 register rows added, all unconfirmed) and calendar source (stale local cache refreshed). Limits: per clone (a fresh clone must run the git config line), and `--no-verify` bypasses it.
 
 ### D-067 · Stored daily prices are not adjusted for splits, bonuses or demergers
 - **Status** open · **Found** 2026-11-10 · not fixed

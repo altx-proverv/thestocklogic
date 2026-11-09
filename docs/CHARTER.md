@@ -60,6 +60,11 @@ watch-only until resumed.
   A script under tests/ is a drill however it was started. (OPEN D-060.)
 - **A suite that is not in tests/run_all.py is not a test.** run_all fails on
   any unregistered tests/test_*.py.
+- **Nothing is pushed unless the full suite and check_js.sh pass on exactly
+  the commit being pushed** (.githooks/pre-push; enable per clone with
+  `git config core.hooksPath .githooks`). The box deploys main every five
+  minutes, so the gate is at push time. `--no-verify` is a decision, not a
+  convenience. (OPEN D4/D-066, 2026-11-10.)
 
 ### Alerts and checks
 - **HTTP 200 is not delivery.** A message counts only with a `message_id`.

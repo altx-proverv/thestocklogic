@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# THE PUSH GATE (OPEN D4, 2026-11-10).
+#
+# The box hard-resets to origin/main every five minutes, so whatever reaches
+# main IS deployed. Twice in two days main went red -- two exit suites, then
+# home_freshness.js after a push that ran two suites instead of all. So the
+# gate is here, at push time: nothing is pushed unless the FULL suite and
+# check_js.sh pass on exactly the commit being pushed.
+#
+# Enabled per clone with:  git config core.hooksPath .githooks
+# `git push --no-verify` skips it. That is a decision, not a convenience.
+set -u
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+cd "$ROOT" || exit 1
+ZERO=0000000000000000000000000000000000000000
+HEAD_SHA=$(git rev-parse HEAD)
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue                       # a delete
+  if [ "$local_sha" != "$HEAD_SHA" ]; then
+    echo "pre-push: refusing -- pushing $local_ref ($local_sha) but HEAD is $HEAD_SHA."
+    echo "          Check out what you are pushing, so the suite tests it."
+    exit 1
+  fi
+done
+
+if ! git diff --quiet HEAD --; then
+  echo "pre-push: refusing -- tracked files have uncommitted changes; the suite"
+  echo "          would test something other than what is being pushed."
+  exit 1
+fi
+
+LOG=$(mktemp -t tsl-prepush.XXXXXX)
+start=$(date +%s)
+echo "pre-push: check_js.sh + full suite on $HEAD_SHA ..."
+if ! bash check_js.sh > "$LOG" 2>&1; then
+  echo "pre-push: REFUSED -- check_js.sh failed:"; tail -20 "$LOG"; exit 1
+fi
+if ! PYTHONDONTWRITEBYTECODE=1 ./venv/bin/python tests/run_all.py >> "$LOG" 2>&1; then
+  echo "pre-push: REFUSED -- the suite is red:"
+  grep -E "^FAILED|unregistered" "$LOG" | tail -5
+  echo "          full log: $LOG"
+  exit 1
+fi
+echo "pre-push: green in $(( $(date +%s) - start ))s -- pushing."
+rm -f "$LOG"
+exit 0
