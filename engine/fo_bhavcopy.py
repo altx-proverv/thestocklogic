@@ -85,7 +85,12 @@ def _archives():
 REQUIRED = ("TradDt", "FinInstrmTp", "TckrSymb", "XpryDt", "StrkPric", "OptnTp",
             "OpnPric", "HghPric", "LwPric", "ClsPric", "SttlmPric", "UndrlygPric",
             "OpnIntrst", "ChngInOpnIntrst", "TtlTradgVol", "TtlTrfVal", "NewBrdLotQty")
-KEEP = REQUIRED + ("ISIN", "LastPric", "PrvsClsgPric", "FininstrmActlXpryDt")
+KEEP = REQUIRED + ("ISIN", "LastPric", "PrvsClsgPric", "FininstrmActlXpryDt",
+                   "FinInstrmId", "TtlNbOfTxsExctd")
+# STORAGE (2026-11-10): the parquet only, zstd. The raw CSV is ~7.5 MB a
+# session -- a year is ~1.9 GB against 1.4 GB free on the box (81% used, disk
+# alarm at 500 MB) -- so it is validated, converted and dropped. The parquet
+# keeps every field the F&O signals and IV use (OPEN D-080).
 RETRIES = 2
 
 
@@ -121,7 +126,7 @@ def validate(text: str, d: date):
 
 
 def have(d: date) -> bool:
-    return parquet_path(d).exists() and csv_path(d).exists()
+    return parquet_path(d).exists()
 
 
 def fetch(d: date, archives=None) -> dict:
@@ -148,11 +153,11 @@ def fetch(d: date, archives=None) -> dict:
                     df, why = validate(text, d)
                     if df is None:
                         return {"date": d.isoformat(), "ok": False, "status": f"REJECTED: {why}"}
-                    RAW_DIR.mkdir(parents=True, exist_ok=True)
                     PARQUET_DIR.mkdir(parents=True, exist_ok=True)
-                    csv_path(d).write_text(text)
                     keep = [c for c in KEEP if c in df.columns]
-                    df[keep].to_parquet(parquet_path(d), index=False)
+                    tmp = parquet_path(d).with_suffix(".tmp")
+                    df[keep].to_parquet(tmp, index=False, compression="zstd")
+                    tmp.replace(parquet_path(d))
                     return {"date": d.isoformat(), "ok": True, "status": "fetched",
                             "rows": int(len(df)), "summary": summarise(df)}
         except Exception as e:
