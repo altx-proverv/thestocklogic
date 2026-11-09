@@ -2,8 +2,9 @@
 ATLAS LONG-EQUITY SIZING — how much, and where the three tranches go.
 =====================================================================
 
-Decided 2026-11-10. Not yet wired into the entry path: nothing here places,
-modifies or cancels an order. It answers one question -- given a symbol, an
+Decided 2026-11-10. Wired into the entry path for the LONG book on 2026-11-10
+via size_pilot() (atlas_entry Gate 5). Nothing here places, modifies or cancels
+an order; it only computes. It answers one question -- given a symbol, an
 entry price and the book, what is the position and where are its tranches --
 and refuses, with a reason, whenever an input it needs is missing or suspect.
 
@@ -116,8 +117,14 @@ def headroom(total_capital: float, deployed: float, kind: str) -> float:
 
 
 def size(symbol: str, entry: float, shares: float | None, atr: float | None,
-         supports: list, traded_values: list, total_capital: float) -> dict:
-    """The rule on its inputs. Refuses rather than substituting."""
+         supports: list, traded_values: list, total_capital: float | None,
+         book_capital: float | None = None) -> dict:
+    """The rule on its inputs. Refuses rather than substituting.
+
+    book_capital, when given, IS the long book and the ceilings apply to it
+    directly -- the pilot's ring-fenced LONG_PILOT_CAPITAL. Otherwise the long
+    book is LONG_BOOK_FRACTION of total_capital.
+    """
     out = {"symbol": symbol, "entry": entry, "refused": None}
     if not shares or shares <= 0:
         out["refused"] = "no share count"
@@ -132,7 +139,8 @@ def size(symbol: str, entry: float, shares: float | None, atr: float | None,
         return out
     mcap_cr = shares * entry / CRORE
     edge, frac = band(mcap_cr)
-    book = total_capital * LONG_BOOK_FRACTION
+    book = (float(book_capital) if book_capital is not None
+            else float(total_capital) * LONG_BOOK_FRACTION)
     ceiling = book * frac
     median_tv = statistics.median(tv[-LIQ_SESSIONS:])
     liq_cap = LIQ_FRACTION * median_tv
@@ -150,9 +158,27 @@ def size(symbol: str, entry: float, shares: float | None, atr: float | None,
                 "bound": "liquidity" if liq_cap < ceiling else "ceiling",
                 "position": position, "atr": atr, "atr_pct": atr / entry * 100,
                 "tranches": tranches})
+    # T1 ROUNDS UP TO ONE SHARE IF ONE SHARE FITS INSIDE THE POSITION BOUND
+    # (operator, 2026-11-10). The bound is the tighter of ceiling and liquidity
+    # cap -- "fits inside the ceiling" read against the bound that actually
+    # applies. If one share does not fit, the symbol is refused and says why.
     if tranches[0]["qty"] < 1:
-        out["refused"] = f"T1 of Rs {tranches[0]['amount']:,.0f} buys no share at {entry}"
+        if 0 < entry <= position:
+            tranches[0]["qty"] = 1
+            tranches[0]["rounded_up"] = True
+        else:
+            out["refused"] = (f"one share at Rs {entry:,.2f} exceeds the position "
+                              f"bound Rs {position:,.0f} ({out['bound']}); T1 of "
+                              f"Rs {tranches[0]['amount']:,.0f} buys no share")
     return out
+
+
+def size_pilot(symbol: str, entry: float | None = None, today: date | None = None,
+               store: dict | None = None, frame=None) -> dict:
+    """The long pilot: the ceilings apply directly to LONG_PILOT_CAPITAL."""
+    from atlas.config import LONG_PILOT_CAPITAL
+    return size_symbol(symbol, None, entry=entry, today=today, store=store,
+                       frame=frame, book_capital=LONG_PILOT_CAPITAL)
 
 
 # ── inputs, read from where they already live ─────────────────────
@@ -184,9 +210,9 @@ def share_count(symbol: str, today: date, store: dict | None = None) -> tuple:
     return float(rec["total"]), rec, None
 
 
-def size_symbol(symbol: str, total_capital: float, entry: float | None = None,
+def size_symbol(symbol: str, total_capital: float | None, entry: float | None = None,
                 today: date | None = None, store: dict | None = None,
-                frame=None) -> dict:
+                frame=None, book_capital: float | None = None) -> dict:
     """Read every input for `symbol` as of its last stored session, then size."""
     import pandas as pd
     from engine.active_zones import supports_below
@@ -220,7 +246,7 @@ def size_symbol(symbol: str, total_capital: float, entry: float | None = None,
     sess = [pd.Timestamp(d).date() for d in df["date"].iloc[-LIQ_SESSIONS:]]
     tvs = [session_traded_value(symbol, d) for d in sess]
     sup = [z["top"] for z in supports_below(df)]
-    r = size(symbol, entry, shares, atr, sup, tvs, total_capital)
+    r = size(symbol, entry, shares, atr, sup, tvs, total_capital, book_capital=book_capital)
     r.update({k: v for k, v in base.items() if k not in r})
     r["supports_below"] = sup
     return r

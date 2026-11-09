@@ -241,6 +241,82 @@ def _mark(v: str) -> str:
     return {"CONFIRMED": "✅", "NONE": "❌", "UNKNOWN": "❓"}.get(v, "❓")
 
 
+def long_book_lines(rows: list, kite=None, gtts=None) -> list:
+    """The long book at day end: blended cost from the BROKER, the +16% flag,
+    and whether each tranche GTT is still resting. Reads only.
+
+    BLENDED COST IS THE BROKER'S, not our row's: after T2 or T3 fills, the row
+    holds T1's price and the broker holds the average of everything bought.
+    Unreadable is said, never shown as a number.
+    """
+    from atlas.config import PROFIT_FLAG_PCT
+    from atlas.execution.tranches import tranche_ids
+    out = ["", f"<b>LONG BOOK — {len(rows)} open (no broker stops by mandate; "
+               f"flag at +{PROFIT_FLAG_PCT:g}% on blended cost)</b>"]
+    if not rows:
+        out.append("  none")
+        return out
+    try:
+        if kite is None:
+            from atlas.execution.broker import get_kite
+            kite = get_kite()
+        pos = kite.positions().get("net") if kite else None
+        hold = kite.holdings() if kite else None
+    except Exception as e:
+        pos = hold = None
+        log.warning(f"long book: broker book unreadable ({e})")
+    if gtts is None:
+        from atlas.execution.gtt import list_active_gtts
+        gtts = list_active_gtts()
+    active = None if gtts is None else {str(g.get("id")) for g in gtts}
+    ltps = live_prices(sorted({t["symbol"] for t in rows}))
+    for t in rows:
+        sym = t["symbol"]
+        if pos is None or hold is None:
+            out.append(f"  {_esc(sym)} — broker positions/holdings UNREADABLE: "
+                       f"blended cost unknown, +{PROFIT_FLAG_PCT:g}% not checked")
+            continue
+        q = v = 0.0
+        for x in pos:
+            if str(x.get("tradingsymbol")) == sym and str(x.get("product", "")).upper() == "CNC":
+                n = float(x.get("quantity") or 0)
+                if n > 0:
+                    q += n; v += n * float(x.get("average_price") or 0)
+        for x in hold:
+            if str(x.get("tradingsymbol")) == sym:
+                n = float(x.get("quantity") or 0) + float(x.get("t1_quantity") or 0)
+                if n > 0:
+                    q += n; v += n * float(x.get("average_price") or 0)
+        ltp = ltps.get(sym)
+        if not q:
+            out.append(f"  {_esc(sym)} — the broker shows NO shares (sold, or not "
+                       f"settled into either book); row {t.get('id')} still OPEN")
+            continue
+        avg = v / q
+        line = f"  <b>{_esc(sym)}</b> {int(q)} @ blended Rs{avg:,.2f}"
+        if ltp:
+            ch = (ltp / avg - 1) * 100
+            line += f"  LTP Rs{ltp:,.2f} ({ch:+.1f}%)"
+            if ch >= PROFIT_FLAG_PCT:
+                line = (f"  🟢 <b>+{PROFIT_FLAG_PCT:g}% REACHED — {_esc(sym)}</b> "
+                        f"{ch:+.1f}% on blended cost. Your decision; ATLAS places "
+                        f"no sell.\n" + line)
+        else:
+            line += "  LTP unavailable — the flag was not checked"
+        ids = tranche_ids(t)
+        if ids:
+            st = ", ".join(f"{n.upper()} {i} "
+                           + ("?" if active is None else
+                              ("resting" if i in active else "not active (filled or cancelled)"))
+                           for n, i in ids.items())
+            line += f"\n     tranches: {st}"
+        line += (f"\n     published stop Rs{float(t.get('stop_price') or 0):,.2f}, "
+                 f"target " + (f"Rs{float(t['target_price']):,.2f}"
+                               if t.get("target_price") else "—"))
+        out.append(line)
+    return out
+
+
 def build(slot: str = "1130") -> tuple:
     """-> (message, naked) where naked is the list of unprotected open rows."""
     label, day_end = SLOTS.get(slot, SLOTS["1130"])
@@ -256,9 +332,13 @@ def build(slot: str = "1130") -> tuple:
     # ── the unprotected check, done FIRST because it decides the first line ──
     naked = []
     legs = {}
+    from atlas.books import broker_stops_for_trade
     for t in opens:
         legs[t["id"]] = confirm_legs(t, prot)
-        if legs[t["id"]]["stop"] != "CONFIRMED":
+        # THE LONG BOOK HAS NO BROKER STOP BY MANDATE (atlas/books.py,
+        # operator 2026-11-10): an open long without one is not "naked" and
+        # never reaches the first line. Every other book is unchanged.
+        if legs[t["id"]]["stop"] != "CONFIRMED" and broker_stops_for_trade(t):
             naked.append(t)
 
     L = []
@@ -299,6 +379,13 @@ def build(slot: str = "1130") -> tuple:
         L.append(f"  <b>{_esc(t['symbol'])}</b> {t.get('direction')} "
                  f"{t.get('qty')} @ Rs{float(t.get('entry_price') or 0):,.2f}"
                  f"  {when}  [{kind}]")
+        if not broker_stops_for_trade(t):
+            L.append(f"     stop   Rs{float(t.get('stop_price') or 0):,.2f} "
+                     f"({src}) — published only, no broker stop by mandate")
+            tgt = t.get("target_price")
+            L.append(f"     target " + (f"Rs{float(tgt):,.2f}" if tgt else "—")
+                     + " — published only")
+            continue
         L.append(f"     stop   Rs{float(t.get('stop_price') or 0):,.2f} "
                  f"({src})  {_mark(lg['stop'])} {lg['stop']}"
                  + (f" at Rs{lg['stop_at']}" if lg["stop_at"] else ""))
@@ -369,8 +456,10 @@ def build(slot: str = "1130") -> tuple:
 
     # ── the day-end GTT handover ──────────────────────────────────
     if day_end:
+        L.extend(long_book_lines([t for t in opens if not broker_stops_for_trade(t)]))
         longs = [t for t in opens
-                 if str(t.get("direction") or "").upper() == "LONG"]
+                 if str(t.get("direction") or "").upper() == "LONG"
+                 and broker_stops_for_trade(t)]
         L.append("")
         L.append(f"<b>OVERNIGHT GTT HANDOVER — {len(longs)} open long(s)</b>")
         if not longs:

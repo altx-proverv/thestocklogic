@@ -35,6 +35,15 @@ logging.basicConfig(level=logging.CRITICAL)
 
 from atlas.reporting import cadence                      # noqa: E402
 from atlas.reporting import session_report as SR          # noqa: E402
+import atlas.books as BK                                  # noqa: E402
+
+# REPOINTED 2026-11-10. The CNC long below is the fixture for the STOP-BOOK
+# machinery (the unprotected first line, the 15:50 GTT handover). Since the
+# operator's ruling of that day the long book places no broker stops, so these
+# sections run with the long-book switch set to stops-on -- the state that
+# machinery serves -- and a new check below asserts the ruling itself: with
+# stops off, a CNC long is neither "naked" nor in the handover.
+BK.LONG_BOOK_BROKER_STOPS = True
 
 ENTRY = 1453.70
 
@@ -208,6 +217,17 @@ def main() -> int:
     ok &= good
     print(f"  {'warning is in the first lines, not buried':<46}"
           f"{'ok' if good else '** BURIED **'}")
+
+    # THE RULING (2026-11-10): the long book has no broker stop by mandate, so
+    # the same position produces NO warning and no handover line.
+    BK.LONG_BOOK_BROKER_STOPS = False
+    _b2, _n2 = SR.build("1130")
+    good = (_n2 == [] and "NO CONFIRMED STOP" not in _b2
+            and "no broker stop by mandate" in _b2)
+    ok &= good
+    print(f"  {'long book (stops off): no warning, levels published':<46}"
+          f"{'ok' if good else '** WARNED ABOUT A LONG **'}")
+    BK.LONG_BOOK_BROKER_STOPS = True
 
     # And it is not cried wolf: a confirmed stop produces no warning at all.
     SR.broker_protection = lambda: _prot(gtts={"ATHERENERG": [

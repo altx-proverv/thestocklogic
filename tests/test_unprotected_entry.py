@@ -55,6 +55,16 @@ logging.basicConfig(level=logging.CRITICAL)
 from atlas.execution import exits as X                    # noqa: E402
 from atlas.execution import protection as PR              # noqa: E402
 from atlas.risk import symbol_block as SB                 # noqa: E402
+import atlas.books as BK                                  # noqa: E402
+
+# REPOINTED 2026-11-10. Since the operator's ruling of that day the LONG
+# DELIVERY book places no broker stops (atlas/books.py), so a CNC long is never
+# registered, repaired or alerted as unprotected -- tests/test_long_pilot.py
+# asserts that. The machinery tested HERE still serves every book that does
+# place stops, so it is exercised with the long-book switch set to stops-on:
+# the exact state in which this machinery runs. Not a loosening -- every
+# assertion below is unchanged.
+BK.LONG_BOOK_BROKER_STOPS = True
 
 ENTRY = 1453.70
 STOP = 1418.86          # NOT a multiple of ATHERENERG's 0.10 tick, verbatim

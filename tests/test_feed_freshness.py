@@ -446,6 +446,10 @@ GATED = {
 EXEMPT = {
     "atlas/execution/atlas_entry.py":
         "writes atlas_trades on a real fill; market_open gates the session above it",
+    "atlas/execution/long_pilot.py":
+        "writes ONE PREFLIGHT row to order_path_events, called only from "
+        "atlas_entry.enter_trade, which market_open gates on the session -- a "
+        "proof the table is writable before an order, not a session claim",
     "atlas/execution/order_events.py":
         "order_path_events records what the order path just refused or "
         "substituted, on whatever day it ran -- a record, not a session claim; "

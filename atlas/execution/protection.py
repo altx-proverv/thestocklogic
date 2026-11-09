@@ -242,6 +242,14 @@ def register(trade: dict, why: str, wanted_stop=None) -> dict:
     positions that both failed and were both fixed is still a day on which
     protection failed twice, and hiding that is the opposite of the point.
     """
+    # THE LONG BOOK IS NEVER "UNPROTECTED" (atlas/books.py, operator
+    # 2026-11-10): no stop at the broker is its intended state. Refused here,
+    # centrally, so no caller -- present or future -- can raise the alarm for it.
+    from atlas.books import broker_stops_for_trade
+    if not broker_stops_for_trade(trade):
+        log.info(f"{trade.get('symbol')}: long book — no stop by mandate, not "
+                 f"registered as unprotected")
+        return {}
     d = _load()
     key = str(trade.get("id") or trade.get("symbol"))
     if key not in d["positions"]:
@@ -342,7 +350,15 @@ def sweep(open_trades: list, prot: dict = None, send=None, now=None) -> dict:
         prot = broker_protection()
 
     by_key = {str(t.get("id") or t.get("symbol")): t for t in (open_trades or [])}
+    from atlas.books import broker_stops_for_trade
     for key, p in list(reg.items()):
+        # An entry for a long-book position (registered before the switch, or
+        # by any path that bypassed register's guard) is resolved, not alerted.
+        _t = by_key.get(key) or {"direction": p.get("direction"), "product": p.get("product")}
+        if not broker_stops_for_trade(_t):
+            resolve(key)
+            out["resolved"] += 1
+            continue
         out["checked"] += 1
         t = by_key.get(key) or {"symbol": p.get("symbol"),
                                 "direction": p.get("direction"),
@@ -405,6 +421,11 @@ def ensure_protected(trade: dict, kite=None, prot: dict = None,
     "placed_gtt", "refused_unreadable", "failed".
     """
     from atlas.execution import exits as X
+    from atlas.books import broker_stops_for_trade
+    if not broker_stops_for_trade(trade):
+        # NO STOP IS PLACED FOR THE LONG BOOK, by any path (operator 2026-11-10).
+        return {"symbol": trade.get("symbol"), "action": "none", "ok": True,
+                "reason": "long book: no broker stops by mandate"}
 
     now = now_ist or _now_ist()
     sym = str(trade.get("symbol") or "")

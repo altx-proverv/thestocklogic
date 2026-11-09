@@ -114,8 +114,10 @@ DIR.handle_directive("/ack all")
 print("\nTHE SOURCES RAISE IT")
 import atlas.execution.protection as PR                         # noqa: E402
 PR.UNPROTECTED_FILE = T / "unprotected.json"
-PR.register({"id": 77, "symbol": "EEE", "direction": "LONG", "qty": 5,
-             "entry_price": 100.0, "stop_price": 95.0}, "handover failed", wanted_stop=95.0)
+# A SHORT (MIS): since 2026-11-10 a long-book position is never registered as
+# unprotected (atlas/books.py); a book that places stops still is.
+PR.register({"id": 77, "symbol": "EEE", "direction": "SHORT", "product": "MIS", "qty": 5,
+             "entry_price": 100.0, "stop_price": 105.0}, "handover failed", wanted_stop=105.0)
 check("protection.register raises an UNPROTECTED alarm",
       [a["id"] for a in EA.outstanding()], ["unprotected:77"])
 

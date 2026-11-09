@@ -75,11 +75,21 @@ def _footer() -> str:
         tgt = (" A 2R target rests alongside it."
                if ALLOW_AUTOMATED_TARGET else
                " No target is placed; positions are trailed, not capped.")
-        return ("STOPS: ATLAS places its own stop on every fill — a stop-loss "
-                "LIMIT order for an MIS short, a GTT for a CNC long — and "
-                "exits immediately on a limit priced through the book if it "
-                f"cannot.{tgt} MIS positions are closed "
-                f"by the engine at {MIS_EXIT_TIME} IST.\n"
+        # PER BOOK, read from atlas/books.py at send time (2026-11-10). The
+        # old sentence also said ATLAS "exits immediately ... if it cannot" --
+        # false since 2026-10-16: a failed stop leaves the position open and
+        # alerts.
+        from atlas.books import broker_stops
+        from atlas.config import PROFIT_FLAG_PCT
+        longs = ("CNC LONGS: no stop at the broker, by mandate — stop and target "
+                 f"are published only; +{PROFIT_FLAG_PCT:g}% on blended cost is "
+                 "flagged at 15:50 and any sale is yours."
+                 if not broker_stops("LONG", "CNC") else
+                 "CNC longs: a GTT stop on every fill.")
+        return ("STOPS: MIS SHORTS get a stop-loss LIMIT order with the entry; a "
+                "stop that cannot be placed leaves the position open and alerts "
+                f"until a human acts.{tgt} MIS positions are closed by the "
+                f"engine at {MIS_EXIT_TIME} IST. {longs}\n"
                 "Trailing levels above are recommendations only — nothing is "
                 "placed from them.")
     return ("STOPS: exit management is OFF — ATLAS places no stop-losses. Set "

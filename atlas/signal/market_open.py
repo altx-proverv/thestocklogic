@@ -992,9 +992,35 @@ def cycle(state: Session) -> dict:
                       key="positions_unreadable")
                 rec = {"checked": None, "cancelled": 0, "alerts": []}
             else:
+                # THE LONG BOOK IS NOT RECONCILED HERE (atlas/books.py). It has no
+                # stop legs, and reconcile_exits reads only positions()['net'] --
+                # a CNC long held past settlement is in HOLDINGS, so it would be
+                # read as flat and every GTT on it cancelled. Its tranche GTTs are
+                # cleaned up below by tranches.cleanup(), which reads both.
+                from atlas.books import broker_stops_for_trade as _bst
+                _open_long = [t for t in _open if not _bst(t)]
+                _open = [t for t in _open if _bst(t)]
                 rec = X.reconcile_exits(_open, kite=_k, orders=_rec_orders,
                                         atlas_gtts=_atlas_gtts,
                                         gtts_unreadable=_atlas_gtts is None)
+                try:
+                    from atlas.execution import tranches as _TR
+                    from atlas.execution.gtt import list_active_gtts as _lag
+                    from atlas.execution.long_pilot import tranche_rows as _trows
+                    _rows = _trows()
+                    if _rows is None:
+                        alert("TRANCHE ROWS UNREADABLE",
+                              "Long-book rows could not be read, so their resting "
+                              "BUY GTTs were not checked for orphans this cycle.",
+                              key="tranche_rows_unreadable")
+                    elif _rows:
+                        _tc = _TR.cleanup(_rows, _k, _lag())
+                        rec["cancelled"] += _tc["cancelled"]
+                        rec.setdefault("alerts", []).extend(_tc["alerts"])
+                except Exception as e:
+                    log.exception("tranche cleanup raised")
+                    alert("TRANCHE CLEANUP FAILED", f"{type(e).__name__}: {e}",
+                          key="tranche_cleanup")
             state.exit_cancelled = getattr(state, "exit_cancelled", 0) + rec["cancelled"]
             out["exits_reconciled"] = rec["checked"]
             out["exits_cancelled"] = rec["cancelled"]
@@ -1293,6 +1319,14 @@ def cycle(state: Session) -> dict:
             # might exist. Same reasoning as BLOCKING_STATUSES in the ledger.
             entered_keys.add((sym, direction))
         log_decision(signal, result)
+        if direction == "LONG":
+            # Every long-book decision to the observation ledger, once per
+            # symbol per status per session (long_pilot.ledger_decision).
+            try:
+                from atlas.execution.long_pilot import ledger_decision
+                ledger_decision(signal, result)
+            except Exception:
+                log.exception("long decision not ledgered")
 
         if status in ("ENTERED", "SHADOW_INTENT"):
             out["entered"] += 1

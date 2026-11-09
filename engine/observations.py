@@ -81,6 +81,16 @@ TYPES = {
                         republish="ignore"),
     "heavy_quiet": dict(lookback=20,  directional=False, basis="price_at_publication",
                         republish="ignore"),
+    # ATLAS's long book (2026-11-10, migrations/20261110_observation_types_atlas.sql).
+    # atlas_entry is a real fill priced at what was paid; lookback 252 because
+    # the zone and the enterable universe it came from are gated on 02b/03b's
+    # 252-session window, as signal is. atlas_decision is every refusal and
+    # every watch-only would-enter, once per symbol per status per session --
+    # never scored, because a refusal is not a call.
+    "atlas_entry":    dict(lookback=252, directional=True, basis="price_at_publication",
+                           republish="ignore"),
+    "atlas_decision": dict(lookback=252, directional=True, basis="price_at_publication",
+                           republish="ignore", scored=False),
 }
 
 for _spec in TYPES.values():

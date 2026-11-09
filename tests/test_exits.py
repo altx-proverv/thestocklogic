@@ -471,8 +471,10 @@ def main() -> int:
     # The GATE, not an early return after the fill: with the flag off ATLAS used
     # to enter and report ENTERED with no stop attempted. See
     # test_exit_path_rebuild.py section 9 for the ordering and behaviour.
+    # REPOINTED 2026-11-10: the gate now applies to every book that places
+    # stops (atlas/books.py) -- the long book places none by operator ruling.
     check("  it is a gate that refuses the entry when off",
-          "if not ENABLE_EXIT_MANAGEMENT:" in entry_src
+          "and not ENABLE_EXIT_MANAGEMENT:" in entry_src
           and "SKIPPED_NO_EXIT_MANAGEMENT" in entry_src, True)
     print(f"  {'DEPLOYED: exit management is ' + ('ON' if ENABLE_EXIT_MANAGEMENT else 'OFF'):<54}"
           f"{'ATLAS places its own stops' if ENABLE_EXIT_MANAGEMENT else 'exits are manual'}")

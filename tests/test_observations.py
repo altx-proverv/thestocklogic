@@ -190,8 +190,8 @@ sc, nd, unres = so.score_batch([_r], as_of=date(2026, 10, 14), prices=lambda s: 
                                results_fetch=lambda a, b: {})
 check("a due radar event produces no score row, no skip row, no 'not due'",
       (len(sc), nd, len(unres)), (0, 0, 0))
-check("  and radar_event is the only unscored type", sorted(obs.UNSCORED_TYPES),
-      ["radar_event"])
+check("  and the unscored types are radar_event and atlas_decision",
+      sorted(obs.UNSCORED_TYPES), ["atlas_decision", "radar_event"])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -487,6 +487,20 @@ head("5. THE MIGRATION AND THE CODE SPEAK THE SAME VOCABULARY")
 # ══════════════════════════════════════════════════════════════════
 sql = (ROOT / "migrations" / "20261103181336_observation_ledger.sql").read_text()
 sql_code = re.sub(r"--[^\n]*", "", sql)
+# LATER MIGRATIONS REDEFINE THE VOCABULARY (20261110_observation_types_atlas.sql
+# adds ATLAS's two types). The check that matters is against what the database
+# now enforces, so the NEWEST definition of each wins: the type CHECK and the
+# never-score function are read from the last migration that states them.
+_later = sorted(p for p in (ROOT / "migrations").glob("2026*.sql")
+                if p.name > "20261103181336_observation_ledger.sql")
+_newest_type_check = _newest_scorable = None
+for _p in _later:
+    _c = re.sub(r"--[^\n]*", "", _p.read_text())
+    _m1 = re.search(r"observations_observation_type_check\s+CHECK \(observation_type IN \(([^)]*)\)\)", _c, re.S)
+    if _m1:
+        _newest_type_check = sorted(re.findall(r"'([^']+)'", _m1.group(1)))
+    if re.search(r"FUNCTION public\.observation_scores_scorable\(\)", _c):
+        _newest_scorable = _c
 
 
 def check_list(column):
@@ -496,7 +510,7 @@ def check_list(column):
 
 
 check("observation_type CHECK == observations.TYPES",
-      check_list("observation_type"), sorted(obs.TYPES))
+      _newest_type_check or check_list("observation_type"), sorted(obs.TYPES))
 check("skip_reason CHECK == score_observations.SKIP_ORDER",
       check_list("skip_reason"), sorted(so.SKIP_ORDER))
 for tbl in ("observations", "observation_scores", "observation_scorer_runs"):
@@ -512,7 +526,7 @@ for tbl in ("observations", "observation_scores", "observation_scorer_runs"):
           bool(re.search(r"REVOKE UPDATE, DELETE, TRUNCATE ON public\." + tbl +
                          r"\s+FROM service_role", sql_code)), True)
 _m = re.search(r"FUNCTION public\.observation_scores_scorable\(\).*?observation_type IN \(([^)]*)\)",
-               sql_code, re.S)
+               _newest_scorable or sql_code, re.S)
 check("the database's never-score list == observations.UNSCORED_TYPES",
       sorted(re.findall(r"'([^']+)'", _m.group(1))) if _m else None,
       sorted(obs.UNSCORED_TYPES))

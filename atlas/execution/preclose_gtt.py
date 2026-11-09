@@ -83,7 +83,11 @@ def open_longs() -> tuple:
             log.error(f"open longs read failed: HTTP {r.status_code} "
                       f"{r.text[:140]}")
             return False, []
-        return True, r.json() or []
+        # THE LONG BOOK GETS NO 15:20 STOP GTT AND NO TRAIL (atlas/books.py,
+        # operator 2026-11-10). Filtered here, at the only source of rows, so
+        # neither the handover nor the trail can reach one.
+        from atlas.books import broker_stops_for_trade
+        return True, [t for t in (r.json() or []) if broker_stops_for_trade(t)]
     except Exception as e:
         log.error(f"open longs read failed: {e}")
         return False, []

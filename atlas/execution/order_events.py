@@ -49,7 +49,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 ROOT = Path(__file__).resolve().parent.parent.parent
 LOCAL = Path(os.environ.get("TSL_ORDER_EVENTS_FILE",
                             ROOT / "reports" / "order_path_events.jsonl"))
-EVENTS = ("REFUSED", "SUBSTITUTED", "PRICE_USED", "CHECK_SKIPPED")
+EVENTS = ("REFUSED", "SUBSTITUTED", "PRICE_USED", "CHECK_SKIPPED",
+          # the long pilot (2026-11-10): what was sent, and in watch-only what would be
+          "ORDER_SENT", "GTT_SENT", "GTT_CANCELLED", "WOULD_PLACE",
+          # one row per session proving the table is writable before any order
+          "PREFLIGHT")
 
 _seen: dict = {}
 

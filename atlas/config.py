@@ -276,10 +276,14 @@ MAX_STOP_PCT = 5.0
 # managing positions without stopping it trading.
 ENABLE_EXIT_MANAGEMENT = True
 
-# A stop is NOT optional once exit management is on. Kept True to say so: with
-# ENABLE_EXIT_MANAGEMENT True a position that cannot be given a stop is exited at
-# market, so there is no state in which ATLAS holds a position by choice without
-# one. Setting this False would not disable stops, it would just be a lie.
+# CORRECTED 2026-11-10. This comment used to say a position that cannot be
+# given a stop "is exited at market". It is not, and has not been since
+# 2026-10-16: exits.protect_or_flag keeps the position open and alerts, and
+# emergency_exit() is called only by the MIS square-off. The false sentence was
+# read as fact on 2026-11-10 and drove a wrong warning to the operator.
+#
+# Stops per BOOK are decided by LONG_BOOK_BROKER_STOPS / SHORT_BOOK_BROKER_STOPS
+# below (atlas/books.py), not by this flag; nothing reads it to decide anything.
 ALLOW_AUTOMATED_STOP_LOSS = True
 
 # THE TARGET IS OPTIONAL, AND THIS IS THE KNOB FOR IT.
@@ -796,6 +800,49 @@ ALLOW_SHORT_ENTRIES = True
 # is where the product is actually chosen, so the pair is readable together
 # with SHORT_PRODUCT_TYPE above it.
 LONG_PRODUCT_TYPE = "CNC"
+
+# ══════════════════════════════════════════════════════════════════
+# BOOKS: WHO GETS STOPS AT THE BROKER (operator, 2026-11-10)
+# ══════════════════════════════════════════════════════════════════
+#
+# PER BOOK, NEVER GLOBAL. atlas/books.py decides a trade's book from its
+# direction and product and every stop touchpoint asks it -- the day-0 stop at
+# fill, the 15:20 GTT handover and trail, the per-cycle protection sweep, the
+# UNPROTECTED register and its alarm, the 15:50 report's "no confirmed stop"
+# line, and the orphan-leg reconcile.
+#
+#   LONG DELIVERY (LONG + CNC), the investing mandate: NO stop orders of any
+#   kind at the broker. An open long with no stop is the intended state, not a
+#   fault: no UNPROTECTED alarm, no "no confirmed stop" line. Stop and target
+#   are computed and published (atlas_trades, the dashboard, the observation
+#   ledger) and never sent. At +PROFIT_FLAG_PCT on blended cost the 15:50
+#   report flags it; the operator decides and executes any sale.
+#
+#   SHORT INTRADAY (SHORT + MIS): mandatory broker-side stops placed with the
+#   entry. A short has no floor. NON-NEGOTIABLE -- atlas/books.py refuses to
+#   import if this is anything but True, so it cannot be switched off by
+#   editing one line.
+#
+# A trade whose book cannot be told (no product, an unknown combination) gets
+# stops: the safe direction for a book that needs them.
+LONG_BOOK_BROKER_STOPS = False
+SHORT_BOOK_BROKER_STOPS = True
+PROFIT_FLAG_PCT = 16.0
+
+# ── THE LONG PILOT (2026-11-10) ───────────────────────────────────
+# RING-FENCED CAPITAL, the one figure the long book sizes against. The
+# market-cap ceilings in atlas/sizing.py apply to it DIRECTLY -- no 60% long-book
+# split for the pilot -- so 8% = Rs16,000 and tranche 1 = Rs6,400. ONE NAMED
+# VALUE: capital becomes a control-page slider later, so nothing else may hold
+# a copy of this number.
+LONG_PILOT_CAPITAL = 200000.0
+# First come, first served: the first five LONG entries that pass every gate.
+# Counted from atlas_trades rows carrying LONG_PILOT_SIZING_BASIS (any status
+# but CANCELLED), so a restart cannot reset it. No sector cap (OPEN D-071: the
+# sector map is under audit and no per-sector rule may read it until it is
+# right).
+LONG_PILOT_MAX_ENTRIES = 5
+LONG_PILOT_SIZING_BASIS = "long_pilot_2026_11"
 
 # STRICT AND-GATE. When True, allowed_side returns LONG only for bull regime
 # AND bullish sentiment, and cash for everything else -- including

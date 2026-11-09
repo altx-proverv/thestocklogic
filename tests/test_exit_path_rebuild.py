@@ -668,7 +668,9 @@ def main() -> int:
     # entry path. It is now a gate, ahead of the reservation.
     from _srcutil import executable_source as _exsrc
     entry_exec = _exsrc(ROOT / "atlas" / "execution" / "atlas_entry.py")
-    gate_at  = entry_exec.find("if not ENABLE_EXIT_MANAGEMENT:")
+    # REPOINTED 2026-11-10: "if _stops and not ENABLE_EXIT_MANAGEMENT:" --
+    # the gate holds for every book that places stops (atlas/books.py).
+    gate_at  = entry_exec.find("not ENABLE_EXIT_MANAGEMENT)")  # unparsed: "_stops and (not ENABLE_EXIT_MANAGEMENT)"
     resv_at  = entry_exec.find("_reserve_intent(intent)")
     place_at = entry_exec.find("order = place_order(")
     fill_at  = entry_exec.find("await_fill(")
@@ -712,9 +714,15 @@ def main() -> int:
         _br.is_halted = lambda *a, **k: (False, "")
         AE._reserve_intent = _must_not_run
         AE.place_order = _must_not_run
-        sig = {"symbol": "TESTSYM", "direction": "LONG", "entry_ref": 100.0,
-               "entry_low": 99.0, "entry_high": 101.0, "sl": 95.0}
+        # A SHORT: the book whose stops are non-negotiable. (Repointed
+        # 2026-11-10 from a LONG -- the long book places no stops by ruling,
+        # so this gate no longer applies to it; asserted separately below.)
+        sig = {"symbol": "TESTSYM", "direction": "SHORT", "entry_ref": 100.0,
+               "entry_low": 99.0, "entry_high": 101.0, "sl": 105.0}
         got = AE.enter_trade(sig)
+        got_long = AE.enter_trade({"symbol": "TESTSYM", "direction": "LONG",
+                                   "entry_ref": 100.0, "entry_low": 99.0,
+                                   "entry_high": 101.0, "sl": 95.0})
     finally:
         _cfg.ENABLE_EXIT_MANAGEMENT = saved[0]
         _br.is_halted = saved[2]
@@ -727,6 +735,9 @@ def main() -> int:
     check("  it does not report a fill", got.get("filled_qty"), None)
     check("  and the reason says why entries are off",
           "exit management is off" in str(got.get("reason", "")), True)
+    check("a LONG is not refused by this gate (long book: no stops by ruling)",
+          got_long.get("status") != "SKIPPED_NO_EXIT_MANAGEMENT", True,
+          str(got_long.get("status")))
 
     print()
     print("=" * 78)

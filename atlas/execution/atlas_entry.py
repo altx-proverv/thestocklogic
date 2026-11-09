@@ -787,7 +787,14 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # so a session spent sitting out for this reason is countable in
     # atlas_entry_log rather than being guessed at from prose.
     from atlas.config import ENABLE_EXIT_MANAGEMENT
-    if not ENABLE_EXIT_MANAGEMENT:
+    from atlas.config import LONG_PRODUCT_TYPE as _LPT, SHORT_PRODUCT_TYPE as _SPT
+    from atlas.books import broker_stops as _broker_stops
+    # THE BOOK DECIDES WHETHER A STOP GOES TO THE BROKER (atlas/books.py,
+    # operator 2026-11-10). The long book places none by mandate, so exit
+    # management is not a precondition for it; for every book that DOES place
+    # stops -- the short book above all -- this gate is unchanged.
+    _stops = _broker_stops(direction, _LPT if direction == "LONG" else _SPT)
+    if _stops and not ENABLE_EXIT_MANAGEMENT:
         log.warning(
             f"{symbol}: ENTRY REFUSED — entries are disabled because exit "
             f"management is off (ENABLE_EXIT_MANAGEMENT is False). ATLAS "
@@ -1070,8 +1077,48 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     published_stop = float(stop_price)
     if _ds["stop"]:
         stop_price = float(_ds["stop"])
-    sizing = size_for_trade(entry_price=ltp, stop_price=stop_price,
-                            direction=direction, available_funds=spendable)
+    pilot_plan = None
+    if _stops:
+        sizing = size_for_trade(entry_price=ltp, stop_price=stop_price,
+                                direction=direction, available_funds=spendable)
+    else:
+        # ── THE LONG BOOK: atlas/sizing.py, NOT THE FIXED Rs10,000 ──
+        # The 5-entry cap first (cheap, and a full pilot needs no sizing), then
+        # the market-cap band ceiling against LONG_PILOT_CAPITAL, the liquidity
+        # cap, and the support/ATR ladder. Any refusal is a refusal: nothing is
+        # substituted for a missing share count, ATR or traded value.
+        from atlas.execution import long_pilot as LP
+        from atlas import sizing as SZ
+        from atlas.config import LONG_PILOT_SIZING_BASIS
+        _cap_ok, _cap_why, _cap_code = LP.cap_check(symbol, dry_run)
+        if not _cap_ok:
+            return {"status": f"SKIPPED_{_cap_code}", "reason": _cap_why,
+                    "blocked_by": _cap_code}
+        try:
+            pilot_plan = SZ.size_pilot(symbol, entry=float(ltp))
+        except Exception as e:
+            pilot_plan = {"refused": f"sizing raised {type(e).__name__}: {e}"}
+        if pilot_plan.get("refused"):
+            _order_event("REFUSED", "atlas_entry.enter_trade", symbol,
+                         "PILOT_SIZING", pilot_plan["refused"], {"ltp": ltp})
+            return {"status": "SKIPPED_PILOT_SIZING",
+                    "reason": f"sizing refused: {pilot_plan['refused']}",
+                    "blocked_by": "PILOT_SIZING"}
+        _t = pilot_plan["tranches"]
+        _q = int(_t[0]["qty"])
+        _ladder_cost = sum(int(x["qty"]) * float(x["price"]) for x in _t)
+        sizing = {
+            "qty": _q, "product": _LPT, "stop_price": float(stop_price),
+            "stop_pct": round(abs(ltp - stop_price) / ltp * 100, 2) if ltp else None,
+            "risk_actual": abs(ltp - stop_price) * _q,
+            "notional": round(_q * ltp, 2),
+            # FUNDS FOR THE WHOLE LADDER, NOT T1 ALONE: T2 and T3 go in as
+            # resting buys the moment T1 fills, so the cash for them must be
+            # there now. Fewer entries is the safe direction.
+            "capital_required": round(_ladder_cost, 2),
+            "binding_cap": pilot_plan["bound"], "sizing_basis": LONG_PILOT_SIZING_BASIS,
+            "target_notional": round(_t[0]["amount"], 2), "notional_pct": None,
+            "oversized": False}
     if sizing.get("qty", 0) <= 0:
         # A DISTINCT STATUS WHEN THE SIZER NAMES ONE. Every zero-quantity
         # refusal used to collapse into REJECTED_SIZE, which cannot answer "how
@@ -1161,6 +1208,40 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     intent["stop_source"] = _ds["source"]
     intent["stop_pct_used"] = _ds["stop_pct"]
     intent["publication_kind"] = str(signal.get("publication_kind") or "")
+
+    if pilot_plan is not None:
+        # ── THE LONG BOOK'S PRECONDITIONS, ON THIS CALL ───────────
+        # Funds were read at Gate 5. Here: the GTT list is readable,
+        # order_path_events takes a row and gives it back, sizing is connected,
+        # and the book switch reads stops-off for longs / stops-on for shorts.
+        # IN WATCH-ONLY TOO, so a paused session exercises every one of them.
+        _pf_ok, _pf_fails = LP.preflight()
+        if not _pf_ok:
+            _why = "; ".join(_pf_fails)
+            _order_event("REFUSED", "atlas_entry.enter_trade", symbol,
+                         "PILOT_PREFLIGHT", _why, {"failures": _pf_fails})
+            return {"status": "BLOCKED_PILOT_PREFLIGHT", "reason": _why,
+                    "blocked_by": "PILOT_PREFLIGHT"}
+        # THE DECISION IS EVIDENCE BEFORE IT IS AN ORDER. If the ledger will
+        # not take it, nothing is sent.
+        if not LP.record_intent(symbol, "WOULD_ENTER" if dry_run else "ENTERING",
+                                ltp, ltp_source, pilot_plan, stop_price):
+            return {"status": "BLOCKED_PILOT_NO_EVIDENCE",
+                    "reason": "the observation ledger did not accept the decision "
+                              "(atlas types applied? migrations/"
+                              "20261110_observation_types_atlas.sql)",
+                    "blocked_by": "PILOT_NO_EVIDENCE"}
+        intent["pilot"] = LP.plan_summary(pilot_plan)
+        if dry_run:
+            try:
+                from atlas.execution import exits as _X
+                _lim = _X.price_for(symbol, float(ltp), "entry", direction)
+            except Exception as e:
+                _lim = None
+                log.warning(f"{symbol}: would-place limit not priced ({e})")
+            if _lim is not None:
+                LP.would_place(symbol, pilot_plan, _lim, ltp, ltp_source)
+            intent["entry_limit_price"] = _lim
 
     if dry_run:
         # EVERY GATE HAS RUN. The intent is built, which means sizing, the
@@ -1385,6 +1466,16 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
                                if avg_price else None)
     intent["risk_actual"] = abs(avg_price - _stop_used) * filled_qty
     intent["r_multiple_basis"] = abs(avg_price - _stop_used)
+
+    # ── THE LONG BOOK: NO STOP TO THE BROKER, EVER ─────────────────
+    # protect_or_flag is not called: it would place a day-0 stop order. The
+    # stop and target are published (row, dashboard, ledger), T2/T3 go in as
+    # resting BUY GTTs now that T1 has filled, and an open long with no stop is
+    # the intended state -- no symbol block, no UNPROTECTED register.
+    if pilot_plan is not None:
+        from atlas.execution import long_pilot as LP
+        return LP.after_fill(row_id, symbol, intent, pilot_plan, avg_price,
+                             filled_qty, _stop_used, ltp, _patch_trade, _alert)
 
     # THE PRIMARY AND ITS OUTCOME. protect_or_flag no longer exits on failure:
     # by ruling, a position that cannot be protected is KEPT and alerted on.
