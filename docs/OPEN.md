@@ -21,6 +21,7 @@ where it ran) · Related.
 - **Impact** every consumer shows an unmeasured 0: D-002, D-003.
 - **Decision** (2026-11-09, adopted from the recommendation) real value with age — compute against our own prior close (`daily_closes`); store NULL until then.
 - **Related** D-002, D-003, D-007
+- **Partly:** D-001 itself not yet implemented.
 
 ### D-002 · The ORB tape prints 0.00% for every break
 - **Status** decided 2026-11-09 · **Found** 2026-11-09
@@ -76,6 +77,7 @@ where it ran) · Related.
 - **Status** decided 2026-11-09: lift all 13 as one dated change; boundary date 2026-11-09 (row counts measured through that session). Not yet applied — held with the other code changes after the operator asked for only the pause fix on the night of 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED (parquet row counts, 2026-11-09): CANHLIFE 268, GROWW 253, JAINREC 279, LENSKART 255, LGEINDIA 271, OLAELEC 564, PINELABS 251, PIRAMALFIN 256, SCHNEIDER 967, TATACAP 272, TMCV 253, TMPV 265, URBANCO 289. Still true: EMMVEE, ICICIAMC, JSWDULUX, LTM, MEESHO, PWL, TENNIND. INFERRED: SCHNEIDER was short only because its BE sessions were not ingested before 2026-10-15.
 - **Also checked** price < ₹50: all 14 still true; HFCL, MOREPENLAB still BE. NOT checked: CEMPRO, CPPLUS (band), SPLPETRO (value), HEGAM (deliberate review).
+- **Fixed 2026-11-09** (530ed3e): EXCLUDED 40 -> 27, ALL_SYMBOLS 705 -> 718; index.html and waitlist.html re-stamped.
 
 ### Fail-open gates on the order path (sweep of 2026-11-09). Findings, not fixes.
 Each is now **counted** in `order_path_events` (273bded) without changing what it does.
@@ -87,31 +89,39 @@ Each is now **counted** in `order_path_events` (273bded) without changing what i
 ### D-015 · Gate 1 sentiment age is taken from Upstox's `timestamp`, which is the request time
 - **Evidence** VERIFIED 2026-11-09: a quote fetched at 21:07 IST carried `timestamp` 21:07:08 (`atlas/execution/live_sentiment.py:291-305`). `last_trade_time` is the field with the price's age.
 - **Impact** a frozen NIFTY-future price always looks seconds old; the sentiment verdict can be computed on it all session. The same defect CLAUDE.md records; still present. The whole-feed freeze detector in market_open (price differencing) is the only backstop and needs every price frozen.
+- **Fixed 2026-11-09** (16732cc): age is how long since we saw price, VWAP or volume change, on our clock; first read refused; one-shot callers use read_settled(). The only vendor-timestamp freshness check in the repo. Live behaviour first observable in the 2026-11-11 session (2026-11-10 is an NSE holiday).
 
 ### D-016 · An unrecognised or missing agent mode becomes NORMAL
 - **Evidence** VERIFIED: `atlas/reporting/directives.py` `normalise_mode`; `HALT_MODES = ("PAUSED",)`. "PAUSE", "HALT", or a NULL mode all allow trading. `market_open.paused()` likewise matches only the exact string.
 - **Status** fixed-verified 2026-11-09 (71f1b3d): only an exact NORMAL permits entries in `paused()`, the kill switch and `status()`; unknown is reported UNKNOWN and recorded REFUSED. Verified on the box against the real row: `paused()` True, `check()` blocks, `status().halted` True.
 
+
 ### D-017 · A signal with no direction is entered as LONG
 - **Evidence** VERIFIED: `atlas/execution/atlas_entry.py` `signal.get("direction", "LONG")`; `check_entry_range` treats anything but SHORT as long.
+- **Fixed 2026-11-09** (c5beb9b): REJECTED_NO_DIRECTION before any gate, recorded REFUSED.
 
 ### D-018 · With no `entry_ref`, the proximity check is skipped
 - **Evidence** VERIFIED: `check_entry_range` applies distance only `if entry_ref and entry_ref > 0`.
 
 ### D-019 · Gate 4b stock breaker proceeds when it cannot evaluate
 - **Evidence** VERIFIED: `atlas_entry.py` "FAIL OPEN, AND SAY SO". Deliberate.
+- **Under the new rule** (less exposure): unchanged and still open; the market breaker's equivalent (D-054) is fixed.
 
 ### D-020 · Unreadable GTT list → [] → orphan-trigger cleanup sees nothing
 - **Evidence** VERIFIED: `atlas/execution/gtt.py` `list_atlas_gtts` / `list_active_gtts`; passed to `reconcile_exits` at `market_open.py:911-918`. Comment there: "an orphaned trigger can RE-ENTER a symbol that is already closed".
+- **Fixed 2026-11-09** with D-021 (52da7d5): GTT reads return None on failure; an unreadable list alerts and flags every flat position whose triggers could only be checked from recorded legs; gtt_summary says UNKNOWN.
 
 ### D-021 · Unreadable open positions → [] → the protection sweep reports a clean book
 - **Evidence** VERIFIED: `market_open.open_positions_for_reconcile` returns [] on failure; its docstring argues this is safe for reconcile, but the same list feeds the per-cycle protection sweep (`market_open.py:937` on), which then finds 0 naked positions.
+- **Fixed 2026-11-09** with D-020 (52da7d5): positions read once per cycle, None on failure, alert OPEN POSITIONS UNREADABLE; reconcile skipped and the sweep reports unknown, not 0.
 
 ### D-022 · Reconcile records the row's pre-order price/qty as the fill
 - **Evidence** VERIFIED: `atlas/execution/reconcile.py:205-206` — `average_price or row.entry_price`, `filled_quantity or row.qty`; the second sizes protection for shares that may not exist.
+- **Fixed 2026-11-09** (c5beb9b): an unreadable fill stays PENDING (blocks the symbol), recorded REFUSED FILL_UNREADABLE, alerted every reconcile pass (~5 min) until resolved. The alerts stop when the engine stops at the close -- see D-058.
 
 ### D-023 · Sizing on an estimated margin when the broker's is unavailable
 - **Evidence** VERIFIED: `atlas_entry.py` margin block; logged as a warning before 273bded, now also recorded.
+- Still counted, not changed (decision pending under the new rule).
 
 ### D-024 · `order_path_events` table not created
 - **Status** open — needs you · **Found** 2026-11-09
@@ -123,28 +133,43 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-048 · Radar cards say "no disclosed trigger found" when NSE could not be asked
 - **Status** open · **Evidence** VERIFIED: `radar/documents.py` `fetch_filings` returns [] on any failure; `attribute()` sets `checked = bool(docs) or True` — always True. The `fetch_filings` docstring says the distinction is "kept in the returned ok flag on attribute()"; there is no such flag. A comment asserting the opposite of its code.
+- **Fixed 2026-11-09** (b05196a): three states end to end (found / none_found / not_checked), each with its own sentence; validate() refuses disagreement; home.html eventCard read payload fields no card has -- all 58 current cards printed "No disclosed trigger found", 54 of them citing a filing -- and now renders the card's own q01.why. No caller was written against the imaginary `ok` flag. VERIFIED: the 4 current none-found cards (ITI, TARC, J&KBANK, MRPL) were genuinely checked -- the radar log shows a successful NSE answer with 0 filings for each.
 
 ### D-049 · `reconcile.stale_pending` returns [] on a failed read
 - **Status** open · **Evidence** VERIFIED: `atlas/execution/reconcile.py:86, 90`; `settle()` then reports 0 checked. Rows stay PENDING (which blocks entries, the safe direction) but nothing says reconcile did not run.
+- **Fixed 2026-11-09** (98bd1c9): pending_readable False, checked None, RECONCILE UNREADABLE alert at both call sites.
 
 ### D-050 · daily_report shows "no positions" when the broker is unreadable
 - **Status** open · **Evidence** VERIFIED: `broker.get_positions` [] on failure (`broker.py:181, 188`), read at `atlas/reporting/daily_report.py:438`.
+- **Fixed 2026-11-09** (98bd1c9): "Positions: UNREADABLE"; also the report's mode read turned a failure into NORMAL (hiding PAUSED) and now reads UNREADABLE.
 
 ### D-051 · An unreadable signal batch is alerted as "EOD pipeline down?"
 - **Status** open · **Evidence** VERIFIED: `market_open.get_latest_batch_date` returns '' on HTTP != 200 (`:294`); `load_zone_map` alerts "no published signals at all". Fails closed; the alert names the wrong cause.
+- **Fixed 2026-11-09** (98bd1c9): raises on HTTP != 200 -> SIGNALS UNREADABLE.
 
 ### D-052 · No bars → "stop held" for trailing
 - **Status** open (safe direction) · **Evidence** VERIFIED: `preclose_gtt._bars_for` [] on failure; `trail()` holds the stop and reports ok.
+- **Fixed 2026-11-09** (98bd1c9): evaluated False, own TRAIL NOT EVALUATED alert (not the failed-handover path, whose text says the stop is missing).
 
 ### D-053 · publish_protection, rbe, excursions, 03b, 01b, fundamentals, radar.detect
 - **Status** open · **Evidence** sites VERIFIED by the sweep; consequences INFERRED, callers not read: `engine/publish_protection.py:64` open_positions [] (page may show none open); `engine/rbe_engine.py:227` fired-today set() after a restart (a signal may fire twice); `engine/excursions.py:153, 187` []; `engine/03b_score.py:83, 93` sector bias / sector map {} (scoring inputs — with D-008); `engine/01b_download_bhavcopy.py:392, 407` delivery {}; `engine/fundamentals.py:936, 1046` cache {}; `radar/detect.py:231` one symbol's scan error reads as "no extreme".
+- **Callers read 2026-11-09 (cc78a53). Two inferences held, five were wrong:**
+  - publish_protection: CORRECTED -- no page renders position_protection (atlas.html fetches it and shows nothing); the job logged "no open positions" and exited 0. Now UNREADABLE, exit 1.
+  - rbe fired-today: CONFIRMED (a restart could re-fire every breakout). Now None; nothing fires until the state is readable.
+  - excursions: CORRECTED -- [] only for a missing schema column, with a warning; otherwise raises.
+  - 03b sector maps: REFINED -- every symbol "avoid": withholds the +3 tailwind and publishes sector_bias=avoid. With D-008.
+  - 01b delivery: CORRECTED -- NaN (absent) and logged.
+  - fundamentals: CORRECTED -- fails closed (blocks every symbol), logged.
+  - radar scan_symbol: CONFIRMED and unlogged; now logged.
 
 ### Found by the three CHARTER rules, not by the decision list
 ### D-054 · The day's range breakers fail open when they error
 - **Status** open · **Evidence** VERIFIED: `atlas/signal/market_open.py` cycle — "A FAILURE HERE MUST NOT SKIP THE CYCLE ... Fail open: the breakers are a refinement". Rule 3 says a gate with missing input fails closed.
+- **Fixed 2026-11-09** (1febcb7): a raise or CANNOT_EVALUATE refuses every entry that cycle, recorded and alerted. 0 CANNOT_EVALUATE and 0 raises in the last 1,080 cycles.
 
 ### D-055 · The kill switch's funds check is skipped when `capital_required` is absent
 - **Status** open · **Evidence** VERIFIED: `kill_switch.check` runs `can_afford` only `if signal` and `capital_required > 0`; `broker.place_order` calls `kill_switch_check()` with no signal. Funds are checked earlier at Gate 6, so the broker-layer copy checks only the mode. Rule 3.
+- **Fixed 2026-11-09** (1febcb7): with a signal, capital_required must be positive or the entry is blocked. The no-signal broker-layer call stays a mode check by design.
 
 ### D-056 · Rule 3 needs an exit clause
 - **Status** open — wording decision · An exit that cannot price itself (no tick map, no LTP) places nothing, which leaves the position open; it alerts (`exits.emergency_exit`). "Fails closed" for an entry means no order; for an exit it cannot mean that silently. Proposed: "for an exit, failing closed means refusing the unsafe order AND alerting until a human acts."
@@ -152,6 +177,7 @@ Rule: a failed read must never return the same value as a successful empty read 
 ---
 
 ## 2. OPEN DEFECTS
+- **Fixed 2026-11-09** (1febcb7): CHARTER rule 3 replaced: fail in the direction of less exposure, not less action.
 
 ### D-025 · `radar.store._get` pages with offset and no ORDER BY
 - **Status** open · **Found** 2026-11-08 · **Evidence** VERIFIED: a multi-day read lost whole dates; with `order=id` totals matched SQL exactly. Single-page reads (volume_alerts) unaffected.
@@ -171,6 +197,7 @@ Rule: a failed read must never return the same value as a successful empty read 
 ### D-030 · The exit test suites are red on main
 - **Status** open · **Found** 2026-11-09 · **Evidence** VERIFIED: `tests/test_exits.py` ("emergency exit places and reports ok" False, then IndexError at :345) and `tests/test_exit_path_rebuild.py` (IndexError); failures identical before and after ab67fd8/273bded.
 - **Diagnosis** 2026-11-09: STALE TEST, not a code defect. Both suites read the production tick map (`atlas.config.TICK_MAP_FILE`, `/var/lib/atlas/tick_map.json`); without it `price_for` raises NO_TICK_SIZE_CANNOT_PRICE and the code correctly refuses to place. VERIFIED: both pass on the box (exit 0) and pass locally with `ATLAS_TICK_MAP_FILE` pointed at a copy of the box map. Not hermetic; would also fail on the box if that file were missing. Not fixed, by instruction.
+- **Fixed 2026-11-09** (e3562fc): both suites run on tests/fixtures/tick_map.json (temp copy; RELIANCE removed -> both fail; bogus env path -> both pass). The real map has its own check, tools/check_tick_map.py, whose line is in the volume_alerts daily message. VERIFIED on the box: real map SANE, 718/718 covered; suites pass there without touching it.
 
 ### D-031 · docs/open_questions.md says the market-hours timer is disabled
 - **Status** open · **Evidence** VERIFIED 2026-11-09: `atlas-market-hours.timer` active; the engine runs every session in WATCH-ONLY because of the operator /pause of 2026-10-28 15:22 IST.
@@ -178,6 +205,25 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-032 · No ISIN in raw bhavcopy before 2026-05-08
 - **Status** won't fix (data we hold) · **Evidence** VERIFIED: 858 of 977 files are the legacy layout; renames before May cannot be checked from disk.
+
+
+### D-057 · radar_scanner_daily.filing_recent cannot store "unknown"
+- **Status** open · **Found** 2026-11-09 with D-048 · The column is `boolean NOT NULL DEFAULT false`; had_recent_filing now returns None when NSE could not be asked, which is stored as False (hides the pill, claims nothing in words), counted and logged by run_detection. Needs a migration to allow NULL.
+
+### D-058 · Every "alert until a human acts" stops at the close (found by the new rule 3)
+- **Status** open · **Evidence** VERIFIED: the repeating alerts -- market_open.alert's 900 s cooldown, the protection register's 900 s repeat, D-022's per-reconcile alert -- all live in the market-hours engine, which exits 09:50 UTC. preclose_gtt's PRECLOSE HANDOVER FAILED is sent once. An unprotected overnight CNC position therefore stops being alerted at the close. The old rule ("fails closed") never asked about an exit's alert lifetime; "alert without stopping until a human acts" does.
+
+### D-059 · broker.place_order's docstring says EXIT is always permitted; its kill switch blocks any intent
+- **Status** open (latent) · **Evidence** VERIFIED: the kill-switch call is at function level, after the `intent != "EXIT"` block, so a PAUSED or unreadable state would block an exit. No current exit calls broker.place_order (exits use kite.place_order directly; place_sl_order is only reached from dead trade_management.py). Found by the new rule. Not changed: it is the order-placing function.
+
+### D-060 · Test suites can delete production state when run on the box
+- **Status** open · **Evidence** VERIFIED: `tick_map.reset_for_tests()` unlinks whatever TICK_MAP_FILE points at; `symbol_block.reset_for_tests()` likewise for its file. A suite run on the box without redirecting the env would remove the live file. VERIFIED 2026-11-09: the exit-suite runs on the box changed nothing under /var/lib/atlas (all mtimes predate the runs). The exit suites now use a temp fixture; the others still rely on env redirection.
+
+### D-061 · test_page_claims was red on main from 71f1b3d to b05196a
+- **Status** fixed-verified · My miss: the pause fix changed normalise_mode and I did not run that suite. Repointed to the new ruling in b05196a.
+
+### D-062 · test_data_rights is red on main and was before 2026-11-09
+- **Status** open · **Evidence** VERIFIED: fails at 2f6c91b; 21 datasets in use against 16 register rows (NSE announcements/XBRL/holiday master/sec_list, Upstox candles/instruments/option chain, Kite account data/instruments/quotes/ticker). Also: test_calendar_source fails on a dev machine whose holiday cache is older than 7 days (environment, not code).
 
 ---
 
