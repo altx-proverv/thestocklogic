@@ -72,9 +72,13 @@ def main() -> int:
     #                 surfaced a non-excluded symbol on a 5% band, and the real
     #                 fix is to derive this from the series in the data rather
     #                 than from a hand-written list. Separate pass.
+    #   2026-11-09            map 745  EXCLUDED 27  ALL_SYMBOLS 718
+    #     -13 "< 250 sessions" lifted (OPEN D-013), boundary 2026-11-09.
     check("SYMBOL_SECTOR_MAP size", len(SYMBOL_SECTOR_MAP), 745)
-    check("EXCLUDED size", len(EXCLUDED), 40)
-    check("ALL_SYMBOLS size", len(ALL_SYMBOLS), 705)
+    # 2026-11-09 (OPEN D-013): 13 "< 250 sessions" exclusions lifted -- the
+    # reason had expired for each. Was 40 / 705.
+    check("EXCLUDED size", len(EXCLUDED), 27)
+    check("ALL_SYMBOLS size", len(ALL_SYMBOLS), 718)
     check("the BE-series symbol is excluded",
           "MOREPENLAB" in EXCLUDED, True,
           "5% band — a stock you cannot exit during a move")

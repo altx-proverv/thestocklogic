@@ -1536,6 +1536,16 @@ SECTORS = sorted(set(SYMBOL_SECTOR_MAP.values()))
 # NOT re-run: that would recompute the whole block against today's bands,
 # which is a different decision from these three.
 #
+# EDITED BY HAND 2026-11-09, thirteen symbols LIFTED, boundary date 2026-11-09
+# (operator decision, OPEN D-013). Each was excluded for "< 250 sessions" and
+# each had 250 or more parquet rows through the 2026-11-09 session:
+#   CANHLIFE 268, GROWW 253, JAINREC 279, LENSKART 255, LGEINDIA 271,
+#   OLAELEC 564, PINELABS 251, PIRAMALFIN 256, SCHNEIDER 967, TATACAP 272,
+#   TMCV 253, TMPV 265, URBANCO 289.
+# The reason had expired; nothing else about them was re-assessed. The other
+# seven "< 250 sessions" members still have fewer than 250 rows and stay.
+# tools/universe_filter.py was again NOT re-run, for the reason above.
+#
 # These symbols are in SYMBOL_SECTOR_MAP and fail a MECHANICAL filter
 # -- liquidity, price, band, series or history. No quality judgement is
 # involved: a stock too thin to exit a Rs1,00,000 position out of is not
@@ -1546,27 +1556,14 @@ SECTORS = sorted(set(SYMBOL_SECTOR_MAP.values()))
 # rather than editing this block by hand; it also checks atlas_trades and
 # refuses to exclude a symbol that is currently held.
 EXCLUDED = {
-    # < 250 sessions (20)
-    "CANHLIFE",
+    # < 250 sessions (7) -- 13 lifted 2026-11-09, see the note above
     "EMMVEE",
-    "GROWW",
     "ICICIAMC",
-    "JAINREC",
     "JSWDULUX",
-    "LENSKART",
-    "LGEINDIA",
     "LTM",
     "MEESHO",
-    "OLAELEC",
-    "PINELABS",
-    "PIRAMALFIN",
     "PWL",
-    "SCHNEIDER",
-    "TATACAP",
     "TENNIND",
-    "TMCV",
-    "TMPV",
-    "URBANCO",
     # price < Rs50 (14)
     "CENTRALBK",
     "IDEA",
