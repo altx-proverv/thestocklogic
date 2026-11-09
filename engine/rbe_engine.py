@@ -45,9 +45,16 @@ ZERODHA_API_KEY = os.environ.get("ZERODHA_API_KEY", "")
 
 RANGE_MAP_FILE  = Path("data/processed/rbe/range_map.json")
 
-# Breadth snapshot cadence, and the one symbol excluded from the denominator.
+# Breadth snapshot cadence, and any symbol excluded from the denominator.
 BREADTH_INTERVAL_SECONDS = 300
-BREADTH_EXCLUDE = {"CHOLAFIN"}
+# EMPTY SINCE 2026-11-09. It held CHOLAFIN, citing its zero live_prices row --
+# but this process prices from Kite ticks (ZERODHA_TOKEN_MAP, built only from
+# NSE/EQ instruments), never from live_prices, and its own log shows real
+# CHOLAFIN prices throughout (e.g. SIGNAL CHOLAFIN @ 1533.7 on 21 Oct against a
+# 1530.90 bhavcopy close the next day). The zero row was Upstox subscribed to a
+# debenture (fixed in 57b2f6e). An entry here needs a reason that is true of
+# THIS process's price source.
+BREADTH_EXCLUDE = set()
 
 # ── HEAVY VOLUME, LITTLE MOVEMENT ─────────────────────────────────
 #
@@ -293,9 +300,9 @@ class RBEngine:
         be 375 points for a line nobody can read at that width; fifteen would
         miss the shape of a morning that turns at 10:30.
 
-        CHOLAFIN IS EXCLUDED. Its live_prices row has read ltp=0 since
-        22 September, so COUNT(*) reports full coverage while it has no usable
-        price. Counted here it would be a decline in every single snapshot.
+        BREADTH_EXCLUDE is empty. It once held CHOLAFIN on the strength of its
+        Upstox live_prices row, which this process does not read -- see the
+        note at the constant.
         """
         now = time.time()
         if now - self.breadth_last_write < BREADTH_INTERVAL_SECONDS:

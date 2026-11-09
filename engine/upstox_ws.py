@@ -449,6 +449,13 @@ def run_session_update():
     quotes = get_market_quotes(inst_keys)
     log.info(f"Got {len(quotes)} quotes")
 
+    # COVERAGE, BY IDENTITY, BEFORE THE EMPTY-FETCH RETURN BELOW. That return
+    # used to be the whole response to an expired token: a log line nobody read.
+    # The count above fell 499 -> 498 on 2026-09-23 and stayed there seven weeks.
+    # engine/quote_coverage.py names each missing key and alarms; it never raises.
+    from engine import quote_coverage
+    quote_coverage.check(INSTRUMENT_KEYS, quotes, session)
+
     if not quotes:
         log.error("No quotes received. Check token.")
         return

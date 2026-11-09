@@ -279,7 +279,7 @@ def compose(on: date, res: dict, hits: list, surf: dict, *, earlier: int = 0) ->
              f"signals.rvol from 02b, whose mean includes the session. range = "
              f"(H−L) ÷ prior-{VOL_WINDOW} mean (H−L), same basis.</i>")
     notes = _notes(surf)
-    tail = "\n".join([basis] + notes)
+    tail = "\n".join([basis] + notes + [html.escape(_coverage(on))])
 
     entries = [_fmt_entry(h, surf) for h in hits]
     chunks, cur = [], []
@@ -307,7 +307,17 @@ def compose_zero(on: date, res: dict) -> str:
     return (f"📊 <b>VOLUME ≥{VOL_MULT:g}× — {on.isoformat()} ({on.strftime('%a')})</b>: "
             f"no symbol crossed. Measured {res['measured']} of {res['universe']} "
             f"({res['no_row']} no row for the session, {res['short']} under "
-            f"{VOL_WINDOW} prior sessions).")
+            f"{VOL_WINDOW} prior sessions).\n{html.escape(_coverage(on))}")
+
+
+def _coverage(on: date) -> str:
+    """The Upstox feed guard's record for the session, so a dead guard shows
+    up in this message rather than as an absence nobody looks for."""
+    try:
+        from engine.quote_coverage import daily_line
+        return daily_line(on.isoformat())
+    except Exception as e:
+        return f"Upstox coverage {on}: could not be read ({type(e).__name__})"
 
 
 # ── STATE ──────────────────────────────────────────────────────────
