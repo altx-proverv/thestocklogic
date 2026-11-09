@@ -142,6 +142,15 @@ def _orders_by_tag() -> dict:
     return out
 
 
+def _positive(v, cast):
+    """A broker number that is present, parseable and > 0, or None."""
+    try:
+        x = cast(float(v))
+    except (TypeError, ValueError):
+        return None
+    return x if x > 0 else None
+
+
 def _patch(row_id, patch: dict) -> bool:
     try:
         r = requests.patch(f"{SUPABASE_URL}/rest/v1/atlas_trades?id=eq.{row_id}",
@@ -165,6 +174,7 @@ def settle(now=None) -> dict:
     log.info(f"reconcile: {len(rows)} stale PENDING row(s)")
 
     tagged = _orders_by_tag()
+    fill_unreadable = []
     if tagged is None:
         # Unreadable broker. Settle nothing; every row stays PENDING and keeps
         # blocking. This is the six-positions bug, refused.
@@ -202,25 +212,45 @@ def settle(now=None) -> dict:
         status = str(order.get("status") or "").upper()
 
         if status == "COMPLETE":
-            fill = order.get("average_price") or row.get("entry_price")
-            if not order.get("average_price") or not order.get("filled_quantity"):
+            # THE FILL IS READ FROM THE BROKER OR NOT RECORDED AT ALL. This was
+            # `average_price or row.entry_price` and `filled_quantity or
+            # row.qty`: a COMPLETE order whose fill could not be read was
+            # promoted to OPEN at the PRE-ORDER price and the ORDERED quantity
+            # -- a record of a trade nobody can vouch for, in the ledger that
+            # gets published. Now it stays PENDING (which keeps blocking the
+            # symbol), is recorded as refused, and alerts on every pass until a
+            # human resolves it: the position may exist and is not protected.
+            avg = _positive(order.get("average_price"), float)
+            fq = _positive(order.get("filled_quantity"), int)
+            if avg is None or fq is None:
+                unsettled += 1
+                why = (f"order {order.get('order_id')} is COMPLETE but its fill "
+                       f"is unreadable (average_price="
+                       f"{order.get('average_price')!r}, filled_quantity="
+                       f"{order.get('filled_quantity')!r})")
+                fill_unreadable.append((rid, row.get("symbol"), why,
+                                        row.get("stop_price")))
                 try:
                     from atlas.execution.order_events import record as _rec
-                    _rec("SUBSTITUTED", "reconcile", row.get("symbol"),
-                         "FILL_FROM_ROW",
-                         f"COMPLETE order {order.get('order_id')} without "
-                         f"average_price/filled_quantity; the row's pre-order "
-                         f"values were written as the fill",
-                         {"average_price": order.get("average_price"),
-                          "filled_quantity": order.get("filled_quantity"),
-                          "row_entry_price": row.get("entry_price"),
-                          "row_qty": row.get("qty")}, trade_id=rid)
+                    _rec("REFUSED", "reconcile", row.get("symbol"),
+                         "FILL_UNREADABLE", why + " — NOT promoted, left PENDING",
+                         {"order": {k: order.get(k) for k in
+                                    ("order_id", "status", "average_price",
+                                     "filled_quantity", "quantity")}},
+                         trade_id=rid)
                 except Exception:
                     pass
+                _patch(rid, {"notes": f"reconcile: {why}. NOT promoted; the "
+                                      f"position MAY EXIST UNPROTECTED. Read the "
+                                      f"fill in Kite and record it by hand."})
+                log.error(f"  trade {rid} {row.get('symbol')}: {why} — left "
+                          f"PENDING, alerting")
+                continue
+            fill = avg
             if _patch(rid, {"status": "OPEN",
                             "order_id": str(order.get("order_id") or ""),
                             "entry_price": fill,
-                            "qty": order.get("filled_quantity") or row.get("qty"),
+                            "qty": fq,
                             "notes": f"reconcile: order {order.get('order_id')} "
                                      f"filled at Rs{fill} — promoted to OPEN. "
                                      f"MANUAL RISK REQUIRED - place SL at Rs"
@@ -237,7 +267,7 @@ def settle(now=None) -> dict:
                     from atlas.execution import protection as PR
                     PR.register({"id": rid, "symbol": row.get("symbol"),
                                  "direction": row.get("direction"),
-                                 "qty": order.get("filled_quantity") or row.get("qty"),
+                                 "qty": fq,
                                  "entry_price": fill,
                                  "stop_price": row.get("stop_price")},
                                 "adopted at reconcile with no protection placed",
@@ -268,8 +298,25 @@ def settle(now=None) -> dict:
                      f"{unsettled} row(s) unresolved after a reconcile pass. "
                      f"Each still blocks its own symbol.")
 
+    if fill_unreadable:
+        # EVERY PASS, NOT ONCE. Reconcile runs every RECONCILE_EVERY_CYCLES
+        # (about five minutes) while the engine is up; this repeats until the
+        # row is resolved by a human. It stops when the engine stops at the
+        # close -- see OPEN.md.
+        try:
+            from atlas.reporting.telegram import send
+            send("🚨 <b>ATLAS — FILL UNREADABLE, POSITION MAY BE OPEN</b>\n"
+                 + "\n".join(f"• trade {r} {s_}: {w}. Wanted stop Rs{st}."
+                             for r, s_, w, st in fill_unreadable)
+                 + "\nNot recorded and not protected. Read the fill in Kite, "
+                   "place the stop, and record the trade by hand. This repeats "
+                   "every reconcile pass until resolved.")
+        except Exception as e:
+            log.error(f"could not send the fill-unreadable alert: {e}")
+
     summary = {"checked": len(rows), "opened": opened, "cancelled": cancelled,
-               "unsettled": unsettled, "broker_readable": True}
+               "unsettled": unsettled, "broker_readable": True,
+               "fill_unreadable": len(fill_unreadable)}
     log.info(f"reconcile: {summary}")
 
     if opened:

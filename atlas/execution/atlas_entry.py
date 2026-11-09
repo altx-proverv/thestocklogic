@@ -724,12 +724,18 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     below -- rather than silently evaluating and reporting nothing happened.
     """
     symbol     = signal.get("symbol", "")
-    direction  = signal.get("direction", "LONG").upper()
-    if not signal.get("direction"):
-        _order_event("SUBSTITUTED", "atlas_entry.enter_trade", symbol,
-                     "DIRECTION_DEFAULTED",
-                     "signal carried no direction; LONG was assumed",
-                     {"signal_keys": sorted(signal)[:40]})
+    # NO DIRECTION, NO ENTRY (OPEN D-017). This defaulted to LONG, and
+    # check_entry_range treats anything but SHORT as long, so a signal that
+    # lost its direction on the way here was bought. The side of a trade is
+    # not a default.
+    direction  = str(signal.get("direction") or "").strip().upper()
+    if direction not in ("LONG", "SHORT"):
+        why = (f"signal direction is {signal.get('direction')!r} — not LONG or "
+               f"SHORT; refusing rather than assuming a side")
+        log.error(f"{symbol}: ENTRY REFUSED — {why}")
+        _order_event("REFUSED", "atlas_entry.enter_trade", symbol,
+                     "NO_DIRECTION", why, {"signal_keys": sorted(signal)[:40]})
+        return {"status": "REJECTED_NO_DIRECTION", "reason": why}
     entry_ref  = float(signal.get("entry_ref", signal.get("entry", 0)) or 0)
     entry_low  = float(signal.get("entry_low", 0) or 0)
     entry_high = float(signal.get("entry_high", 0) or 0)

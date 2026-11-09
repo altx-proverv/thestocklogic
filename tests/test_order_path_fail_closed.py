@@ -212,8 +212,21 @@ check("  (one MODE_UNRECOGNISED row, not two)",
 
 print("\nA SIGNAL WITH NO DIRECTION, AND AN ESTIMATED MARGIN, ARE RECORDED")
 src = Path(ROOT / "atlas/execution/atlas_entry.py").read_text()
-check("DIRECTION_DEFAULTED recorded where LONG is assumed",
-      'if not signal.get("direction"):' in src and "DIRECTION_DEFAULTED" in src, True)
+# RULING CHANGED 2026-11-09 (OPEN D-017): no direction is refused, not LONG.
+# ONLY INVALID DIRECTIONS: each is refused before any gate, so no gate --
+# and nothing that could reach a broker -- runs. place_order raises if reached.
+_saved_po = AE.place_order
+AE.place_order = must_not_run
+try:
+    for _d in (None, "", "BUY", "x", "LONGSHORT"):
+        _r = AE.enter_trade({"symbol": "TESTSYM", "direction": _d, "entry_ref": 100.0,
+                             "entry_low": 99.5, "entry_high": 100.5, "sl": 97.0})
+        check(f"direction {_d!r} -> refused", _r.get("status"), "REJECTED_NO_DIRECTION")
+finally:
+    AE.place_order = _saved_po
+check("  recorded as REFUSED NO_DIRECTION",
+      any(e["code"] == "NO_DIRECTION" and e["event"] == "REFUSED" for e in events()), True)
+check("  and nothing defaults to LONG", "DIRECTION_DEFAULTED" in src, False)
 check("MARGIN_ESTIMATED recorded on the estimate path",
       src.index("MARGIN_ESTIMATED") < src.index("using ESTIMATED margin"), True)
 
