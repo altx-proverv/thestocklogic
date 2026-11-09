@@ -56,7 +56,7 @@ const FNS = ['esc', 'istNow', 'istDate', 'hhmmss', 'dayName', 'marketOpen',
              'priceUnchangedS', 'priceFrozen', 'renderIdx'];
 const CODE = [extractVar('LIVE_MAX_AGE_S'), extractVar('NO_PRICE'),
               extractVar('VALUE_MAX_UNCHANGED_MIN'), extractVar('VALUE_CHECK_LAST_MIN'),
-              extractVar('IDX_NAME')]
+              extractVar('IDX_NAME'), extractVar('MIN_RANKED_MEMBERS')]
   .concat(FNS.map(extract)).join('\n');
 
 /* A page at a given instant: the real functions, a fake clock, a stub DOM. */
