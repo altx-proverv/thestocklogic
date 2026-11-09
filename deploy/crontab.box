@@ -391,11 +391,13 @@ MAILTO=""
 # 500 MB free (engine/disk_alarm.py has the evidence for the number); every run
 # writes a heartbeat line to reports/disk_alarm.log, alarm or not.
 23 * * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.disk_alarm >> /home/ubuntu/thestocklogic/reports/disk_alarm.log 2>&1
-# F&O BHAVCOPY (engine/fo_bhavcopy.py): NOT INSTALLED (OPEN D-078). A proof
-# line fired from cron on 2026-11-09 21:23 UTC with the right environment, but
-# NSE's archive does not answer this box's plain request (60s read timeout,
-# twice) while it answers instantly elsewhere. Installing it would alert every
-# evening. Waiting on a decision about how the box may fetch it.
+# F&O BHAVCOPY (engine/fo_bhavcopy.py, OPEN D-078), through jugaad-data's own
+# F&O route with the 2024+ filename (operator, 2026-11-10). NSE stamped 9 Nov's
+# file 18:09 IST. 13:15 UTC = 18:45 IST; 14:00 UTC = 19:30 IST is a retry (a
+# no-op if held), ahead of the 19:50 message that reports it held or STALE.
+# Proven: a temp line fired 2026-11-09 21:42 UTC and fetched 6 Nov.
+15 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fo_bhavcopy >> /home/ubuntu/thestocklogic/reports/fo_bhavcopy.log 2>&1
+0 14 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.fo_bhavcopy >> /home/ubuntu/thestocklogic/reports/fo_bhavcopy.log 2>&1
 # VOLUME >= 10x, ONE TELEGRAM AFTER THE CLOSE (engine/volume_alerts.py). Its own
 # entry, NOT joined to the && chain: it must speak when the chain has failed.
 # 14:20 UTC = 19:50 IST, after radar (done by ~13:52) and the chain (~13:18).
