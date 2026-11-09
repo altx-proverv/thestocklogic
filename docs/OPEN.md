@@ -280,9 +280,11 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-072 · Ledger types for ATLAS: migration written, NOT applied
 - **Status** open -- needs you · migrations/20261110_observation_types_atlas.sql (adds atlas_entry, atlas_decision; atlas_decision never scored). Applying it was refused by the permission check on 2026-11-10. **Until it is applied the pilot places nothing**: the decision must be in the ledger before an order, so every candidate that passes all gates ends BLOCKED_PILOT_NO_EVIDENCE, and the ledger's own refusal alert goes to Telegram (held 60 min).
+- **Applied 2026-11-10** (operator-approved). VERIFIED: the type CHECK lists atlas_entry and atlas_decision; the never-score function lists radar_event and atlas_decision.
 
 ### D-073 · At Rs2,00,000, T2/T3 round to zero shares for higher-priced names
 - **Status** open -- decision needed · VERIFIED (box, 2026-11-10, 9 Nov closes): TATAELXSI (3% band, Rs6,000 ceiling) T1 rounds up to 1 share at Rs3,890, T2 and T3 (Rs1,800 each) buy 0 -> no ladder; same for JKCEMENT and GMBREW. A zero-quantity tranche is skipped and recorded REFUSED T2/T3_ZERO_QTY. Rule today: only T1 rounds up.
+- **Decided 2026-11-10 (operator): refuse the symbol** -- no round-up, no skipped tranche; the ladder is the strategy (290ffcd). VERIFIED on the box, 9 Nov closes at Rs2,00,000: 565 sized, 87 refused for a zero-share tranche (TATAELXSI, JKCEMENT, GMBREW among them), 66 refused for other reasons. Still allowed: a one-share tranche (PRESTIGE T2 = 1 share).
 
 ### D-074 · Pilot behaviour to know
 - The 5-entry cap counts atlas_trades rows with sizing_basis long_pilot_2026_11 (any status but CANCELLED) -- the pilot's lifetime, not per day. In watch-only, today's WOULD_PLACE symbols count too.
@@ -290,6 +292,19 @@ Rule: a failed read must never return the same value as a successful empty read 
 - "Fits inside the ceiling" for the T1 round-up is read against the position bound (the tighter of ceiling and liquidity cap).
 - A resting BUY GTT is not cancelled by Zerodha when the position is sold; tranches.cleanup() cancels it within one reconcile cycle (60s in session) once positions AND holdings show no shares. A trigger that fires inside that window still buys. Outside market hours nothing runs, but a GTT cannot fire then either.
 - T2/T3 GTT placement failure: recorded and alerted; not retried automatically.
+
+
+### D-075 · Day-2 sweep: every reader of the broker's positions list (2026-11-10)
+- **The bug class:** a CNC long leaves positions()['net'] for holdings() after settlement; a reader of positions alone sees it as flat from day 2.
+- **Direct readers of the broker books, VERIFIED by reading each:**
+  - exits.reconcile_exits -- positions only. **HAS THE BLIND SPOT.** Fed only stop-book trades since 678897b; today that is MIS shorts (intraday, where positions is right). Any future CNC stop book would be hit.
+  - trade_management.modify_sl_to_breakeven -- positions only. **HAS THE BLIND SPOT**, but nothing imports trade_management (dead code).
+  - broker.get_positions() -- positions only, and [] on a failed read. **HAS THE BLIND SPOT**; no caller.
+  - trade_outcome_checker.get_zerodha_positions -- both books, quantity + t1_quantity (fixed after BPCL, 28 Aug). Not affected.
+  - tranches.read_books / position_from, session_report.long_book_lines -- both books. Not affected.
+- **Readers of atlas_trades, not the broker** (no blind spot of this kind): daily_report.get_positions, publish_protection.open_positions, tools/universe_filter.open_positions, mis_squareoff, Gate 3b, /positions.
+- **The same class one step over -- the ROW goes stale on day 2:** atlas_trades.qty and entry_price are T1's and are never updated when T2/T3 fill. So: (a) trade_outcome_checker.close_trade computes realised P&L from row qty x (exit - row entry) -- an averaged position's P&L would count T1 only, which pollutes the evidence; (b) the session report's OPEN section and daily_report P&L use the row (the 15:50 LONG BOOK section uses the broker and is right). Not fixed -- needs a decision on where blended qty/cost is recorded.
+- **Also found:** /positions answers "No open positions" on a failed read, and prints the legacy sl / target_1 columns (0 for pilot rows). publish_protection would publish a pilot position's stop as NONE (unprotected); position_protection has no live consumer today.
 
 ---
 
@@ -319,3 +334,5 @@ Rule: a failed read must never return the same value as a successful empty read 
 | D-045 | Entry count returned 0 on a failed read (was :466) | ab67fd8 | fixed-unverified; no caller today |
 | D-047 | `/approve` could lift the pause on a failed read (`directives.get_agent_state` answered NORMAL; `/approve` wrote it back; `/pause` reply named `/approve` as a resume) | 71f1b3d | fixed-verified: tests + 4 mutants; real row reads paused on the box |
 | D-046 | Was any order priced on a substituted `entry_ref`? | — | answered 2026-11-09: no evidence of one. Engine path (2026-09-12 on): fallback unreachable (every candidate carried an Upstox ltp; code at ad1ddc4, 0146641, HEAD). Pre-engine (2026-08-19..09-04): 0 of 14 ENTERED decisions at entry_ref. Engine logs before 2026-10-19 rotated out. |
+- **New rule 2026-11-10 (operator):** at +16% on blended cost the engine cancels the remaining T2/T3 buy GTTs that cycle (tranches.flag_cancel). Blended cost has one definition, tranches.position_from(), shared with the 15:50 report. Between 15:20 and the next morning's first cycle the engine is not running; a buy GTT below market can only fire on a fall from +16%.
+
