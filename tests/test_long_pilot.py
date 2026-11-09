@@ -331,6 +331,37 @@ src = (ROOT / "atlas" / "signal" / "market_open.py").read_text()
 check("market_open keeps the long book out of reconcile_exits",
       "_open = [t for t in _open if _bst(t)]" in src and "rec = X.reconcile_exits(_open," in src, True)
 
+print("\n+16% ON BLENDED COST CANCELS THE REMAINING TRANCHES")
+events.clear()
+both = [{"id": 11}, {"id": 12}]
+# T1 24 @ 100 settled in holdings + T2 18 @ 95 bought today (positions):
+# blended = (2400 + 1710) / 42 = 97.857. At LTP 113.60 that is +16.09% --
+# on T1's own price it would be +13.6% and NOT flagged.
+books = dict(positions=[{"tradingsymbol": "TESTSYM", "product": "CNC", "quantity": 18, "average_price": 95.0}],
+             holdings=[{"tradingsymbol": "TESTSYM", "quantity": 24, "t1_quantity": 0, "average_price": 100.0}])
+k = Kite(**books)
+o = TR.flag_cancel([row], k, both, ltp_of=lambda syms: {"TESTSYM": 113.60})
+check("+16.09% on BLENDED cost (13.6% on T1 alone) -> both cancelled", (o["cancelled"], sorted(k.deleted)), (2, ["11", "12"]))
+check("  flagged and recorded with its own code",
+      [e["code"] for e in events if e["event"] == "GTT_CANCELLED"], ["T2_PROFIT_FLAG", "T3_PROFIT_FLAG"])
+k = Kite(**books)
+check("+15% -> nothing cancelled", TR.flag_cancel([row], k, both, ltp_of=lambda s: {"TESTSYM": 112.5})["cancelled"], 0)
+k = Kite(**books)
+check("only the still-active tranche is cancelled", (TR.flag_cancel([row], k, [{"id": 12}],
+      ltp_of=lambda s: {"TESTSYM": 120.0})["cancelled"], k.deleted), (1, ["12"]))
+k = Kite(holdings_none=True)
+o = TR.flag_cancel([row], k, both, ltp_of=lambda s: {"TESTSYM": 200.0})
+check("books unreadable -> nothing cancelled, said so", (o["cancelled"], len(o["alerts"])), (0, 1))
+k = Kite(**books)
+o = TR.flag_cancel([row], k, both, ltp_of=lambda s: (_ for _ in ()).throw(RuntimeError("ltp down")))
+check("LTP unreadable -> nothing cancelled, said so", (o["cancelled"], len(o["alerts"])), (0, 1))
+k = Kite(**books)
+check("GTT list unreadable -> nothing", TR.flag_cancel([row], k, None, ltp_of=lambda s: {"TESTSYM": 200.0})["cancelled"], 0)
+check("blended cost is ONE definition, shared with the 15:50 report",
+      "position_from(sym, pos, hold)" in (ROOT / "atlas/reporting/session_report.py").read_text(), True)
+check("market_open runs flag_cancel every cycle",
+      "_TR.flag_cancel(_rows, _k, _active)" in (ROOT / "atlas/signal/market_open.py").read_text(), True)
+
 print("\nTHE 15:50 REPORT")
 import atlas.reporting.session_report as SR                    # noqa: E402
 SR.live_prices = lambda syms: {"TESTSYM": 117.0}

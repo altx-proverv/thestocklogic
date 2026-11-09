@@ -170,6 +170,18 @@ def size(symbol: str, entry: float, shares: float | None, atr: float | None,
             out["refused"] = (f"one share at Rs {entry:,.2f} exceeds the position "
                               f"bound Rs {position:,.0f} ({out['bound']}); T1 of "
                               f"Rs {tranches[0]['amount']:,.0f} buys no share")
+            return out
+    # THREE REAL TRANCHES OR NO POSITION (operator, 2026-11-10, OPEN D-073).
+    # T2 and T3 are NOT rounded up and NOT skipped: the ladder is the strategy,
+    # and a position that can never average is a different strategy whose
+    # results would pollute the evidence. A stock that cannot carry three real
+    # tranches at this capital does not belong in the book.
+    for name, t in (("T2", tranches[1]), ("T3", tranches[2])):
+        if t["qty"] < 1:
+            out["refused"] = (f"{name} of Rs {t['amount']:,.0f} buys no share at "
+                              f"Rs {t['price']:,.2f}: the ladder cannot be three real "
+                              f"tranches at a Rs {book:,.0f} book")
+            return out
     return out
 
 

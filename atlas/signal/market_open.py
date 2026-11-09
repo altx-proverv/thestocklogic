@@ -1014,9 +1014,19 @@ def cycle(state: Session) -> dict:
                               "BUY GTTs were not checked for orphans this cycle.",
                               key="tranche_rows_unreadable")
                     elif _rows:
-                        _tc = _TR.cleanup(_rows, _k, _lag())
+                        _active = _lag()
+                        _tc = _TR.cleanup(_rows, _k, _active)
                         rec["cancelled"] += _tc["cancelled"]
                         rec.setdefault("alerts", []).extend(_tc["alerts"])
+                        # +16% ON BLENDED COST: the remaining tranches go, now.
+                        _fc = _TR.flag_cancel(_rows, _k, _active)
+                        rec["cancelled"] += _fc["cancelled"]
+                        rec["alerts"].extend(_fc["alerts"])
+                        for _sym, _ch in _fc["flagged"]:
+                            alert("LONG +16% — TRANCHES CANCELLED",
+                                  f"{_sym} is {_ch:+.1f}% on blended cost. Its remaining "
+                                  f"T2/T3 buy GTTs were cancelled. ATLAS places no sell; "
+                                  f"the decision is yours.", key=f"flag:{_sym}")
                 except Exception as e:
                     log.exception("tranche cleanup raised")
                     alert("TRANCHE CLEANUP FAILED", f"{type(e).__name__}: {e}",

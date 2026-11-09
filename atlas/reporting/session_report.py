@@ -250,7 +250,7 @@ def long_book_lines(rows: list, kite=None, gtts=None) -> list:
     Unreadable is said, never shown as a number.
     """
     from atlas.config import PROFIT_FLAG_PCT
-    from atlas.execution.tranches import tranche_ids
+    from atlas.execution.tranches import tranche_ids, position_from
     out = ["", f"<b>LONG BOOK — {len(rows)} open (no broker stops by mandate; "
                f"flag at +{PROFIT_FLAG_PCT:g}% on blended cost)</b>"]
     if not rows:
@@ -276,23 +276,12 @@ def long_book_lines(rows: list, kite=None, gtts=None) -> list:
             out.append(f"  {_esc(sym)} — broker positions/holdings UNREADABLE: "
                        f"blended cost unknown, +{PROFIT_FLAG_PCT:g}% not checked")
             continue
-        q = v = 0.0
-        for x in pos:
-            if str(x.get("tradingsymbol")) == sym and str(x.get("product", "")).upper() == "CNC":
-                n = float(x.get("quantity") or 0)
-                if n > 0:
-                    q += n; v += n * float(x.get("average_price") or 0)
-        for x in hold:
-            if str(x.get("tradingsymbol")) == sym:
-                n = float(x.get("quantity") or 0) + float(x.get("t1_quantity") or 0)
-                if n > 0:
-                    q += n; v += n * float(x.get("average_price") or 0)
+        q, avg = position_from(sym, pos, hold)     # the one definition (tranches.py)
         ltp = ltps.get(sym)
         if not q:
             out.append(f"  {_esc(sym)} — the broker shows NO shares (sold, or not "
                        f"settled into either book); row {t.get('id')} still OPEN")
             continue
-        avg = v / q
         line = f"  <b>{_esc(sym)}</b> {int(q)} @ blended Rs{avg:,.2f}"
         if ltp:
             ch = (ltp / avg - 1) * 100
@@ -300,7 +289,8 @@ def long_book_lines(rows: list, kite=None, gtts=None) -> list:
             if ch >= PROFIT_FLAG_PCT:
                 line = (f"  🟢 <b>+{PROFIT_FLAG_PCT:g}% REACHED — {_esc(sym)}</b> "
                         f"{ch:+.1f}% on blended cost. Your decision; ATLAS places "
-                        f"no sell.\n" + line)
+                        f"no sell. Its remaining tranche GTTs are cancelled by the "
+                        f"engine the cycle it reaches the flag.\n" + line)
         else:
             line += "  LTP unavailable — the flag was not checked"
         ids = tranche_ids(t)

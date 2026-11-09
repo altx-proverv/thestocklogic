@@ -123,31 +123,121 @@ def place(trade_id, symbol: str, plan: list, last_price: float, kite=None) -> di
     return out
 
 
-def held_qty(symbol: str, kite) -> tuple:
-    """(readable, shares held) from positions AND holdings. Never (True, 0) on a
-    failed read. max(), not sum: on the day of purchase the shares are in
-    positions; after settlement they are in holdings (quantity + t1_quantity)."""
+def read_books(kite) -> tuple:
+    """(net positions, holdings) from the broker, or (None, None) if either
+    cannot be read. One read serves every symbol in a cycle."""
     try:
         pos = kite.positions()
         net = pos.get("net") if isinstance(pos, dict) else None
-        if net is None:
-            return False, None
         hold = kite.holdings()
-        if hold is None:
-            return False, None
+        if net is None or hold is None:
+            return None, None
+        return net, hold
     except Exception as e:
-        log.warning(f"{symbol}: positions/holdings unreadable ({e})")
+        log.warning(f"positions/holdings unreadable ({e})")
+        return None, None
+
+
+def position_from(symbol: str, net: list, hold: list) -> tuple:
+    """(shares, blended average cost) for a CNC long across BOTH books.
+
+    THE ONE DEFINITION, used by the cleanup, the +16% flag and the 15:50 report.
+    Today's buys sit in positions (CNC, quantity > 0, average_price); settled
+    shares sit in holdings (quantity + t1_quantity, average_price). A position
+    with a T1 from last week and a T2 filled today is in BOTH, so the books are
+    added, weighted by quantity -- a CNC buy today cannot already be in holdings,
+    so nothing is counted twice.
+    """
+    q = v = 0.0
+    for x in net or []:
+        if str(x.get("tradingsymbol")) == symbol and str(x.get("product", "")).upper() == "CNC":
+            n = float(x.get("quantity") or 0)
+            if n > 0:
+                q += n
+                v += n * float(x.get("average_price") or 0)
+    for x in hold or []:
+        if str(x.get("tradingsymbol")) == symbol:
+            n = float(x.get("quantity") or 0) + float(x.get("t1_quantity") or 0)
+            if n > 0:
+                q += n
+                v += n * float(x.get("average_price") or 0)
+    return int(q), (v / q if q else None)
+
+
+def held_qty(symbol: str, kite) -> tuple:
+    """(readable, shares held) from positions AND holdings. Never (True, 0) on a
+    failed read."""
+    net, hold = read_books(kite)
+    if net is None:
+        log.warning(f"{symbol}: positions/holdings unreadable")
         return False, None
-    p = sum(int(float(x.get("quantity") or 0)) for x in net
-            if str(x.get("tradingsymbol")) == symbol and str(x.get("product", "")).upper() == "CNC")
-    h = sum(int(float(x.get("quantity") or 0)) + int(float(x.get("t1_quantity") or 0))
-            for x in hold if str(x.get("tradingsymbol")) == symbol)
-    return True, max(p, h)
+    return True, position_from(symbol, net, hold)[0]
 
 
 def tranche_ids(t: dict) -> dict:
     legs = (t or {}).get("exit_legs") or {}
     return {n: str(legs[f"{n}_trigger_id"]) for n in LEG_NAMES if legs.get(f"{n}_trigger_id")}
+
+
+def flag_cancel(trades: list, kite, active_gtts, ltp_of=None, now=None) -> dict:
+    """At +PROFIT_FLAG_PCT on blended cost, cancel the position's remaining
+    tranche GTTs (operator, 2026-11-10).
+
+    The position is in exit territory; averaging into something about to be sold
+    contradicts the exit. Runs every cycle in the engine (watch-only included) --
+    NOT in a report, which never places or cancels. Cancelled tranches are not
+    re-placed if the price falls back: the position stays without them.
+
+    Any input that cannot be read cancels NOTHING and says so: the flag is a
+    measurement, and a GTT buy below market can only fire on a fall, so leaving
+    it for one more cycle is not the exposure an unmeasured cancel would hide.
+    """
+    from atlas.config import PROFIT_FLAG_PCT
+    out = {"checked": 0, "cancelled": 0, "flagged": [], "alerts": []}
+    if active_gtts is None:
+        return out                    # cleanup() has already said the list is unreadable
+    active = {str(g.get("id")) for g in active_gtts}
+    live = [(t, {n: i for n, i in tranche_ids(t).items() if i in active}) for t in trades or []]
+    live = [(t, ids) for t, ids in live if ids]
+    if not live:
+        return out
+    net, hold = read_books(kite)
+    if net is None:
+        out["alerts"].append("+16% check skipped: positions/holdings unreadable")
+        return out
+    if ltp_of is None:
+        def ltp_of(syms):
+            q = kite.ltp([f"NSE:{s}" for s in syms]) or {}
+            return {k.split(":", 1)[1]: float(v.get("last_price") or 0) for k, v in q.items()}
+    try:
+        ltps = ltp_of(sorted({str(t.get("symbol")) for t, _ in live}))
+    except Exception as e:
+        out["alerts"].append(f"+16% check skipped: LTP unreadable ({e})")
+        return out
+    for t, ids in live:
+        sym = str(t.get("symbol"))
+        out["checked"] += 1
+        qty, avg = position_from(sym, net, hold)
+        ltp = ltps.get(sym)
+        if not qty or not avg or not ltp:
+            continue                  # flat (cleanup's job) or unpriced: no measurement, no cancel
+        ch = (ltp / avg - 1) * 100
+        if ch < PROFIT_FLAG_PCT:
+            continue
+        out["flagged"].append((sym, round(ch, 2)))
+        for name, tid in ids.items():
+            try:
+                kite.delete_gtt(trigger_id=tid)
+                out["cancelled"] += 1
+                _ev("GTT_CANCELLED", "tranches.flag_cancel", sym, f"{name.upper()}_PROFIT_FLAG",
+                    f"{name.upper()} BUY GTT {tid} cancelled: {sym} is {ch:+.2f}% on blended "
+                    f"cost Rs{avg:,.2f} (LTP {ltp}), at or past the +{PROFIT_FLAG_PCT:g}% flag",
+                    {"trigger_id": tid, "blended_cost": round(avg, 4), "ltp": ltp,
+                     "qty": qty, "change_pct": round(ch, 4)}, trade_id=t.get("id"))
+            except Exception as e:
+                out["alerts"].append(f"{sym}: +{PROFIT_FLAG_PCT:g}% reached but tranche GTT {tid} "
+                                     f"could not be cancelled ({e}) — cancel it by hand")
+    return out
 
 
 def cleanup(trades: list, kite, active_gtts) -> dict:

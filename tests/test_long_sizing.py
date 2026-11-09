@@ -82,6 +82,18 @@ check("a lone deep support is T2 (80); T3 = 80 - 6 = 74", (L[1], L[2]), ((80.0, 
 L = Z.ladder(523.15, 14.65, [513.60, 512.85])
 check("JSWENERGY's stacked supports no longer stack T2/T3", L[1][1] == "atr" and L[2][0] < L[1][0] - 14.65, True)
 
+print("\nTHREE REAL TRANCHES OR NO POSITION (D-073)")
+# book Rs2,00,000 direct, 3% band -> ceiling Rs6,000; T2/T3 = Rs1,800 each.
+# At a Rs3,890 share T1 (Rs2,400) rounds up to 1 share, but T2 buys 0 -> refused.
+_tv = [1e12] * 20
+_sh = 20000 * 1e7 / 3890.0                       # a 20,000 cr company at Rs3,890
+r = Z.size("X", 3890.0, _sh, 50.0, [], _tv, None, book_capital=200000.0)
+check("T2 rounds to zero shares -> the symbol is refused", "T2 of Rs 1,800 buys no share" in (r["refused"] or ""), True)
+r = Z.size("X", 500.0, 20000 * 1e7 / 500.0, 10.0, [], _tv, None, book_capital=200000.0)
+check("a Rs500 share carries all three tranches -> sized", (r["refused"], [t["qty"] for t in r["tranches"]]),
+      (None, [4, 3, 3]))
+check("nothing is rounded up past T1", any(t.get("rounded_up") for t in r["tranches"][1:]), False)
+
 print("\nTHE BOOK: 70% FOR NEW NAMES, AVERAGING DOWN TO A 10% FLOOR")
 # total 10 cr -> book 6 cr; new names to 4.2 cr; averaging to 5.4 cr
 check("new-name headroom with 4.0 cr deployed = 20 lakh", near(Z.headroom(1e8, 4.0e7, "new"), 2.0e6), True)
