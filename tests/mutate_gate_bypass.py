@@ -12,7 +12,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# MUTATE A DISPOSABLE COPY, NEVER THE LIVE TREE (OPEN D-060). This harness
+# used to write its mutants into the real engine/03b_score.py,
+# atlas/risk/position_sizing.py and atlas/execution/atlas_entry.py, restore
+# them at the end, and rmtree every __pycache__ under the repo -- the venv's
+# site-packages included. On the box that is the deployed code: a cron job or
+# the market-hours engine importing during a run would get a mutant, and an
+# interrupted run left one in place. Now the packages are copied to a temp
+# directory, every path below points into the copy, the guarded test runs from
+# the copy, and the copy is deleted at exit. The live tree is only read.
+import atexit
+import tempfile
+_LIVE = Path(__file__).resolve().parent.parent
+ROOT = Path(tempfile.mkdtemp(prefix="mutate_gate_bypass_"))
+for _d in ("atlas", "engine", "radar", "meridian", "tools", "tests"):
+    if (_LIVE / _d).is_dir():
+        shutil.copytree(_LIVE / _d, ROOT / _d,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+if (_LIVE / "data" / "reference").is_dir():
+    shutil.copytree(_LIVE / "data" / "reference", ROOT / "data" / "reference")
+atexit.register(shutil.rmtree, ROOT, ignore_errors=True)
+assert ROOT.resolve() != _LIVE.resolve()
 SC   = ROOT / "engine/03b_score.py"
 PS   = ROOT / "atlas/risk/position_sizing.py"
 AE   = ROOT / "atlas/execution/atlas_entry.py"

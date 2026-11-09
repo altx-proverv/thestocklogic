@@ -157,8 +157,22 @@ def main() -> int:
         import atlas.risk.breaker as B
         importlib.reload(B)
 
+    # ASKED FROM A PROCESS THAT IS NOT A TEST. Since 2026-11-09 (OPEN D-060)
+    # any script under tests/ is a drill by construction, so this question has
+    # to be asked from outside tests/, the way the live engine runs: a fresh
+    # interpreter, no ATLAS_DRILL, no redirected halt file.
+    import subprocess as _sp
+    _env = {k: v for k, v in os.environ.items()
+            if k not in ("ATLAS_DRILL", "ATLAS_HALT_FILE")}
+    _r = _sp.run([sys.executable, "-c",
+                  "import sys; sys.path.insert(0, %r); "
+                  "import atlas.risk.breaker as B; print(B.is_drill()[0])" % str(ROOT)],
+                 capture_output=True, text=True, env=_env, cwd=str(ROOT))
     check("with no redirect, the live engine is NOT a drill",
-          B.is_drill()[0], False, "the fence must not disarm production")
+          _r.stdout.strip().splitlines()[-1] if _r.stdout.strip() else _r.stderr[-120:],
+          "False", "the fence must not disarm production")
+    check("  and a script under tests/ IS a drill, however it was started",
+          B.is_drill()[0], True, "a single suite run on the box is fenced")
 
     print()
     print("=" * 78)

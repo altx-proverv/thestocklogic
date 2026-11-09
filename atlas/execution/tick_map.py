@@ -226,5 +226,9 @@ def state() -> dict:
 
 
 def reset_for_tests() -> None:
+    """Tests only. Refuses any path outside the temp directory: this used to
+    delete whatever TICK_MAP_FILE resolved to (atlas/disposable.py)."""
+    from atlas.disposable import require_disposable
+    p = require_disposable(_path(), "tick_map.reset_for_tests")
     _MEM.update({"day": None, "map": None})
-    _path().unlink(missing_ok=True)
+    p.unlink(missing_ok=True)

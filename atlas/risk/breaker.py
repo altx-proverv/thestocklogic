@@ -161,6 +161,24 @@ def is_halted() -> tuple:
 #
 # ATLAS_DRILL is honoured too, for a caller that wants to be explicit without
 # moving the halt file.
+def _is_test_process() -> bool:
+    """True when the running script lives in this repo's tests/ directory.
+
+    A FACT ABOUT THE PROCESS, NOT AN ENVIRONMENT VARIABLE. tests/run_all.py sets
+    ATLAS_DRILL, but a single suite run on its own -- which is how suites were
+    run on the box on 2026-11-09 -- set nothing, so every drill fence was off
+    for it (OPEN D-060). A script under tests/ is a test, however it was started.
+    """
+    import sys as _sys
+    main = _sys.modules.get("__main__")
+    f = getattr(main, "__file__", None) or (_sys.argv[0] if _sys.argv else "")
+    if not f:
+        return False
+    tests_dir = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "..", "..", "tests"))
+    return os.path.realpath(f).startswith(tests_dir + os.sep)
+
+
 def is_drill() -> tuple:
     """(drilling, why). True when this process must not touch shared state."""
     if os.environ.get("ATLAS_DRILL", "").strip().lower() in ("1", "true", "yes"):
@@ -168,6 +186,10 @@ def is_drill() -> tuple:
     if str(SENTINEL) != str(HALT_FILE_CANONICAL):
         return True, (f"halt sentinel is redirected to {SENTINEL} rather than "
                       f"{HALT_FILE_CANONICAL}, so this is not the live engine")
+    # LAST, so the specific reasons above are still the ones reported -- and
+    # still reachable by the tests that exercise them.
+    if _is_test_process():
+        return True, "the running script is under tests/"
     return False, ""
 
 

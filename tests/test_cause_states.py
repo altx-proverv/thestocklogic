@@ -118,6 +118,17 @@ bad = json.loads(json.dumps(built["none_found"], default=str))
 bad["q01"]["why"]["state"] = None
 check("a missing state is REFUSED", cards.validate(bad)[0], "failed")
 
+import shutil as _shutil                                         # noqa: E402
+if not _shutil.which("node"):
+    print("\nPAGES: SKIPPED — node is not installed here (the box has none); "
+          "the page checks run where node exists")
+    if failures:
+        print(f"FAILED — {len(failures)}")
+        for f in failures:
+            print("  -", f)
+        sys.exit(1)
+    print("PASSED (page checks skipped: no node)")
+    sys.exit(0)
 print("\nPAGES: the real functions, run in node")
 home = (ROOT / "home.html").read_text()
 flash = (ROOT / "flash.html").read_text()

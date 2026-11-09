@@ -54,6 +54,13 @@ watch-only until resumed.
 - **Only an exact NORMAL permits an entry.** Any other agent mode, including
   one nobody recognises, is stopped. (OPEN D-016, D-047.)
 
+### Tests (2026-11-10)
+- **A test can never delete or overwrite a path outside the temp directory.**
+  The helper refuses, loudly, whatever path it is handed (atlas/disposable.py).
+  A script under tests/ is a drill however it was started. (OPEN D-060.)
+- **A suite that is not in tests/run_all.py is not a test.** run_all fails on
+  any unregistered tests/test_*.py.
+
 ### Alerts and checks
 - **HTTP 200 is not delivery.** A message counts only with a `message_id`.
 - **Silence must mean breakage.** Every scheduled check speaks on a quiet day,

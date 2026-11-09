@@ -246,5 +246,7 @@ def line(s: dict = None) -> str:
 
 
 def reset_for_tests(path: Path = None) -> None:
-    """Drop the stored stand-down. Tests only; never called by the engine."""
-    (path or _path()).unlink(missing_ok=True)
+    """Drop the stored stand-down. Tests only; never called by the engine.
+    Refuses any path outside the temp directory (atlas/disposable.py)."""
+    from atlas.disposable import require_disposable
+    require_disposable(path or _path(), "sentiment_window.reset_for_tests").unlink(missing_ok=True)

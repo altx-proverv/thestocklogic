@@ -156,4 +156,9 @@ def state() -> dict:
 
 
 def reset_for_tests() -> None:
+    """Tests only. Refuses any path outside the temp directory: this used to
+    overwrite whatever BLOCK_FILE resolved to with an empty block list, which
+    on the box would lift every live block (atlas/disposable.py)."""
+    from atlas.disposable import require_disposable
+    require_disposable(BLOCK_FILE, "symbol_block.reset_for_tests")
     _save({"session_date": _now_ist().date().isoformat(), "symbols": {}})

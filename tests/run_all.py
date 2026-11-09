@@ -189,6 +189,17 @@ SUITES = [
     ("outcome integrity",[sys.executable, "tests/test_outcome_integrity.py"]),
     ("gate audit",       [sys.executable, "tests/test_gate_audit.py"]),
     ("reject sample",    [sys.executable, "tests/test_reject_sample.py"]),
+    # Added 2026-11-09/10. None of these were registered when written, so none
+    # ran under this command -- the completeness check below now fails on that.
+    ("volume alerts",       [sys.executable, "tests/test_volume_alerts.py"]),
+    ("quote coverage",      [sys.executable, "tests/test_quote_coverage.py"]),
+    ("pause holds",         [sys.executable, "tests/test_pause_holds.py"]),
+    ("order path fail closed", [sys.executable, "tests/test_order_path_fail_closed.py"]),
+    ("unreadable not empty", [sys.executable, "tests/test_unreadable_not_empty.py"]),
+    ("reconcile fill",      [sys.executable, "tests/test_reconcile_fill.py"]),
+    ("cause states",        [sys.executable, "tests/test_cause_states.py"]),
+    ("check tick map",      [sys.executable, "tests/test_check_tick_map.py"]),
+    ("disposable paths",    [sys.executable, "tests/test_disposable.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]
@@ -212,8 +223,23 @@ else:
                  "tests/home_freshness.js did not run')"])]
 
 
+def unregistered() -> list:
+    """tests/test_*.py files that no suite runs. A suite that is never run is
+    not a test -- nine written on 2026-11-09 sat here unrun until this check."""
+    named = " ".join(" ".join(map(str, argv)) for _, argv in SUITES)
+    return sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
+                  if p.name not in named)
+
+
 def main() -> int:
     failed = []
+    missing = unregistered()
+    if missing:
+        print("=" * 78)
+        print(f"── UNREGISTERED: {len(missing)} test file(s) are not in SUITES and "
+              f"would never run: {', '.join(missing)}")
+        print("=" * 78)
+        failed.append("unregistered tests")
     for label, argv in SUITES:
         # flush before handing stdout to the child, or our headers buffer and
         # land after the output they are supposed to introduce.

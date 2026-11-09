@@ -75,6 +75,19 @@ def record(event: str, source: str, symbol: str | None, code: str, reason: str,
                 log.warning(f"order event repeated {n}x this session: "
                             f"{event} {source} {symbol} {code}")
             return False
+        # A DRILL NEVER WRITES PRODUCTION (OPEN D-060). Under a test or
+        # ATLAS_DRILL, the line goes to a temp file and nothing is POSTed:
+        # order_path_events is append-only, so a test row could never be
+        # removed. An injected poster (a test's stub) is still called.
+        if poster is None:
+            try:
+                from atlas.risk.breaker import is_drill
+                drilling, _why = is_drill()
+            except Exception:
+                drilling = True
+            if drilling:
+                _local({**row, "occurrence": n, "drill": True}, drill=True)
+                return True
         _local({**row, "occurrence": n})
         (poster or _post)(row)
         log.info(f"order event {event} {source} {symbol or '-'} {code}: {reason}")
@@ -85,10 +98,14 @@ def record(event: str, source: str, symbol: str | None, code: str, reason: str,
         return False
 
 
-def _local(row: dict) -> None:
+def _local(row: dict, drill: bool = False) -> None:
+    target = LOCAL
+    if drill and not os.environ.get("TSL_ORDER_EVENTS_FILE"):
+        import tempfile
+        target = Path(tempfile.gettempdir()) / "order_path_events_drill.jsonl"
     try:
-        LOCAL.parent.mkdir(parents=True, exist_ok=True)
-        with open(LOCAL, "a") as f:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "a") as f:
             f.write(json.dumps(row, default=str) + "\n")
     except Exception as e:
         log.error(f"order event local write failed: {e}")
