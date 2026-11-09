@@ -201,6 +201,7 @@ SUITES = [
     ("check tick map",      [sys.executable, "tests/test_check_tick_map.py"]),
     ("disposable paths",    [sys.executable, "tests/test_disposable.py"]),
     ("exit alarms",         [sys.executable, "tests/test_exit_alarms.py"]),
+    ("shares outstanding",  [sys.executable, "tests/test_shares_outstanding.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

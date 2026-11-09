@@ -390,6 +390,70 @@ def parse_shp(xml: str) -> tuple:
 # ANNOUNCEMENTS
 # ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+# SHARES OUTSTANDING (for ATLAS sizing; OPEN D-063)
+# ══════════════════════════════════════════════════════════════════
+#
+# WHY HERE. Market cap needs a share count, and the only one we fetch is the
+# company's own quarterly shareholding-pattern filing -- the same XBRL this
+# module already downloads for pledge. Stored as a SHARE COUNT with the quarter
+# and filing date it came from, never as a market cap: market cap is shares x
+# price at the moment of use, because a stored market cap is stale by the next
+# session.
+#
+# WHICH NUMBER. The filing's Table I grand total sits under exactly one context,
+# ShareholdingPattern_ContextI, and carries two counts (probed on RELIANCE and
+# M&M, Sep-2026):
+#   NumberOfFullyPaidUpEquityShares   column IV   RELIANCE 13,312,748,854
+#   NumberOfShares                    column VII  RELIANCE 13,532,538,722
+# VII = IV + partly paid + shares underlying depository receipts. RELIANCE's
+# gap is the shares behind its GDRs, which are equity like any other, so VII is
+# the share count a market cap is made of. Both are stored; VII is used.
+#
+# EXACTLY ONE FACT OR NOTHING. Zero means the taxonomy moved; two means the
+# context is no longer specific. Either is None and a note -- sizing then
+# refuses the symbol rather than guessing.
+SHARES_TOTAL_CONTEXT = "ShareholdingPattern_ContextI"
+EL_TOTAL_SHARES = "NumberOfShares"
+
+
+def parse_shares(xml: str) -> dict:
+    """Raw share counts from one SHP filing. Never raises."""
+    out = {"total": None, "fully_paid": None, "promoter_shares": None,
+           "promoter_fraction": None, "report_date": None, "notes": []}
+    try:
+        tot = [v for c, v in _facts(xml, EL_TOTAL_SHARES) if c == SHARES_TOTAL_CONTEXT]
+        fp = [v for c, v in _facts(xml, EL_SHARES) if c == SHARES_TOTAL_CONTEXT]
+        if len(tot) == 1:
+            out["total"] = _num(tot[0])
+        else:
+            out["notes"].append(f"{EL_TOTAL_SHARES} under {SHARES_TOTAL_CONTEXT}: "
+                                f"{len(tot)} facts, need exactly one")
+        if len(fp) == 1:
+            out["fully_paid"] = _num(fp[0])
+        # Recorded so the reader can cross-check the total against the
+        # promoter block: promoter shares / promoter fraction is a second,
+        # independent route to roughly the same denominator.
+        out["promoter_shares"], _, _ = _promoter_context(xml, EL_TOTAL_SHARES)
+        out["promoter_fraction"], _, _ = _promoter_context(xml, EL_HOLDING_PCT)
+        d = _facts(xml, "DateOfReport")
+        out["report_date"] = d[0][1] if d else None
+    except Exception as e:
+        out["notes"].append(f"share count not parsed: {type(e).__name__}: {e}")
+    return out
+
+
+def _shares_record(row: dict, xml: str) -> dict:
+    rec = parse_shares(xml)
+    rec.update({"quarter_end": (row.get("date") or "").strip(),
+                "filed": row.get("broadcastDate"),
+                "submitted": row.get("submissionDate"),
+                "revised": row.get("revisedStatus"),
+                "source": row.get("xbrl"),
+                "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    return rec
+
+
 def classify_announcements(rows: list) -> tuple:
     """
     (veto_flags, noted, dilution) from the STRUCTURED desc only.
@@ -483,6 +547,8 @@ def fetch_symbol(s, symbol: str, verbose: bool = False) -> dict:
                 h["notes"].append("SHP xbrl request failed — pledge unknown")
             else:
                 p_xbrl, pledged, encumbered, notes = parse_shp(rx.text)
+                if row is usable[0]:
+                    out["shares"] = _shares_record(row, rx.text)
                 h["pledged_pct"] = pledged
                 h["encumbered_pct"] = encumbered
                 h["notes"].extend(notes)
@@ -594,6 +660,53 @@ def refresh_announcements(symbols: list, path: Path = STORE) -> dict:
     return store
 
 
+def refresh_shares(symbols: list, path: Path = STORE) -> dict:
+    """
+    Re-read ONLY the share count (master + the newest SHP XBRL) for symbols
+    already in the store; every other field is left as it was. The same shape as
+    refresh_announcements, for the same reason: a symbol not in the store is
+    skipped, not half-created.
+    """
+    store = load_store(path)
+    have = store["symbols"]
+    todo = [x for x in symbols if x in have]
+    missing = [x for x in symbols if x not in have]
+    if missing:
+        log.warning(f"{len(missing)} symbol(s) not in the store — skipped, they "
+                    f"need a full fetch first (e.g. {', '.join(missing[:5])})")
+    s_ = _session()
+    done = 0
+    for i, sym in enumerate(todo, 1):
+        r = _get(s_, SHP_MASTER.format(symbol=_q(sym)))
+        rec = None
+        if r is not None:
+            try:
+                rows = r.json()
+                rows = rows if isinstance(rows, list) else (rows.get("data") or [])
+                usable = [x for x in rows if _is_url(x.get("xbrl"))][:1]
+                if usable:
+                    time.sleep(REQUEST_DELAY)
+                    rx = _get(s_, usable[0]["xbrl"])
+                    if rx is not None:
+                        rec = _shares_record(usable[0], rx.text)
+            except Exception as e:
+                log.warning(f"{sym}: {e}")
+        if rec is not None:
+            have[sym]["shares"] = rec
+            done += rec.get("total") is not None
+        else:
+            # A failed read leaves the old count in place, dated by its own
+            # quarter -- the reader judges its age; nothing is fabricated.
+            log.warning(f"{sym}: share count not refreshed")
+        if i % 25 == 0:
+            save_store(store, path)
+            log.info(f"{i}/{len(todo)} share counts read ({done} with a total)")
+        time.sleep(REQUEST_DELAY)
+    save_store(store, path)
+    log.info(f"share counts refreshed: {done}/{len(todo)} with a total")
+    return store
+
+
 def run(symbols: list, refetch: bool = False, verbose: bool = False,
         path: Path = STORE) -> dict:
     store = load_store(path)
@@ -664,6 +777,9 @@ def main() -> int:
     ap.add_argument("--announcements-only", action="store_true",
                     help="re-read only announcements for symbols already in the "
                          "store (the daily path; skips the SHP XBRL)")
+    ap.add_argument("--shares-only", action="store_true",
+                    help="re-read only the share count for symbols already in "
+                         "the store (master + newest SHP XBRL)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO,
@@ -681,6 +797,8 @@ def main() -> int:
         syms = syms[:a.limit]
     if a.announcements_only:
         refresh_announcements(syms)
+    elif a.shares_only:
+        refresh_shares(syms)
     else:
         run(syms, refetch=a.refetch, verbose=a.verbose)
     return report()
