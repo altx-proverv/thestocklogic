@@ -65,6 +65,11 @@ watch-only until resumed.
   `git config core.hooksPath .githooks`). The box deploys main every five
   minutes, so the gate is at push time. `--no-verify` is a decision, not a
   convenience. (OPEN D4/D-066, 2026-11-10.)
+- **A doc or docstring may not claim what the code does not do.** Every
+  "generated", "not built", "nothing calls/reads/imports" claim and every STATUS
+  banner is registered in docs/claims.json with a check tests/test_claims.py
+  runs; an unregistered claim, or a registered one whose check fails, is red.
+  Register the claim when you write it. (OPEN D-076, 2026-11-10.)
 
 ### Alerts and checks
 - **HTTP 200 is not delivery.** A message counts only with a `message_id`.

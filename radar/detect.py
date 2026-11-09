@@ -33,9 +33,12 @@ def universe(cfg) -> tuple:
     """(symbols, sector_map). The Nifty 500 list from engine/universe.py.
 
     READ-ONLY, and the only thing Radar imports from the signals side. That
-    file is auto-generated from ind_nifty500list.csv and currently resolves
-    wider than its name -- the count is logged and recorded per run so a
-    universe change shows up in the record rather than being inferred.
+    file's symbol list is maintained by hand (EXCLUDED by
+    tools/universe_filter.py) and its sectors come from engine/sector_map.json
+    (tools/build_sector_map.py); it is wider than the Nifty 500 -- the count is
+    logged and recorded per run so a universe change shows up in the record
+    rather than being inferred. (Corrected 2026-11-10: this said the file was
+    generated from ind_nifty500list.csv, which was never true. OPEN D-076.)
     """
     name = str(cfg.universe).strip().lower()
     if name not in ("nifty500", "nifty_500", "500"):

@@ -26,7 +26,9 @@ WHAT THIS DECIDES, AND WHAT IT DOES NOT
 ---------------------------------------
 Six mechanical filters, in order. They are necessary but not sufficient: a stock
 that passes them all is TRADEABLE, not QUALITY. The fundamentals tiers decide
-the second question and are not built yet, which is why --emit-exclusions only
+the second question (engine/fundamentals.py; corrected 2026-11-10 -- this said
+they did not exist yet: Tier 1 is fetched daily, and its veto was dropped by
+operator decision on 2026-10-01), which is why --emit-exclusions only
 ever REMOVES symbols from the current universe. The 345 symbols that pass these
 filters and are not already in it stay out until Tier 1 and Tier 2 are live --
 adding 345 unscreened names is the risk the fundamentals layer exists to stop.

@@ -1,0 +1,228 @@
+{
+ "_about": "OPEN D-076. Every claim a doc or docstring makes about whether code is built, generated, called or read is registered here with a check that tests/test_claims.py runs offline. A claim the scanner finds that is not here fails the suite; a registered claim whose check fails fails the suite. Edit this file when the claim is made, not after.",
+ "generated": [
+  {
+   "output": "engine/sector_map.json",
+   "generator": "tools/build_sector_map.py",
+   "verify": "reproduce",
+   "test": "tests/test_sector_map.py",
+   "note": "rebuilt from engine/sector_sources and diffed"
+  },
+  {
+   "output": "engine/zerodha_tokens.py",
+   "generator": "engine/build_zerodha_tokens.py",
+   "verify": "external",
+   "count_claim": {
+    "regex": "Mapped: (\\d+) stocks",
+    "dict": "ZERODHA_TOKEN_MAP",
+    "module": "engine.zerodha_tokens"
+   },
+   "note": "needs the live Kite instrument dump, so it cannot be rerun offline; checked: generator exists, the header names it, the header's count equals the entries"
+  },
+  {
+   "output": "engine/universe.py",
+   "generator": "tools/universe_filter.py",
+   "verify": "external",
+   "region": "EXCLUDED",
+   "note": "only the EXCLUDED block is generated (needs sec_list and atlas_trades); a 2026-10-15 hand edit is recorded in the block"
+  },
+  {
+   "output": "(stdout, not committed)",
+   "generator": "tools/radar_emit_sql.py",
+   "verify": "external",
+   "note": "emits SQL to stdout; no output file is in the repo"
+  }
+ ],
+ "claims": [
+  {
+   "id": "meridian-recorder-running",
+   "where": "docs/MERIDIAN.md",
+   "text": "ONE PART IS BUILT AND RUNNING",
+   "checks": [
+    {
+     "module_exists": "meridian/iv_recorder.py"
+    },
+    {
+     "module_exists": "meridian/fno_universe.py"
+    },
+    {
+     "cron": "-m meridian.iv_recorder --label close"
+    },
+    {
+     "cron": "-m meridian.iv_recorder --label eod"
+    }
+   ]
+  },
+  {
+   "id": "meridian-no-averaging",
+   "where": "docs/MERIDIAN.md",
+   "text": "EXPLICITLY NOT BUILT",
+   "kind": "design",
+   "reason": "a design decision for MERIDIAN (no averaging down), not a statement about what code exists"
+  },
+  {
+   "id": "emergency-exit-not-automatic",
+   "where": "atlas/execution/exits.py",
+   "text": "nothing calls it",
+   "checks": [
+    {
+     "called_only_in": {
+      "symbol": "emergency_exit",
+      "allowed": [
+       "atlas/execution/exits.py"
+      ],
+      "scope": [
+       "atlas",
+       "engine",
+       "radar",
+       "meridian"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "allow-automated-stop-loss-unread",
+   "where": "atlas/config.py",
+   "text": "nothing reads it to decide anything",
+   "checks": [
+    {
+     "not_read": {
+      "name": "ALLOW_AUTOMATED_STOP_LOSS",
+      "allowed": [
+       "atlas/config.py"
+      ],
+      "scope": [
+       "atlas",
+       "engine",
+       "radar",
+       "meridian"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "trade-management-dead",
+   "where": "docs/ATLAS_LONG_ONLY.md",
+   "text": "nothing imports it",
+   "checks": [
+    {
+     "not_imported": {
+      "module": "trade_management",
+      "scope": [
+       "atlas",
+       "engine",
+       "radar",
+       "meridian",
+       "tools"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "signals-features-unread",
+   "where": "engine/06_push_supabase.py",
+   "text": "nothing reads it until then",
+   "checks": [
+    {
+     "not_read": {
+      "name": "signals_features",
+      "allowed": [
+       "engine/06_push_supabase.py"
+      ],
+      "scope": [
+       "atlas",
+       "engine",
+       "radar",
+       "meridian"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "emergency-exit-no-longer-automatic",
+   "where": "atlas/execution/exits.py",
+   "text": "NO LONGER CALLED AUTOMATICALLY",
+   "checks": [
+    {
+     "called_only_in": {
+      "symbol": "emergency_exit",
+      "allowed": [
+       "atlas/execution/exits.py"
+      ],
+      "scope": [
+       "atlas",
+       "engine",
+       "radar",
+       "meridian"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "would-veto-unread",
+   "where": "engine/fundamentals.py",
+   "text": "Nothing reads it to decide",
+   "checks": [
+    {
+     "not_read": {
+      "name": "would_veto",
+      "allowed": [
+       "engine/fundamentals.py"
+      ],
+      "scope": [
+       "atlas",
+       "engine",
+       "radar",
+       "meridian"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "partial-booking-plan",
+   "where": "atlas/config.py",
+   "text": "flagged and NOT built in this pass",
+   "kind": "design",
+   "reason": "names a feature (partial booking) left as the operator's decision; there is no code to check"
+  },
+  {
+   "id": "flash-r1-plan",
+   "where": "docs/TSL_FLASH.md",
+   "text": "designed here and not built",
+   "kind": "design",
+   "reason": "a roadmap statement (Question 03, base-rate library); nothing exists to check"
+  },
+  {
+   "id": "flash-q03-plan",
+   "where": "docs/TSL_FLASH.md",
+   "text": "Question 03 — capital behaviour | designed, not built",
+   "kind": "design",
+   "reason": "roadmap table row"
+  },
+  {
+   "id": "flash-base-rate-plan",
+   "where": "docs/TSL_FLASH.md",
+   "text": "The base-rate library (designed, not built)",
+   "kind": "design",
+   "reason": "roadmap heading; radar/outcomes.py records the forward returns it would use, the library itself does not exist"
+  }
+ ],
+ "quotes": [
+  {
+   "where": "docs/open_questions.md",
+   "text": "The header reads \"Auto-generated. Do not edit manually.\"",
+   "reason": "a recorded finding QUOTING the old false header, not a claim"
+  },
+  {
+   "where": "docs/CHARTER.md",
+   "text": "\"generated\", \"not built\", \"nothing calls/reads/imports\" claim",
+   "reason": "the charter rule that NAMES the phrases this registry governs"
+  }
+ ]
+}

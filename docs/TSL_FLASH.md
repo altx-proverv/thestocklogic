@@ -96,9 +96,11 @@ consumes its bhavcopy, nothing more.
 
 ## 03 · Detection — Mode A, the event triggers
 
-Universe: the Nifty 500 list in `engine/universe.py` (`ALL_SYMBOLS`). That file
-is auto-generated from `ind_nifty500list.csv` and currently resolves to **706
-symbols** after exclusions — the list has drifted wider than its name. Radar
+Universe: `ALL_SYMBOLS` in `engine/universe.py` — a symbol list maintained in
+that file (exclusions by `tools/universe_filter.py`), with sectors from
+`engine/sector_map.json` (NSE's classification, `tools/build_sector_map.py`).
+718 symbols as of 2026-11-10. (Corrected 2026-11-10: this said the file was
+generated from `ind_nifty500list.csv`, which was never true — OPEN D-076.) Radar
 uses it as-is and records the count it ran against in every run row, so a
 universe change is visible in the record rather than inferred.
 
