@@ -412,7 +412,10 @@ function renderHot(){
 
   el.innerHTML=rows.map(function(r,i){
     var sourced=r.cause_sourced===true;
-    var cause=r.cause_text||'No disclosed trigger found. Exchange clarification pending / not sought.';
+    /* NO CAUSE TEXT MEANS WE HAVE NOTHING, NOT THAT WE LOOKED. This fallback
+       used to print "No disclosed trigger found" -- a claim of absence about
+       a company's filings made with no card behind it. */
+    var cause=r.cause_text||'Exchange filings could not be checked for this session. No claim is made about whether a trigger was disclosed.';
     var heat=num(r.heat,3); var pct=Math.max(2,Math.round((heat||0)/maxHeat*100));
     var sess=r.sessions_since;
     var sessTxt=(sess==null)?'&mdash;':(sess===0?'today':(sess===1?'1 session':sess+' sessions'));

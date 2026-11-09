@@ -25,7 +25,27 @@ import re
 import logging
 from datetime import date
 
-from radar.documents import NO_CAUSE_TEXT, DELIVERY_DISCLAIMER
+from radar.documents import (NO_CAUSE_TEXT, UNCHECKED_CAUSE_TEXT,
+                             DELIVERY_DISCLAIMER, CAUSE_FOUND,
+                             CAUSE_NONE_FOUND, CAUSE_NOT_CHECKED)
+
+
+def _cause_state(cause: dict) -> str:
+    """found / none_found / not_checked. A sourced cause is found; anything
+    without an explicit state is NOT CHECKED, never "none found"."""
+    st = (cause or {}).get("cause_state")
+    if st in (CAUSE_FOUND, CAUSE_NONE_FOUND, CAUSE_NOT_CHECKED):
+        return st
+    if (cause or {}).get("cause_sourced"):
+        return CAUSE_FOUND
+    return CAUSE_NOT_CHECKED
+
+
+def _cause_text(cause: dict) -> str:
+    st = _cause_state(cause)
+    if st == CAUSE_FOUND:
+        return (cause.get("cause_text") or "").strip()
+    return UNCHECKED_CAUSE_TEXT if st == CAUSE_NOT_CHECKED else NO_CAUSE_TEXT
 
 log = logging.getLogger("RADAR-CARDS")
 
@@ -163,7 +183,11 @@ def build(event: dict, level_rows: list, cause: dict, outcome: dict | None,
                 "delivery_pct": event.get("delivery_pct"),
             },
             "why": {
-                "cause_text": cause.get("cause_text") or NO_CAUSE_TEXT,
+                # THE STATE IS THE CLAIM. A cause dict without one (an older
+                # caller) is NOT CHECKED -- never "none found", which is a
+                # statement that we looked.
+                "state": _cause_state(cause),
+                "cause_text": _cause_text(cause),
                 "cause_url": cause.get("cause_url"),
                 "cause_published_at": (
                     cause["cause_published_at"].isoformat()
@@ -221,7 +245,7 @@ def build(event: dict, level_rows: list, cause: dict, outcome: dict | None,
             "price_source": "NSE bhavcopy",
             "cause_source": ("NSE corporate announcements"
                              if cause.get("cause_sourced") else None),
-            "cause_checked": bool(cause.get("checked")),
+            "cause_checked": _cause_state(cause) != CAUSE_NOT_CHECKED,
             "levels_computed_by": "radar/levels.py (pure functions)",
             "model_used": None,
         },
@@ -257,15 +281,29 @@ def validate(payload: dict) -> tuple:
     # with no filing behind it is the thing this product must never ship.
     why = (payload.get("q01") or {}).get("why") or {}
     text = (why.get("cause_text") or "").strip()
+    state = why.get("state")
+    if state not in (CAUSE_FOUND, CAUSE_NONE_FOUND, CAUSE_NOT_CHECKED):
+        notes.append(f"cause state must be one of found / none_found / "
+                     f"not_checked, got {state!r}")
     if why.get("sourced"):
+        if state != CAUSE_FOUND:
+            notes.append(f"cause marked sourced but its state is {state!r}")
         if not text:
             notes.append("cause marked sourced but the text is empty")
         if not why.get("cause_url"):
             notes.append("cause marked sourced but carries no document URL")
+    elif state == CAUSE_NOT_CHECKED:
+        if text != UNCHECKED_CAUSE_TEXT:
+            notes.append(f"an unchecked cause must be the not-checked sentence "
+                         f"verbatim, got {text[:90]!r}")
     else:
         if text != NO_CAUSE_TEXT:
             notes.append(f"unsourced cause must be the fixed sentence "
                          f"verbatim, got {text[:90]!r}")
+    pv = payload.get("provenance") or {}
+    if "cause_checked" in pv and bool(pv.get("cause_checked")) != (state != CAUSE_NOT_CHECKED):
+        notes.append(f"provenance.cause_checked={pv.get('cause_checked')!r} "
+                     f"disagrees with cause state {state!r}")
 
     # 3 — the delivery disclaimer, on the card's face.
     if (payload.get("q01") or {}).get("delivery_note") != DELIVERY_DISCLAIMER:

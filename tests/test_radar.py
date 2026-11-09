@@ -165,7 +165,8 @@ def main() -> int:
     # The card payload, built from real data.
     df = bars.frame_through("POLICYBZR", ed)
     lv = levels.compute_all(df, CFG, bars.session_vwap("POLICYBZR", ed))
-    cause_none = {"cause_text": documents.NO_CAUSE_TEXT, "cause_url": None,
+    cause_none = {"cause_state": documents.CAUSE_NONE_FOUND,
+                  "cause_text": documents.NO_CAUSE_TEXT, "cause_url": None,
                   "cause_published_at": None, "cause_sourced": False,
                   "checked": True, "documents": []}
     payload = cards.build({**pol_row, "close": 1207.2, "delivery_pct": 59.32,
@@ -237,7 +238,9 @@ def main() -> int:
     good = json.loads(json.dumps(payload))
     good["q01"]["why"] = {"cause_text": "Buyback of equity shares — outcome",
                           "cause_url": "https://nsearchives.nseindia.com/x.pdf",
-                          "sourced": True, "cause_published_at": None}
+                          "sourced": True, "cause_published_at": None,
+                          "state": "found"}
+    good.setdefault("provenance", {})["cause_checked"] = True
     check("a cited filing quoting 'buyback' is ALLOWED",
           cards.validate(good)[0], "passed",
           "the exchange's words, not ours; refusing them would make the most "

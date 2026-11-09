@@ -38,6 +38,19 @@ IST = timezone(timedelta(hours=5, minutes=30))
 NO_CAUSE_TEXT = ("No disclosed trigger found. "
                  "Exchange clarification pending / not sought.")
 
+# THE THIRD STATE. NSE could not be asked, so no claim is made either way. It
+# must never read like NO_CAUSE_TEXT: "we found none" and "we could not look"
+# are different statements about a company's disclosures, and only the first
+# is something we know. Our prose, so it is checked against BANNED_WORDS.
+UNCHECKED_CAUSE_TEXT = ("Exchange filings could not be checked for this "
+                        "session. No claim is made about whether a trigger "
+                        "was disclosed.")
+
+# cause_state values. Three, and the page renders three.
+CAUSE_FOUND = "found"            # a filing was selected and is cited
+CAUSE_NONE_FOUND = "none_found"  # NSE was asked; nothing usable came back
+CAUSE_NOT_CHECKED = "not_checked"  # NSE could not be asked, or was not
+
 # The delivery-%% disclaimer, also from the brief, also on the card's face.
 DELIVERY_DISCLAIMER = ("Delivery % is settlement, not identity. "
                        "It does not show who bought.")
@@ -139,21 +152,26 @@ def _priority(doc: dict) -> int:
 
 
 def fetch_filings(symbol: str, on: date, lookback_sessions: int = 1,
-                  session=None) -> list:
-    """NSE filings for a symbol around a session. [] on any failure.
+                  session=None):
+    """NSE filings for a symbol around a session.
 
-    [] AND NOT AN EXCEPTION. An unreachable NSE must degrade the card to "no
-    disclosed trigger found" -- which is true, we found none -- and must never
-    stop the run. The distinction between "no filing exists" and "we could not
-    ask" is kept in the returned `ok` flag on attribute(), so the page is never
-    told we checked when we did not.
+    -> list   NSE answered. [] means it answered with nothing usable.
+    -> None   NSE could not be asked or did not answer usably.
+
+    NONE IS NOT []. This returned [] on every failure and its docstring said
+    the difference was "kept in the returned `ok` flag on attribute()". There
+    was no such flag: attribute() set checked = bool(docs) or True, so a card
+    printed "No disclosed trigger found" when NSE was unreachable -- a published
+    claim of absence about a company's disclosures, made without looking. No
+    caller was ever written against that flag (run_detection, radar_emit_sql
+    and had_recent_filing read the list only). Never raises.
     """
     close_session = session is None
     try:
         s = session or _session()
     except Exception as e:
-        log.warning(f"{symbol}: no HTTP session ({e})")
-        return []
+        log.warning(f"{symbol}: no HTTP session ({e}) — filings NOT checked")
+        return None
 
     # THE WINDOW REACHES BACK A DAY. A filing made after one close moves the
     # NEXT session, so a window of just the event date would miss the most
@@ -167,12 +185,14 @@ def fetch_filings(symbol: str, on: date, lookback_sessions: int = 1,
         r = s.get(url, timeout=TIMEOUT)
         time.sleep(REQUEST_DELAY)
         if r.status_code != 200:
-            log.warning(f"{symbol}: announcements HTTP {r.status_code}")
-            return []
+            log.warning(f"{symbol}: announcements HTTP {r.status_code} — "
+                        f"filings NOT checked")
+            return None
         rows = r.json()
     except Exception as e:
-        log.warning(f"{symbol}: announcements failed ({type(e).__name__}: {e})")
-        return []
+        log.warning(f"{symbol}: announcements failed ({type(e).__name__}: {e}) "
+                    f"— filings NOT checked")
+        return None
     finally:
         if close_session:
             try:
@@ -182,8 +202,8 @@ def fetch_filings(symbol: str, on: date, lookback_sessions: int = 1,
 
     if not isinstance(rows, list):
         log.warning(f"{symbol}: announcements payload was "
-                    f"{type(rows).__name__}, not a list")
-        return []
+                    f"{type(rows).__name__}, not a list — filings NOT checked")
+        return None
 
     out = []
     for row in rows:
@@ -247,28 +267,32 @@ def select_primary(docs: list, on: date) -> dict | None:
 def attribute(symbol: str, on: date, cfg, session=None, docs=None) -> dict:
     """The cause block for a card.
 
-    -> {"cause_text", "cause_url", "cause_published_at", "cause_sourced",
-        "cause_doc", "documents", "checked"}
+    -> {"cause_state", "cause_text", "cause_url", "cause_published_at",
+        "cause_sourced", "cause_doc", "documents", "checked"}
 
-    cause_sourced is the field the page dims on, and it is True only when a
-    document was actually selected. checked distinguishes "asked NSE and found
-    nothing" from "could not ask" -- both render the same fixed sentence,
-    because in neither case do we know the cause, but the record keeps them
-    apart.
+    THREE STATES, AND THE TEXT FOLLOWS THE STATE:
+      found        a filing was selected; cause_text is its subject line
+      none_found   NSE answered and nothing usable came back; NO_CAUSE_TEXT
+      not_checked  NSE could not be asked; UNCHECKED_CAUSE_TEXT
+    `docs` may be passed in by a caller that already fetched them; None there
+    means the same as a failed fetch.
     """
     if docs is None:
         docs = fetch_filings(symbol, on,
                              lookback_sessions=cfg.filing_lookback_sessions,
                              session=session)
-        checked = bool(docs) or True        # the request was made
-    else:
-        checked = True
+    if docs is None:
+        return {"cause_state": CAUSE_NOT_CHECKED,
+                "cause_text": UNCHECKED_CAUSE_TEXT, "cause_url": None,
+                "cause_published_at": None, "cause_sourced": False,
+                "cause_doc": None, "documents": [], "checked": False}
 
     primary = select_primary(docs, on)
     if not primary:
-        return {"cause_text": NO_CAUSE_TEXT, "cause_url": None,
+        return {"cause_state": CAUSE_NONE_FOUND,
+                "cause_text": NO_CAUSE_TEXT, "cause_url": None,
                 "cause_published_at": None, "cause_sourced": False,
-                "cause_doc": None, "documents": docs or [], "checked": checked}
+                "cause_doc": None, "documents": docs, "checked": True}
 
     # THE CAUSE TEXT IS THE FILING'S OWN SUBJECT LINE, lightly trimmed. Not a
     # summary, not a rewrite, not a sentence built around it -- any of which
@@ -276,22 +300,25 @@ def attribute(symbol: str, on: date, cfg, session=None, docs=None) -> dict:
     # the rest.
     text = (primary.get("title") or primary.get("body") or "").strip()
     text = " ".join(text.split())[:280]
-    return {"cause_text": text,
+    return {"cause_state": CAUSE_FOUND,
+            "cause_text": text,
             "cause_url": primary.get("url"),
             "cause_published_at": primary.get("published_at"),
             "cause_sourced": True,
             "cause_doc": primary,
             "documents": docs,
-            "checked": checked}
+            "checked": True}
 
 
 def had_recent_filing(symbol: str, on: date, cfg, session=None) -> bool:
-    """The scanner's flag: any filing inside filing_lookback_sessions.
+    """The scanner's flag: True / False, or None when NSE could not be asked.
 
     A FLAG, NOT A CAUSE. The scanner makes no claim about why price is where it
-    is; this only says a document exists to go and read.
+    is; this only says a document exists to go and read. None is not False --
+    radar_scanner_daily.filing_recent is NOT NULL today, so the caller has to
+    decide what to store; see OPEN.md.
     """
     docs = fetch_filings(symbol, on,
                          lookback_sessions=cfg.filing_lookback_sessions,
                          session=session)
-    return bool(docs)
+    return None if docs is None else bool(docs)

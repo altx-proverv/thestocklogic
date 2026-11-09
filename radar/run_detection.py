@@ -168,13 +168,24 @@ def run(on: date | None = None, dry: bool = False, use_table: bool = True,
     if fetch_filings and scan_rows:
         try:
             sess = documents._session()
+            unknown = []
             for r in scan_rows:
                 try:
-                    r["filing_recent"] = documents.had_recent_filing(
+                    fr = documents.had_recent_filing(
                         r["symbol"], on, cfg, session=sess)
                 except Exception as e:
                     log.warning(f"{r['symbol']}: filing flag failed ({e})")
-                    r["filing_recent"] = False
+                    fr = None
+                # filing_recent IS NOT NULL in radar_scanner_daily, so an
+                # unknown is stored as False -- which hides the pill and claims
+                # nothing in words, but is not the truth. Counted and logged
+                # until the column can hold NULL (OPEN.md).
+                if fr is None:
+                    unknown.append(r["symbol"])
+                r["filing_recent"] = bool(fr)
+            if unknown:
+                log.warning(f"filings NOT checked for {len(unknown)} scanner "
+                            f"row(s), stored as False: {', '.join(unknown[:20])}")
         except Exception as e:
             log.warning(f"NSE session unavailable ({e}) — filing flags are "
                         f"all False and the page should be read that way")
@@ -280,9 +291,11 @@ def run(on: date | None = None, dry: bool = False, use_table: bool = True,
                 except store.StoreUnavailable as e:
                     log.error(f"{r['symbol']}: documents not written ({e})")
         else:
-            cause = {"cause_text": documents.NO_CAUSE_TEXT, "cause_url": None,
-                     "cause_published_at": None, "cause_sourced": False,
-                     "checked": False, "documents": []}
+            # --no-filings ASKED NOTHING, so it may not say "none found".
+            cause = {"cause_state": documents.CAUSE_NOT_CHECKED,
+                     "cause_text": documents.UNCHECKED_CAUSE_TEXT,
+                     "cause_url": None, "cause_published_at": None,
+                     "cause_sourced": False, "checked": False, "documents": []}
         n_sourced += 1 if cause.get("cause_sourced") else 0
 
         srow = bars.session_row(r["symbol"], ed)

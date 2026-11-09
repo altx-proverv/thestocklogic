@@ -1740,10 +1740,18 @@ function eventSessions(){
   return dates.sort().reverse();
 }
 
+/* THE CAUSE COMES FROM THE CARD'S OWN q01.why, in one of three states:
+   found (the filing's subject line, linked), none_found (we asked NSE and
+   nothing came back) or not_checked (we could not ask). This read
+   payload.summary / headline / note, which no radar card has ever carried, so
+   every event -- including the ones citing a filing -- printed "No disclosed
+   trigger found". With no why block at all the card says nothing about the
+   cause rather than claiming an absence. */
 function eventCard(ev){
   var pl=ev.payload||{};
-  var url=pl.source_url||pl.url||pl.link||'';
-  var line=pl.summary||pl.headline||pl.note||'';
+  var why=(pl.q01&&pl.q01.why)||{};
+  var line=why.cause_text||'';
+  var url=(why.sourced===true&&why.cause_url)?why.cause_url:'';
   return '<div class="ev"><div class="ev-h">'+
     '<span class="ev-s">'+esc(ev.symbol)+'</span>'+
     '<span class="badge">'+esc(ev.trigger_type||'event')+'</span>'+
@@ -1751,9 +1759,8 @@ function eventCard(ev){
       ? '<span class="ev-p fig" style="color:'+sign(ev.move_pct)+'">'+
         pct(ev.move_pct)+'</span>' : '')+
     '</div>'+
-    (line?'<div class="ev-x">'+esc(line)+'</div>':
-      '<div class="ev-x">No disclosed trigger found.</div>')+
-    (url?'<div class="ev-src">'+extLink(url,pl.source||'Primary document')+
+    (line?'<div class="ev-x">'+esc(line)+'</div>':'')+
+    (url?'<div class="ev-src">'+extLink(url,'Exchange filing')+
       '</div>':'')+'</div>';
 }
 

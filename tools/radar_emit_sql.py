@@ -201,9 +201,10 @@ def main() -> int:
                     f"{q(d.get('title'))}, {q(d.get('body'))}, "
                     f"{q(d.get('category'))}, {q(d['text_hash'])})")
         else:
-            cause = {"cause_text": documents.NO_CAUSE_TEXT, "cause_url": None,
-                     "cause_published_at": None, "cause_sourced": False,
-                     "checked": False, "documents": []}
+            cause = {"cause_state": documents.CAUSE_NOT_CHECKED,
+                     "cause_text": documents.UNCHECKED_CAUSE_TEXT,
+                     "cause_url": None, "cause_published_at": None,
+                     "cause_sourced": False, "checked": False, "documents": []}
 
         srow = bars.session_row(r["symbol"], ed)
         ev = dict(r)

@@ -135,10 +135,13 @@ def main() -> int:
     check("PAUSED is still the only halting mode",
           tuple(HALT_MODES) == ("PAUSED",))
     # A retired mode left in atlas_state must not surface as if it still existed.
-    norm_ok = all(normalise_mode(g) == DEFAULT_AGENT_MODE
+    # RULING CHANGED 2026-11-09 (OPEN D-016): it reads UNKNOWN and permits no
+    # entry -- it used to become NORMAL, which let a stray value lift a pause.
+    from atlas.reporting.directives import entries_permitted
+    norm_ok = all(normalise_mode(g) == "UNKNOWN" and not entries_permitted(g)
                   for g in ("AGGRESSIVE", "CAUTIOUS", "DEFENSIVE", "garbage",
                             "", None))
-    check("a retired mode in the DB normalises to NORMAL", norm_ok)
+    check("a retired or unknown mode reads UNKNOWN and permits no entry", norm_ok)
     check("PAUSED survives normalisation", normalise_mode("PAUSED") == "PAUSED")
     # and the retired commands say so rather than falling through to "unknown"
     for cmd in ("/aggressive", "/cautious", "/defensive"):

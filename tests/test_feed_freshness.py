@@ -446,6 +446,10 @@ GATED = {
 EXEMPT = {
     "atlas/execution/atlas_entry.py":
         "writes atlas_trades on a real fill; market_open gates the session above it",
+    "atlas/execution/order_events.py":
+        "order_path_events records what the order path just refused or "
+        "substituted, on whatever day it ran -- a record, not a session claim; "
+        "its callers own the gate",
     "atlas/execution/preclose_gtt.py":
         "already gates, and is an EXIT path -- must run whatever the calendar says",
     "atlas/execution/reconcile.py":

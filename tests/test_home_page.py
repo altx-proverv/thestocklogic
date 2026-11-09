@@ -229,8 +229,15 @@ def main() -> int:
     check("the three new tables say when they first fill",
           ("first reading at 08:45" in html
            and html.count("starts filling at 09:45") >= 2), True)
-    check("a missing disclosure says so",
-          "No disclosed trigger found" in html, True)
+    # RULING CHANGED 2026-11-09 (OPEN D-048): the page renders the CARD'S
+    # cause in its own state -- found / none found / could not check -- and
+    # authors no absence sentence itself. It used to hard-code "No disclosed
+    # trigger found", which printed on all 58 cards, 54 of them citing a filing.
+    # Behaviour is tested in node by tests/test_cause_states.py.
+    check("the event card renders the card's own cause",
+          "why.cause_text" in html, True)
+    check("  and hard-codes no absence sentence",
+          "'<div class=\"ev-x\">No disclosed trigger found.</div>'" in html, False)
     check("both stale labels exist",
           ("NEW LISTING / building history" in html
            and "INVESTIGATE / no data" in html), True)
