@@ -396,8 +396,6 @@ MAILTO=""
 # 14:20 UTC = 19:50 IST, after radar (done by ~13:52) and the chain (~13:18).
 # A quiet day still sends one line; silence means the job did not run.
 20 14 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.volume_alerts >> /home/ubuntu/thestocklogic/reports/volume_alerts.log 2>&1
-# EXIT ALARMS, DAY AND NIGHT (atlas/execution/exit_alarms.py, OPEN D-058). Every
-# 30 minutes, every day, market open or not: one message listing every exit-side
-# alarm (unprotected position, unreadable fill, unchecked orphan triggers) that a
-# human has not cleared with /ack. Nothing clears itself. Heartbeat every run.
-*/30 * * * * cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m atlas.execution.exit_alarms >> /home/ubuntu/thestocklogic/reports/exit_alarms.log 2>&1
+# EXIT ALARMS (OPEN D-058): no overnight repeat -- removed 2026-11-10 by
+# decision. Outstanding alarms appear in the 19:50 IST volume_alerts message;
+# immediate alerts come from the engine during market hours.

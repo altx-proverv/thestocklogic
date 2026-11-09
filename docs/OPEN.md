@@ -212,6 +212,7 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-058 · Every "alert until a human acts" stops at the close (found by the new rule 3)
 - **Status** open · **Evidence** VERIFIED: the repeating alerts -- market_open.alert's 900 s cooldown, the protection register's 900 s repeat, D-022's per-reconcile alert -- all live in the market-hours engine, which exits 09:50 UTC. preclose_gtt's PRECLOSE HANDOVER FAILED is sent once. An unprotected overnight CNC position therefore stops being alerted at the close. The old rule ("fails closed") never asked about an exit's alert lifetime; "alert without stopping until a human acts" does.
+- **2026-11-10, by decision:** overnight 30-minute repeat removed after it was seen working (message_id 6467, 18:30 UTC 9 Nov). Box crontab 47→46 jobs, 19 credential lines identical; PROOF-202611092350 acked. Outstanding alarms now appear only in the 19:50 IST message; immediate alerts during market hours.
 
 ### D-059 · broker.place_order's docstring says EXIT is always permitted; its kill switch blocks any intent
 - **Status** open (latent) · **Evidence** VERIFIED: the kill-switch call is at function level, after the `intent != "EXIT"` block, so a PAUSED or unreadable state would block an exit. No current exit calls broker.place_order (exits use kite.place_order directly; place_sl_order is only reached from dead trade_management.py). Found by the new rule. Not changed: it is the order-placing function.

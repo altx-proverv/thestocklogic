@@ -19,20 +19,20 @@ THE REGISTER. One file, ATLAS_EXIT_ALARM_FILE (default
                     checked because the GTT list was unreadable (exits)
 Raising is idempotent per key.
 
-THE NIGHT. `python -m atlas.execution.exit_alarms` runs from cron every 30
-minutes, every day, market open or not. Each run sends ONE message listing
-every alarm not yet cleared. It repeats on every run -- nothing ages out,
-nothing clears itself.
+WHERE IT IS SEEN (decided 2026-11-10). There is NO overnight repeat: the
+30-minute cron line was installed, proven (message_id 6467, 2026-11-09 18:30
+UTC) and removed by decision. Outstanding alarms appear in the 19:50 IST
+engine/volume_alerts message (daily_line); immediate alerts come from the
+engine during market hours. `python -m atlas.execution.exit_alarms` still
+sends the list once if run by hand.
 
 HOW A HUMAN CLEARS ONE. Telegram: `/alarms` lists them with their ids;
 `/ack <id>` clears one; `/ack all` clears every one. On the box:
 `python -m atlas.execution.exit_alarms --ack <id|all>`. A clear records who
-and when; the alarm stays in the file as history and is never sent again.
+and when; the alarm stays in the file as history and is never shown again.
 
-IF NOBODY EVER CLEARS IT. It fires every 30 minutes for ever. After 24 hours
-the message is headed UNACKNOWLEDGED FOR 24h+. Even a condition that looks
-resolved (a stop now confirmed) keeps firing until it is acknowledged: being
-told twice is cheaper than not being told.
+IF NOBODY EVER CLEARS IT. It stays in the 19:50 IST message every weekday.
+Nothing ages out or clears itself.
 
 SILENCE IS DISTINGUISHABLE. Every run writes a heartbeat line, alarms or not,
 and engine/volume_alerts' daily message carries "Exit alarms: N outstanding"
@@ -162,7 +162,7 @@ def message(alarms: list, now=None) -> str:
                      f" — {e(a['why'][:200])} (raised {e(a['raised_at'][:16])}, "
                      f"{int(age.total_seconds() // 3600)}h ago, sent {a.get('sent', 0)}x)")
     lines.append("Reply <code>/ack &lt;id&gt;</code> when handled, or "
-                 "<code>/ack all</code>. Repeats every 30 minutes, day and night, "
+                 "<code>/ack all</code>. Listed in the 19:50 IST message "
                  "until acknowledged.")
     return "\n".join(lines)
 
