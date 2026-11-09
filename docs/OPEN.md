@@ -246,6 +246,11 @@ Rule: a failed read must never return the same value as a successful empty read 
 ### D-066 · The box deploys main without running the suite (D4)
 - **Status** open · Bit twice in two days: test_page_claims red from 71f1b3d to b05196a (D-061), and nine suites written 2026-11-09/10 never registered in run_all (fixed in 4dbb3b4, with a check that fails run_all on an unregistered test). Nothing gates the five-minute `git reset --hard origin/main` on a green suite.
 
+
+### D-067 · Stored daily prices are not adjusted for splits, bonuses or demergers
+- **Status** open · **Found** 2026-11-10 · not fixed
+- **Evidence** VERIFIED: data/processed/smc/*.parquet close series show 43 universe symbols with a one-day move below -40% or above +80% since 2025-07-01 (ANGELONE -90% 2026-02-26, KOTAKBANK -80% 2026-01-14, VEDL -65% 2026-04-30, CONCORDBIO -47% 2026-11-04, ...). Effects seen: a split inside the last 20 sessions inflates ATR (CONCORDBIO 20-day ATR 13.9% of price, putting an ATR tranche 3 at -41.7%); a split inside 252 sessions makes the post-split price look "near the 52-week low"; any price-ratio scaling of a market cap breaks. Zones, ATR, 52-week levels and any rvol/price feature computed across the date read the same series. Scope of downstream damage not measured.
+
 ---
 
 ## 3. OPEN QUESTIONS — waiting on data
