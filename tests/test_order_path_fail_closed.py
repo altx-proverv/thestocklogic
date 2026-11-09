@@ -199,12 +199,16 @@ finally:
 check("  and is recorded as CHECK_SKIPPED",
       any(e["code"] == "SYMBOL_BLOCK_UNREADABLE" and e["event"] == "CHECK_SKIPPED"
           for e in events()), True)
-check("an unknown mode still reads NORMAL", DIR.normalise_mode("PAUSE"), "NORMAL")
-check("  and is recorded as SUBSTITUTED",
-      any(e["code"] == "MODE_DEFAULTED" for e in events()), True)
+# RULING CHANGED 2026-11-09 (OPEN D-016): an unrecognised mode is UNKNOWN and
+# stops entries; it is no longer a NORMAL substitute. Repointed, not loosened.
+check("an unknown mode reads UNKNOWN, not NORMAL", DIR.normalise_mode("PAUSE"), "UNKNOWN")
+check("  and is recorded as REFUSED",
+      any(e["code"] == "MODE_UNRECOGNISED" and e["event"] == "REFUSED"
+          for e in events()), True)
+check("  and does not permit an entry", DIR.entries_permitted("PAUSE"), False)
 check("a known mode is not recorded", DIR.normalise_mode("PAUSED"), "PAUSED")
-check("  (one MODE_DEFAULTED row, not two)",
-      len([e for e in events() if e["code"] == "MODE_DEFAULTED"]), 1)
+check("  (one MODE_UNRECOGNISED row, not two)",
+      len([e for e in events() if e["code"] == "MODE_UNRECOGNISED"]), 1)
 
 print("\nA SIGNAL WITH NO DIRECTION, AND AN ESTIMATED MARGIN, ARE RECORDED")
 src = Path(ROOT / "atlas/execution/atlas_entry.py").read_text()

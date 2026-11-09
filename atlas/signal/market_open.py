@@ -764,7 +764,15 @@ def paused() -> tuple:
         return True, f"agent state unreadable — treating as paused ({e})"
     except Exception as e:
         return True, f"agent state unreadable — treating as paused ({e})"
-    mode = str(state.get("mode", "")).upper()
+    mode = str(state.get("mode") or "").strip().upper()
+    from atlas.reporting.directives import entries_permitted
+    if mode != "PAUSED" and not entries_permitted(mode):
+        # NOT PAUSED, AND NOT NORMAL EITHER. This returned "not paused" for any
+        # value other than exactly PAUSED -- NULL, "", "PAUSE", "HALT" -- and
+        # the kill switch mapped the same values to NORMAL, so a stray write to
+        # the mode lifted the operator's pause. Only NORMAL permits entries.
+        return True, (f"agent mode {mode or 'EMPTY'!r} is not NORMAL — treated "
+                      f"as paused")
     if mode == "PAUSED":
         # NAME WHAT SET IT. This returned the literal "operator PAUSED" for any
         # PAUSED mode, whatever wrote the row -- and three things write it. On

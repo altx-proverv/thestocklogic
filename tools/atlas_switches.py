@@ -108,14 +108,14 @@ def _halt_file():
 
 def _agent_mode():
     try:
-        from atlas.reporting.directives import get_agent_state, mode_source
-        from atlas.config import HALT_MODES
+        from atlas.reporting.directives import (get_agent_state, mode_source,
+                                                entries_permitted)
         st = get_agent_state()
         mode = str(st.get("mode", "")).upper()
         src, detail = mode_source(st)
         when = str(st.get("updated_at") or "")[:19].replace("T", " ")
         return _row("atlas_state.mode", "Supabase atlas_state id=1", mode,
-                    mode in HALT_MODES, "yes (remote)",
+                    not entries_permitted(st.get("raw_mode")), "yes (remote)",
                     f"set by {src} at {when or 'unknown time'}"
                     + (f" · {detail[:160]}" if detail else ""))
     except Exception as e:

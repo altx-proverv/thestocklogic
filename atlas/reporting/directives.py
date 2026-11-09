@@ -48,31 +48,39 @@ def get_updates(offset=None):
     return []
 
 
-def normalise_mode(mode: str) -> str:
-    """
-    Any mode outside AGENT_MODES becomes NORMAL.
+def entries_permitted(raw_mode) -> bool:
+    """THE ONLY MODE THAT PERMITS AN ENTRY IS EXACTLY "NORMAL".
 
-    CAUTIOUS, AGGRESSIVE and DEFENSIVE were retired, but an atlas_state row
-    written before that still carries one. Passing it through would report a mode
-    that no longer exists to /status and the daily report -- and, worse, one the
-    operator might read as still doing something. Only PAUSED halts, so anything
-    unrecognised is NORMAL by definition, not by assumption.
+    Everything else -- PAUSED, NULL, "", "PAUSE", "HALT", a retired mode, a
+    value with stray whitespace in the middle -- is stopped. This used to be the
+    other way round: only "PAUSED" stopped, and anything unrecognised became
+    NORMAL, so the operator's pause was one stray write away from trading. A
+    control that cannot be read as permitting is not satisfied.
+    """
+    return str(raw_mode or "").strip().upper() == "NORMAL"
+
+
+def normalise_mode(mode: str) -> str:
+    """For DISPLAY. Known modes pass through; anything else is UNKNOWN.
+
+    It returned NORMAL for anything unrecognised, which told /status and the
+    daily report that ATLAS could trade when the row said something nobody
+    wrote on purpose. UNKNOWN is not a mode anything can enter in -- see
+    entries_permitted(), which is what every gate uses.
     """
     m = (mode or "").strip().upper()
     if m in AGENT_MODES:
         return m
-    if m:
-        log.warning(f"atlas_state.mode is {m!r}, which is not one of "
-                    f"{AGENT_MODES} — reporting NORMAL. It was almost certainly "
-                    f"set before the retired modes were removed.")
-        try:
-            from atlas.execution.order_events import record as _rec
-            _rec("SUBSTITUTED", "directives.normalise_mode", None, "MODE_DEFAULTED",
-                 f"atlas_state.mode {m!r} is not a known mode; NORMAL (trading "
-                 f"allowed) was used", {"mode": m})
-        except Exception:
-            pass
-    return DEFAULT_AGENT_MODE
+    log.warning(f"atlas_state.mode is {m!r}, which is not one of {AGENT_MODES} "
+                f"— reporting UNKNOWN; entries are STOPPED until it is set")
+    try:
+        from atlas.execution.order_events import record as _rec
+        _rec("REFUSED", "directives.normalise_mode", None, "MODE_UNRECOGNISED",
+             f"atlas_state.mode {m!r} is not a known mode; entries stopped",
+             {"mode": m})
+    except Exception:
+        pass
+    return "UNKNOWN"
 
 
 # ── WHO SET THE MODE, AND WHEN ─────────────────────────────────────
@@ -122,21 +130,42 @@ def mode_line(state: dict) -> str:
 
 
 def get_agent_state():
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/atlas_state?limit=1&order=updated_at.desc",
-        headers=_headers()
-    )
-    if r.status_code == 200 and r.json():
-        row = dict(r.json()[0])
-        row["mode"] = normalise_mode(row.get("mode"))
-        return row
-    return {"mode": DEFAULT_AGENT_MODE, "id": 1}
+    """The atlas_state row. RAISES RiskDataUnavailable if it cannot be read.
+
+    It returned {"mode": "NORMAL"} on any failure, and /approve wrote that
+    mode back -- so an /approve sent during a Supabase blip turned the
+    operator's pause into NORMAL. A failed read is not a mode.
+    """
+    from atlas.risk.kill_switch import RiskDataUnavailable
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/atlas_state?limit=1&order=updated_at.desc",
+            headers=_headers(), timeout=10)
+    except Exception as e:
+        raise RiskDataUnavailable(f"agent state: {type(e).__name__}: {e}") from e
+    if r.status_code != 200:
+        raise RiskDataUnavailable(f"agent state: HTTP {r.status_code} {r.text[:150]}")
+    try:
+        rows = r.json()
+    except Exception as e:
+        raise RiskDataUnavailable(f"agent state: unreadable body ({e})") from e
+    if not rows:
+        raise RiskDataUnavailable("agent state: no atlas_state row exists")
+    row = dict(rows[0])
+    row["raw_mode"] = row.get("mode")
+    row["mode"] = normalise_mode(row.get("mode"))
+    return row
 
 
 def update_agent_mode(mode: str, notes: str = "") -> bool:
-    """Update agent mode in Supabase."""
-    state = get_agent_state()
-    state_id = state.get("id", 1)
+    """Update agent mode in Supabase. Only PAUSED and NORMAL are ever written."""
+    if mode not in AGENT_MODES:
+        log.error(f"refusing to write agent mode {mode!r}: not one of {AGENT_MODES}")
+        return False
+    try:
+        state_id = get_agent_state().get("id", 1)
+    except Exception:
+        state_id = 1          # the table holds one row, id 1
     r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/atlas_state?id=eq.{state_id}",
         headers=_headers(),
@@ -179,9 +208,19 @@ def handle_directive(text: str) -> str:
     # only bound on entries is live broker funds -- so
     # "Position size: 70% of normal" described a lever that does not exist.
     if text in ["/approve", "approve"]:
-        state = get_agent_state()
-        mode  = state.get("mode", DEFAULT_AGENT_MODE)
-        update_agent_mode(mode, f"Approved by directive at {now}")
+        # /approve NEVER CHANGES THE MODE. It used to re-write whatever mode it
+        # read -- and the read returned NORMAL on failure, so /approve during a
+        # Supabase blip lifted a pause. It now writes nothing: resuming is
+        # /normal, and only /normal.
+        try:
+            state = get_agent_state()
+        except Exception as e:
+            return (f"⚠️ <b>NOT APPROVED</b>\nAgent state could not be read "
+                    f"({e}). Nothing was changed; entries stay stopped.")
+        mode = state.get("mode")
+        if not entries_permitted(state.get("raw_mode")):
+            return (f"⏸ <b>STILL {mode}</b>\n/approve does not resume. "
+                    f"Send /normal to resume entries.")
         return (
             f"✅ <b>APPROVED</b>\n"
             f"Agent proceeds in <b>{mode}</b> mode\n"
@@ -193,7 +232,7 @@ def handle_directive(text: str) -> str:
         return (
             "⏸ <b>AGENT PAUSED</b>\n"
             "No new entries will be taken.\n"
-            "Send /approve or /normal to resume."
+            "Send /normal to resume. (/approve does not resume.)"
         )
 
     elif text.lstrip("/") in ("normal", "resume"):
@@ -236,9 +275,13 @@ def handle_directive(text: str) -> str:
         )
 
     elif text in ["/status", "status"]:
-        state = get_agent_state()
-        mode  = state.get("mode", DEFAULT_AGENT_MODE)
-        halted = " (HALTED)" if mode in HALT_MODES else ""
+        try:
+            state = get_agent_state()
+        except Exception as e:
+            return (f"📊 <b>ATLAS STATUS</b>\nMode:    UNREADABLE ({e}) — "
+                    f"entries are STOPPED until it can be read\nTime:    {now}")
+        mode  = state.get("mode")
+        halted = "" if entries_permitted(state.get("raw_mode")) else " (ENTRIES STOPPED)"
         return (
             f"📊 <b>ATLAS STATUS</b>\n"
             f"Mode:    {mode}{halted}\n"

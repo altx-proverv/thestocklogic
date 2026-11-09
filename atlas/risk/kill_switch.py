@@ -101,13 +101,13 @@ def check(signal: dict = None) -> KillSwitchResult:
     # reported as if it still existed. It cannot change the halt decision --
     # nothing retired was ever in HALT_MODES -- so this is display honesty, not
     # a safety change.
-    from atlas.reporting.directives import normalise_mode
-    mode    = normalise_mode(state.get("mode", DEFAULT_AGENT_MODE))
+    from atlas.reporting.directives import normalise_mode, entries_permitted
+    mode    = normalise_mode(state.get("mode"))
     details = {"data_available": True, "mode": mode}
 
     # CHECK 1 — the agent is halted. NOT NECESSARILY BY AN OPERATOR: this said
     # "by directive" unconditionally, and breaker.halt() writes the same mode.
-    if mode in HALT_MODES:
+    if mode in HALT_MODES or not entries_permitted(state.get("mode")):
         from atlas.reporting.directives import mode_source
         src, detail = mode_source(state)
         details["mode_source"] = src
@@ -164,11 +164,12 @@ def status() -> dict:
                 "halted": True,
                 "note": "agent state unreadable — check() will BLOCK all trades"}
 
-    from atlas.reporting.directives import normalise_mode
-    mode = normalise_mode(state.get("mode", DEFAULT_AGENT_MODE))
+    from atlas.reporting.directives import normalise_mode, entries_permitted
+    mode = normalise_mode(state.get("mode"))
     from atlas.reporting.directives import mode_source
     _src, _detail = mode_source(state)
-    out  = {"data_available": True, "mode": mode, "halted": mode in HALT_MODES,
+    out  = {"data_available": True, "mode": mode,
+            "halted": not entries_permitted(state.get("mode")),
             "mode_source": _src, "mode_detail": _detail[:300],
             "mode_set_at": str(state.get("updated_at") or "")[:19]}
 
