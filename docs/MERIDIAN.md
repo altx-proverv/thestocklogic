@@ -2,11 +2,15 @@
 
 **v2 · 28 Aug 2026 · runs parallel to ATLAS**
 
-> **STATUS — NOTHING HERE IS BUILT**
+> **STATUS (corrected 2026-11-10) — ONE PART IS BUILT AND RUNNING**
 >
-> No part of MERIDIAN exists in this repository. This document is design intent,
-> recorded so that future work has the context behind it. Every phase in §07 is
-> unstarted, Phase 0 included.
+> This banner used to say nothing here was built. That was false from 2 Oct
+> 2026: meridian/iv_recorder.py and meridian/fno_universe.py run from cron
+> twice each session (15:45 and 18:35 IST) and have written
+> meridian_iv_daily / meridian_iv_strikes / meridian_recorder_runs every
+> session since (27 sessions, 222 underlyings, all runs OK, as of 9 Nov).
+> Everything else below is design intent. MERIDIAN no longer places orders:
+> the F&O books are signal generators (operator, 2026-11-10).
 >
 > A backtesting engine is planned ahead of the build. It exists to answer
 > questions this design depends on rather than to validate the design itself —
