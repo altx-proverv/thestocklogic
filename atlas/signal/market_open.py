@@ -1354,6 +1354,13 @@ def cycle(state: Session) -> dict:
             if status.startswith("BLOCKED_"):
                 alert(status, f"{sym}: {result.get('reason','')}", key=sym)
 
+    # THE CYCLE'S LONG-BOOK REFUSALS, to the observation ledger in one call.
+    try:
+        from atlas.execution.long_pilot import flush_decisions
+        flush_decisions()
+    except Exception:
+        log.exception("long decisions not flushed")
+
     # AFTER THE ENTRY DECISIONS, deliberately. Reporting must never delay an
     # order, so the write is the last thing the cycle does -- and `entered` makes
     # a symbol filled moments ago show as held NOW rather than from the next

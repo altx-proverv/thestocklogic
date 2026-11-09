@@ -354,6 +354,20 @@ lines = "\n".join(SR.long_book_lines([{"id": 501, "symbol": "TESTSYM", "stop_pri
                                                           "average_price": 100.0}]), gtts=[]))
 check("  +15% is not flagged", "REACHED" in lines, False)
 
+print("\nREFUSALS TO THE LEDGER: QUEUED, BATCHED, ATTEMPTED ONCE")
+LP._ledgered.clear(); LP._pending.clear()
+calls = []
+for st in ("SKIPPED_SENTIMENT", "SKIPPED_SENTIMENT", "SKIPPED_REGIME"):
+    LP.ledger_decision(dict(SIG), {"status": st, "reason": "x"})
+LP.ledger_decision(dict(SIG, direction="SHORT"), {"status": "SKIPPED_REGIME"})
+check("one row per symbol per status; shorts not ledgered here", len(LP._pending), 2)
+check("flush writes them in ONE call", (LP.flush_decisions(lambda rows: calls.append(rows) or True), len(calls)), (2, 1))
+check("  each with price and source", all(r["computed_values"]["price_source"] for r in calls[0]), True)
+LP.ledger_decision(dict(SIG), {"status": "SKIPPED_SENTIMENT"})
+check("a refused write is NOT retried next cycle", (len(LP._pending), LP.flush_decisions(lambda r: False)), (0, 0))
+src = (ROOT / "atlas" / "signal" / "market_open.py").read_text()
+check("market_open flushes once per cycle", src.count("flush_decisions()"), 1)
+
 for n, v in saved.items():
     setattr(AE, n, v)
 if failures:

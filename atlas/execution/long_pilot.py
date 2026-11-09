@@ -38,7 +38,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 SOURCE = "atlas/execution/long_pilot.py"
 
 _preflight_ok: dict = {}        # session -> True once order_path_events read back
-_ledgered: set = set()          # (session, symbol, status) already sent this process
+_ledgered: set = set()          # (session, symbol, status) already ATTEMPTED this process
+_pending: list = []             # refusal rows queued this cycle, written by flush_decisions()
 
 
 def _now():
@@ -239,33 +240,55 @@ def record_intent(symbol, status, ltp, ltp_source, plan, stop, extra=None,
         return False
 
 
-def ledger_decision(signal: dict, result: dict, recorder=None) -> bool:
-    """Every long-book refusal with its reason, once per symbol per status per
-    session. Never raises; a refusal that cannot be ledgered is logged, and it
-    does not block anything -- no order is at stake for a refusal."""
+def ledger_decision(signal: dict, result: dict) -> bool:
+    """QUEUE a long-book refusal (status + reason + price + source) for the
+    ledger, once per symbol per status per session. Written by flush_decisions()
+    at the end of the cycle, in one batched call.
+
+    ATTEMPTED ONCE, NOT RETRIED EVERY CYCLE. The key is marked on queueing, so
+    a ledger that refuses (e.g. the atlas types not yet applied) costs one
+    batched attempt per new decision -- not 20-80 round trips per 60-second
+    cycle inside the entry loop. Never raises; nothing is blocked by a refusal
+    that cannot be ledgered -- no order is at stake for a refusal."""
     try:
         if str(signal.get("direction") or "").upper() != "LONG":
             return False
         status = str(result.get("status") or "?")
+        if status in ("WATCH_ONLY", "WOULD_ENTER", "ENTERED"):
+            return False            # the intent / entry rows are written on that path
         sym = signal.get("symbol")
         k = (_now().date().isoformat(), sym, status)
         if k in _ledgered:
             return False
-        from engine import observations as O
-        rec = recorder or O.record
+        _ledgered.add(k)
         ltp = signal.get("ltp")
-        row = _obs_row("atlas_decision", sym, ltp, {
+        _pending.append(_obs_row("atlas_decision", sym, ltp, {
             "status": status, "reason": str(result.get("reason") or "")[:500],
             "price": ltp, "price_source": "signal.ltp (Upstox batch, market_open)",
             "zone": [signal.get("entry_low"), signal.get("entry_high")],
-            "blocked_by": result.get("blocked_by")}, qualifier=status)
-        ok = bool(rec([row]))
-        if ok:
-            _ledgered.add(k)
-        return ok
+            "blocked_by": result.get("blocked_by")}, qualifier=status))
+        return True
     except Exception as e:
-        log.error(f"decision not ledgered: {e}")
+        log.error(f"decision not queued: {e}")
         return False
+
+
+def flush_decisions(recorder=None) -> int:
+    """Write the cycle's queued refusals in ONE ledger call. -> rows sent."""
+    global _pending
+    rows, _pending = _pending, []
+    if not rows:
+        return 0
+    try:
+        from engine import observations as O
+        ok = (recorder or O.record)(rows)
+        if not ok:
+            log.error(f"{len(rows)} long-book decision(s) not ledgered (refused); "
+                      f"not retried this session")
+        return len(rows) if ok else 0
+    except Exception as e:
+        log.error(f"decisions not ledgered ({e})")
+        return 0
 
 
 def plan_summary(plan: dict) -> dict:
