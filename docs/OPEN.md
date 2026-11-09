@@ -213,6 +213,7 @@ Rule: a failed read must never return the same value as a successful empty read 
 ### D-058 · Every "alert until a human acts" stops at the close (found by the new rule 3)
 - **Status** open · **Evidence** VERIFIED: the repeating alerts -- market_open.alert's 900 s cooldown, the protection register's 900 s repeat, D-022's per-reconcile alert -- all live in the market-hours engine, which exits 09:50 UTC. preclose_gtt's PRECLOSE HANDOVER FAILED is sent once. An unprotected overnight CNC position therefore stops being alerted at the close. The old rule ("fails closed") never asked about an exit's alert lifetime; "alert without stopping until a human acts" does.
 - **2026-11-10, by decision:** overnight 30-minute repeat removed after it was seen working (message_id 6467, 18:30 UTC 9 Nov). Box crontab 47→46 jobs, 19 credential lines identical; PROOF-202611092350 acked. Outstanding alarms now appear only in the 19:50 IST message; immediate alerts during market hours.
+- 2026-11-10 (b60ed50): the 19:50 IST message also runs Saturday (box crontab 1-5 -> 1-6, 46 jobs, 19 credentials identical), and its non-session line now carries the exit-alarm line -- before this, holidays dropped it. Saturday's first fire (14 Nov 14:20 UTC) is not yet observed.
 
 ### D-059 · broker.place_order's docstring says EXIT is always permitted; its kill switch blocks any intent
 - **Status** open (latent) · **Evidence** VERIFIED: the kill-switch call is at function level, after the `intent != "EXIT"` block, so a PAUSED or unreadable state would block an exit. No current exit calls broker.place_order (exits use kite.place_order directly; place_sl_order is only reached from dead trade_management.py). Found by the new rule. Not changed: it is the order-placing function.
@@ -226,12 +227,13 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-062 · test_data_rights is red on main and was before 2026-11-09
 - **Status** open · **Evidence** VERIFIED: fails at 2f6c91b; 21 datasets in use against 16 register rows (NSE announcements/XBRL/holiday master/sec_list, Upstox candles/instruments/option chain, Kite account data/instruments/quotes/ticker). Also: test_calendar_source fails on a dev machine whose holiday cache is older than 7 days (environment, not code).
-
+- 2026-11-10: rows added for the shareholding master and corporate XBRL (16 -> 14 missing).
 
 ### D-063 · Market cap: a licence question, not yet a data question
 - **Status** open — needs you (stopped here by instruction) · **Found** 2026-11-10
 - **Evidence** VERIFIED: every NSE row in compliance/data_rights.csv is "unconfirmed: rights request emailed to NSE; no reply on file" -- the daily bhavcopy included. The natural source of shares outstanding, NSE's shareholding-pattern master (api/corporate-share-holdings-master and the SHP XBRL it links), is already read by engine/tier1_fetch.py and has NO register row (D-062).
 - **Data side, for when the licence is settled:** tier1_sources.json keeps each quarter's SHP XBRL URL and its as-of date (RELIANCE: 30-SEP-2026); those filings state the total share count, which tier1_fetch does not parse today. Shares outstanding with an as-of date is therefore a small parse of files we already fetch -- not built.
+- **2026-11-10, route (a) built** (6f252b3): tier1_fetch stores the newest SHP filing's grand-total NumberOfShares (column VII, incl. shares under DRs) with quarter and filing date; never a market cap. Register rows added for the shareholding master and the XBRL, unconfirmed like the rest. VERIFIED on the box: 714/718 resolved, 701 from the Sep-30 quarter. Unresolved: ABBOTINDIA, BAYERCROP, MCX (master fetch returned nothing usable; cause not investigated), ICICIPRULI (no price parquet either, D-039 family). ALKEM and AVL newest filing is Jun-30: refused as stale. Cross-check total vs promoter shares/promoter %: 677/682 within 1%; INFY 0.916, INDUSINDBK 0.953, M&M/RELIANCE/USHAMART ~0.98 -- a different denominator in the promoter %, not gated on.
 
 ### D-064 · "The next two supports below price": near the 52-week low there usually are none
 - **Status** open — decision needed before sizing · **Found** 2026-11-10
@@ -250,6 +252,15 @@ Rule: a failed read must never return the same value as a successful empty read 
 ### D-067 · Stored daily prices are not adjusted for splits, bonuses or demergers
 - **Status** open · **Found** 2026-11-10 · not fixed
 - **Evidence** VERIFIED: data/processed/smc/*.parquet close series show 43 universe symbols with a one-day move below -40% or above +80% since 2025-07-01 (ANGELONE -90% 2026-02-26, KOTAKBANK -80% 2026-01-14, VEDL -65% 2026-04-30, CONCORDBIO -47% 2026-11-04, ...). Effects seen: a split inside the last 20 sessions inflates ATR (CONCORDBIO 20-day ATR 13.9% of price, putting an ATR tranche 3 at -41.7%); a split inside 252 sessions makes the post-split price look "near the 52-week low"; any price-ratio scaling of a market cap breaks. Zones, ATR, 52-week levels and any rvol/price feature computed across the date read the same series. Scope of downstream damage not measured.
+
+
+### D-068 · Long-equity sizing rule built, not wired to entry
+- **Status** built 2026-11-10 (b60ed50) · wiring into atlas_entry not started -- needs your go, it is the order path
+- atlas/sizing.py; tests/test_long_sizing.py (8 mutants caught). Universe on 2026-11-09: 681/718 sized, 37 refused (28 history_discontinuity, 3 no share count, 2 stale count, 2 split after the count, 1 no parquet, MRF at Rs 1 cr capital buys no share).
+- **Open questions it raises:** total capital is not in config (demo used Rs 1 cr); "70% max deployed" read as 70% of the long book; supports are capped at 15% below price by the zone rules, so a deep T3 support beyond that is never used.
+
+### D-069 · TDPOWERSYS: NSE's own bhavcopy disagrees with itself
+- **Status** open · **Found** 2026-11-10 · VERIFIED: cm06Nov2026bhav.csv ClsPric 576.50; cm09Nov2026bhav.csv PrvsClsgPric 609.85 (5.8% apart, under the 15% feed-continuity tolerance so unflagged). Cause unknown. Its 8.3% ATR is real (5-6 Nov fell -8.1% and -13.9% on ~4x volume); it is refused by sizing anyway (24-Aug split inside 252 sessions).
 
 ---
 
