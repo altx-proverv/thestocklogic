@@ -60,10 +60,28 @@ IST = timezone(timedelta(hours=5, minutes=30))
 RAW_DIR = ROOT / "data" / "raw" / "fo_bhavcopy"
 PARQUET_DIR = ROOT / "data" / "processed" / "fo"
 HEARTBEAT = RAW_DIR / "_heartbeat.json"
-URL = ("https://nsearchives.nseindia.com/content/fo/"
-       "BhavCopy_NSE_FO_0_0_0_{ymd}_F_0000.csv.zip")
-UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/120 Safari/537.36")
+# THE CURRENT FILENAME, on jugaad-data's own F&O route (operator, 2026-11-10,
+# OPEN D-078). jugaad's bhavcopy_fo_raw still points at NSE's pre-2024 name
+# (content/historical/DERIVATIVES/.../foDDMMMYYYYbhav.csv.zip), which no longer
+# exists. Only the route is replaced: the session, its headers and the request
+# are the library's own -- the same library and site the box already uses for
+# the equity bhavcopy. No request is hand-crafted here and no header is varied.
+FO_ROUTE = "/content/fo/BhavCopy_NSE_FO_0_0_0_{yyyy}{mm}{dd}_F_0000.csv.zip"
+
+
+def _archives():
+    from jugaad_data.nse.archives import NSEArchives
+
+    class _FOArchives(NSEArchives):
+        def __init__(self):
+            super().__init__()
+            self._routes["bhavcopy_fo"] = FO_ROUTE
+
+        def bhavcopy_fo_raw(self, dt):
+            # jugaad's own method, with mm added: the 2024+ name is YYYYMMDD.
+            return self.get("bhavcopy_fo", yyyy=dt.year, mm=dt.strftime("%m"),
+                            dd=dt.strftime("%d"), MMM=dt.strftime("%b").upper())
+    return _FOArchives()
 REQUIRED = ("TradDt", "FinInstrmTp", "TckrSymb", "XpryDt", "StrkPric", "OptnTp",
             "OpnPric", "HghPric", "LwPric", "ClsPric", "SttlmPric", "UndrlygPric",
             "OpnIntrst", "ChngInOpnIntrst", "TtlTradgVol", "TtlTrfVal", "NewBrdLotQty")
@@ -106,18 +124,15 @@ def have(d: date) -> bool:
     return parquet_path(d).exists() and csv_path(d).exists()
 
 
-def fetch(d: date, session=None) -> dict:
+def fetch(d: date, archives=None) -> dict:
     """Fetch, validate and store one session. Idempotent. Never raises."""
     if have(d):
         return {"date": d.isoformat(), "ok": True, "status": "already held"}
-    import requests
-    s = session or requests.Session()
-    s.headers.setdefault("User-Agent", UA)
-    url = URL.format(ymd=d.strftime("%Y%m%d"))
     last = None
     for attempt in range(RETRIES + 1):
         try:
-            r = s.get(url, timeout=60)
+            arch = archives or _archives()
+            r = arch.bhavcopy_fo_raw(d)
             if r.status_code == 404:
                 return {"date": d.isoformat(), "ok": False, "status": "not published (HTTP 404)"}
             if r.status_code != 200:

@@ -57,10 +57,11 @@ class R:
 
 
 class S:
+    """Stands in for jugaad-data's NSEArchives: only bhavcopy_fo_raw is called."""
     def __init__(self, resp):
-        self.resp, self.calls, self.headers = resp, 0, {}
+        self.resp, self.calls = resp, 0
 
-    def get(self, url, timeout=None):
+    def bhavcopy_fo_raw(self, dt):
         self.calls += 1
         return self.resp
 
@@ -68,21 +69,30 @@ class S:
 D = date(2026, 11, 9)
 print("\nSTORED ONLY WHEN THE FILE IS WHAT IT CLAIMS")
 s = S(R(200, zipped(csv_for("2026-11-11"))))
-r = F.fetch(D, session=s)
+r = F.fetch(D, archives=s)
 check("a file whose own TradDt is another day is REJECTED", (r["ok"], "misdated" in r["status"]), (False, True))
 check("  and nothing is stored", F.have(D), False)
-r = F.fetch(D, session=S(R(200, zipped(csv_for("2026-11-09", drop="NewBrdLotQty")))))
+r = F.fetch(D, archives=S(R(200, zipped(csv_for("2026-11-09", drop="NewBrdLotQty")))))
 check("a file missing a required column (lot size) is REJECTED", (r["ok"], "NewBrdLotQty" in r["status"]), (False, True))
-r = F.fetch(D, session=S(R(404)))
+r = F.fetch(D, archives=S(R(404)))
 check("404 is 'not published', not a crash", r["status"], "not published (HTTP 404)")
-r = F.fetch(D, session=S(R(200, b"<html>error page</html>")))
+r = F.fetch(D, archives=S(R(200, b"<html>error page</html>")))
 check("an error page is not a file", r["ok"], False)
 s = S(R(200, zipped(csv_for("2026-11-09"))))
-r = F.fetch(D, session=s)
+r = F.fetch(D, archives=s)
 check("a good file is stored (raw CSV + parquet)", (r["ok"], F.have(D)), (True, True))
 check("  with a summary of what is in it", r["summary"]["contracts"], 3)
 s2 = S(R(200, zipped(csv_for("2026-11-09"))))
-check("a second fetch is a no-op, no request", (F.fetch(D, session=s2)["status"], s2.calls), ("already held", 0))
+check("a second fetch is a no-op, no request", (F.fetch(D, archives=s2)["status"], s2.calls), ("already held", 0))
+
+print("\nTHE LIBRARY'S OWN ROUTE, WITH ONLY THE FILENAME CHANGED")
+A = F._archives()
+check("the F&O route is the 2024+ UDiFF name", A._routes["bhavcopy_fo"], F.FO_ROUTE)
+check("the session and headers are jugaad-data's own (subclass of NSEArchives)",
+      type(A).__mro__[1].__name__, "NSEArchives")
+check("no hand-crafted request in the module",
+      ("requests.get(" not in (ROOT / "engine/fo_bhavcopy.py").read_text()
+       and "requests.Session(" not in (ROOT / "engine/fo_bhavcopy.py").read_text()), True)
 
 print("\nEVERY RUN LEAVES A HEARTBEAT; A FAILED SESSION ALERTS")
 import engine.trading_calendar as TC                            # noqa: E402
@@ -92,7 +102,7 @@ sent = []
 check("holiday: exit 0, nothing fetched", F.run(date(2026, 11, 10), sender=sent.append), 0)
 hb = json.loads(F.HEARTBEAT.read_text())
 check("  and a heartbeat saying so", hb["result"]["status"], "not an NSE session")
-F.fetch = lambda d, session=None: {"date": d.isoformat(), "ok": False, "status": "FAILED: HTTP 503"}
+F.fetch = lambda d, archives=None: {"date": d.isoformat(), "ok": False, "status": "FAILED: HTTP 503"}
 check("a session whose file cannot be got: exit 1", F.run(date(2026, 11, 11), sender=sent.append), 1)
 check("  and a Telegram alert naming it", len(sent) == 1 and "NOT STORED" in sent[0], True)
 check("  and a heartbeat recording the failure",
