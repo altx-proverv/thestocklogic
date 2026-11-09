@@ -201,7 +201,8 @@ def tranche_rows(getter=None):
         import requests
         get = getter or requests.get
         r = get(f"{url}/rest/v1/atlas_trades?sizing_basis=eq.{LONG_PILOT_SIZING_BASIS}"
-                f"&exit_legs=not.is.null&select=id,symbol,status,exit_legs",
+                f"&exit_legs=not.is.null&select=id,symbol,status,qty,entry_price,"
+                f"order_id,entry_date,exit_legs",
                 headers=_hdr(key), timeout=10)
         if r.status_code != 200:
             return None
@@ -335,6 +336,12 @@ def after_fill(row_id, symbol, intent, plan, avg_price, filled_qty, stop,
     tr = TR.place(row_id, symbol, plan["tranches"], last_price, kite=kite)
     legs = dict(tr["legs"])
     legs["published_only"] = True
+    # T1'S OWN FILL, KEPT FOR EVER. entry_price and qty on the row become the
+    # BLENDED position (sync_ladder, every cycle); these say what T1 was, so
+    # "did the ladder work" stays answerable after averaging.
+    legs.update({"t1_fill_price": round(float(avg_price), 4), "t1_qty": int(filled_qty),
+                 "t1_filled_at": _now().isoformat(timespec="seconds"),
+                 "t1_order_id": intent.get("order_id")})
     intent.update({"entry_price": round(avg_price, 2), "qty": filled_qty,
                    "target_price": target, "stop_confirmed": False,
                    "target_confirmed": False, "exit_legs": legs,
@@ -365,3 +372,191 @@ def after_fill(row_id, symbol, intent, plan, avg_price, filled_qty, stop,
           + (f" — {'; '.join(tr['failed'])}" if tr["failed"] else "") + ".")
     return {"status": "ENTERED", "recorded": ok, "trade_id": row_id,
             "tranches_placed": tr["placed"], "tranche_failures": tr["failed"], **intent}
+
+
+# ── THE LADDER, EVERY CYCLE: THE ROW FOLLOWS THE BROKER ───────────
+#
+# WHY (operator, 2026-11-10, OPEN D-075). The row kept T1's quantity and price
+# for ever; T2/T3 fills never touched it, so realised P&L on an averaged
+# position counted T1 alone -- a position averaged down and exited at +16% on
+# blended cost could book a LOSS. The pilot exists to collect evidence, and
+# that was fiction on the exact mechanism the mandate rests on.
+#
+# WHAT IT DOES, per open long-pilot row:
+#   * qty and entry_price <- the broker's position and BLENDED cost, via
+#     tranches.position_from -- the one definition the +16% flag and the 15:50
+#     report already use. T1's own fill stays in exit_legs (t1_*).
+#   * every T2/T3 fill is recorded AS ITS OWN EVENT -- price, quantity,
+#     timestamp, % below T1, days after T1 -- in the observation ledger
+#     (atlas_decision, status T2_FILLED / T3_FILLED) and on the row
+#     (exit_legs t2_fill_* / t3_fill_*). A blended average says what the
+#     position made; only these say whether the ladder worked.
+#
+# WHERE A FILL'S PRICE COMES FROM, IN ORDER:
+#   1. today's order book: a COMPLETE CNC BUY in the symbol that is not T1's
+#      order and not already recorded -- the exchange's own average price and
+#      timestamp. Tranches are assigned in time order, T2 before T3 (price
+#      falls through T2 first).
+#   2. if the fill is not in today's book (the engine was not running when it
+#      filled), DERIVED from the change in the broker's blended cost:
+#      (new_qty x new_avg - old_qty x old_avg) / added_qty, labelled as
+#      derived, with the detection time -- never presented as the fill time.
+#
+# REFUSES TO SYNC, AND SAYS SO, when the broker holds MORE shares than the
+# ladder could ever have bought (T1 + T2 + T3): another lot in the same symbol
+# -- the operator's own -- would make the broker's average something other
+# than this position's cost. Unreadable books sync nothing.
+
+def _patch_row(row_id, fields, patcher=None) -> bool:
+    url, key = _svc()
+    try:
+        import requests
+        f = patcher or requests.patch
+        r = f(f"{url}/rest/v1/atlas_trades?id=eq.{row_id}",
+              headers=_hdr(key, {"Prefer": "return=minimal"}), json=fields, timeout=10)
+        return r.status_code in (200, 204)
+    except Exception as e:
+        log.error(f"trade {row_id} not patched ({e})")
+        return False
+
+
+def _ts(v):
+    try:
+        return datetime.fromisoformat(str(v)).replace(tzinfo=IST) if v and "+" not in str(v) \
+            else datetime.fromisoformat(str(v))
+    except Exception:
+        return None
+
+
+def sync_ladder(rows: list, kite, alert=None, ledger=None, patcher=None, now=None) -> dict:
+    """Bring each open long-pilot row to the broker's position. Never raises."""
+    from atlas.execution import tranches as TR
+    out = {"synced": 0, "fills": [], "alerts": []}
+    rows = [r for r in rows or [] if str(r.get("status") or "").upper() == "OPEN"]
+    if not rows:
+        return out
+    now = now or _now()
+    net, hold = TR.read_books(kite)
+    if net is None:
+        out["alerts"].append("ladder sync skipped: positions/holdings unreadable")
+        return out
+    try:
+        book = kite.orders()
+    except Exception as e:
+        book = None
+        out["alerts"].append(f"order book unreadable ({e}) — any new fill is DERIVED from blended cost")
+    for r in rows:
+        try:
+            _sync_one(r, net, hold, book, now, out, ledger, patcher)
+        except Exception as e:
+            out["alerts"].append(f"{r.get('symbol')}: ladder sync failed ({type(e).__name__}: {e})")
+    if alert:
+        for kind, text in out.get("_alerts_tg", []):
+            alert(kind, text)
+    out.pop("_alerts_tg", None)
+    return out
+
+
+def _sync_one(r, net, hold, book, now, out, ledger, patcher):
+    from atlas.execution import tranches as TR
+    sym, rid = str(r.get("symbol")), r.get("id")
+    legs = dict(r.get("exit_legs") or {})
+    qty, avg = TR.position_from(sym, net, hold)
+    if not qty or not avg:
+        return                                  # flat: cleanup() and the outcome checker own it
+    t1q = int(legs.get("t1_qty") or r.get("qty") or 0)
+    t1p = float(legs.get("t1_fill_price") or r.get("entry_price") or 0)
+    plan = {n: int(legs.get(f"{n}_qty") or 0) for n in ("t2", "t3")}
+    ceiling_qty = t1q + plan["t2"] + plan["t3"]
+    if qty > ceiling_qty:
+        out["alerts"].append(f"{sym}: the broker holds {qty} shares, more than the ladder could "
+                             f"buy ({ceiling_qty}) — another lot in this symbol; NOT synced, "
+                             f"blended cost would not be this position's")
+        return
+    prev_q = int(r.get("qty") or 0)
+    prev_avg = float(r.get("entry_price") or 0)
+    added = qty - prev_q
+    events = []
+    if added > 0:
+        pending = [n for n in ("t2", "t3") if not legs.get(f"{n}_fill_price")]
+        known = {str(legs.get(f"{n}_fill_order_id")) for n in ("t2", "t3") if legs.get(f"{n}_fill_order_id")}
+        t1oid = str(legs.get("t1_order_id") or r.get("order_id") or "")
+        fills = []
+        for o in sorted((book or []), key=lambda o: str(o.get("order_timestamp") or "")):
+            if (str(o.get("tradingsymbol")) == sym and str(o.get("transaction_type")).upper() == "BUY"
+                    and str(o.get("product", "")).upper() == "CNC"
+                    and str(o.get("status", "")).upper() == "COMPLETE"
+                    and str(o.get("order_id")) not in known | {t1oid}):
+                q = int(float(o.get("filled_quantity") or 0))
+                if q > 0:
+                    fills.append({"qty": q, "price": float(o.get("average_price") or 0),
+                                  "at": str(o.get("exchange_timestamp") or o.get("order_timestamp") or ""),
+                                  "order_id": str(o.get("order_id")), "source": "broker order book"})
+        if sum(f["qty"] for f in fills) != added:
+            # NOT IN TODAY'S BOOK (or only partly): derive the price from the
+            # change in blended cost. Exact arithmetic on the broker's own
+            # averages; the timestamp is when we SAW it, and says so.
+            px = (qty * avg - prev_q * prev_avg) / added if prev_q and prev_avg else avg
+            fills = [{"qty": added, "price": round(px, 4), "at": now.isoformat(timespec="seconds"),
+                      "order_id": None,
+                      "source": "derived from the change in blended cost (fill not in today's order "
+                                "book); time is detection, not fill"}]
+        for f in fills:
+            if not pending:
+                out["alerts"].append(f"{sym}: a buy of {f['qty']} @ {f['price']} with no tranche "
+                                     f"left to attribute it to — recorded on the row only")
+                break
+            n = pending.pop(0)
+            if f["order_id"] is None and len(pending) == 1 and f["qty"] == plan["t2"] + plan["t3"]:
+                n = "t2+t3"                     # both fired between two looks; per-tranche price unknown
+                pending.clear()
+            t1_at = _ts(legs.get("t1_filled_at"))
+            f_at = _ts(f["at"])
+            ev = {"tranche": n.upper(), "fill_price": f["price"], "fill_qty": f["qty"],
+                  "planned_qty": plan.get(n) if n in plan else plan["t2"] + plan["t3"],
+                  "filled_at": f["at"], "price_source": f["source"], "order_id": f["order_id"],
+                  "t1_fill_price": t1p,
+                  "pct_below_t1": round((f["price"] / t1p - 1) * 100, 3) if t1p else None,
+                  "days_after_t1": (f_at.date() - t1_at.date()).days if (f_at and t1_at) else None,
+                  "trigger": legs.get(f"{n}_trigger"), "trade_id": rid}
+            events.append(ev)
+            # A COMBINED T2+T3 marks BOTH filled, each with the combined average
+            # and a source that says it is combined -- never two invented prices.
+            for nn in (("t2", "t3") if n == "t2+t3" else (n,)):
+                legs.update({f"{nn}_fill_price": f["price"],
+                             f"{nn}_fill_qty": plan[nn] if n == "t2+t3" else f["qty"],
+                             f"{nn}_filled_at": f["at"],
+                             f"{nn}_fill_source": (f["source"] + "; T2 and T3 filled between two "
+                                                   "looks — this is their COMBINED average")
+                                                  if n == "t2+t3" else f["source"],
+                             f"{nn}_fill_order_id": f["order_id"]})
+    if added == 0 and abs(avg - prev_avg) < 0.005:
+        return                                  # nothing moved
+    fields = {"qty": int(qty), "entry_price": round(float(avg), 4), "exit_legs": legs}
+    if not _patch_row(rid, fields, patcher):
+        out["alerts"].append(f"{sym}: row {rid} NOT updated to the broker's {qty} @ {avg:.2f} — "
+                             f"realised P&L would be wrong; check by hand")
+        return
+    out["synced"] += 1
+    if added < 0:
+        events.append({"tranche": "REDUCED", "qty_before": prev_q, "qty_after": qty,
+                       "trade_id": rid, "at": now.isoformat(timespec="seconds")})
+    for ev in events:
+        status = f"{ev['tranche']}_FILLED" if ev["tranche"] != "REDUCED" else "POSITION_REDUCED"
+        row = _obs_row("atlas_decision", sym, ev.get("fill_price") or avg,
+                       {"status": status, **ev, "blended_qty": qty, "blended_cost": round(avg, 4)},
+                       qualifier=f"{status}:{rid}")
+        try:
+            from engine import observations as O
+            if not (ledger or O.record)([row]):
+                out["alerts"].append(f"{sym}: {status} not accepted by the ledger")
+        except Exception as e:
+            out["alerts"].append(f"{sym}: {status} not ledgered ({e})")
+        if ev["tranche"] != "REDUCED":
+            out["fills"].append(ev)
+            out.setdefault("_alerts_tg", []).append((
+                f"LONG PILOT {ev['tranche']} FILLED",
+                f"{sym} {ev['tranche']}: {ev['fill_qty']} @ Rs{ev['fill_price']:,.2f} "
+                f"({ev['pct_below_t1']:+.2f}% vs T1 Rs{t1p:,.2f}, "
+                f"{ev['days_after_t1'] if ev['days_after_t1'] is not None else '?'} day(s) after T1; "
+                f"{ev['price_source']}). Position now {qty} @ blended Rs{avg:,.2f}."))

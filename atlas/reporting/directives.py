@@ -195,6 +195,54 @@ def _rules_line() -> str:
             f"entries bounded by live broker funds")
 
 
+def positions_text(getter=None) -> str:
+    """/positions. A FAILED READ SAYS SO (2026-11-10): it answered "No open
+    positions" whenever atlas_trades could not be read -- a failed read
+    rendered as a confident absence, the defect radar's "no disclosed trigger
+    found" had. And it printed the legacy sl / target_1 columns, which pilot rows
+    never fill, as "Rs0.0" -- a blank shown as a real zero. It now shows the
+    columns the engine writes, and a dash where a value is absent."""
+    import requests as _req, os
+    from atlas.config import OPEN_STATUSES
+    from atlas.books import broker_stops_for_trade
+    url = os.environ.get("SUPABASE_URL", "https://eibdlcanpudjgmkjxrga.supabase.co")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    try:
+        r = (getter or _req.get)(
+            f"{url}/rest/v1/atlas_trades?status=in.({','.join(OPEN_STATUSES)})"
+            f"&order=created_at.desc&select=symbol,direction,product,qty,entry_price,"
+            f"stop_price,target_price,exit_legs",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"}, timeout=10)
+        if r.status_code != 200:
+            return (f"⚠️ Open positions UNREADABLE (HTTP {r.status_code}) — this is "
+                    f"not \"no positions\". Check Kite directly.")
+        trades = r.json()
+    except Exception as e:
+        return (f"⚠️ Open positions UNREADABLE ({type(e).__name__}) — this is not "
+                f"\"no positions\". Check Kite directly.")
+    if not trades:
+        return "No open positions (read OK)"
+
+    def px(v):
+        try:
+            return f"Rs{float(v):,.2f}" if v not in (None, "") and float(v) > 0 else "—"
+        except (TypeError, ValueError):
+            return "—"
+    out = "OPEN POSITIONS"
+    for t in trades:
+        legs = t.get("exit_legs") or {}
+        line = (f"\n{t.get('symbol', '')} {t.get('direction', '')} {t.get('qty') or '—'} "
+                f"@ {px(t.get('entry_price'))}")
+        if not broker_stops_for_trade(t):
+            line += (f" (blended; T1 {px(legs.get('t1_fill_price'))}) · stop "
+                     f"{px(t.get('stop_price'))} target {px(t.get('target_price'))} "
+                     f"— published only, no broker stop")
+        else:
+            line += f" · stop {px(t.get('stop_price'))} target {px(t.get('target_price'))}"
+        out += line
+    return out
+
+
 def handle_directive(text: str) -> str:
     """
     Process a directive command.
@@ -361,23 +409,7 @@ def handle_directive(text: str) -> str:
                 "/pause takes effect on the next cycle, within a minute.")
 
     elif text in ["/positions", "positions"]:
-        import requests as _req, os
-        url = "https://eibdlcanpudjgmkjxrga.supabase.co"
-        key = os.environ.get("SUPABASE_SERVICE_KEY","")
-        r = _req.get(f"{url}/rest/v1/atlas_trades?status=eq.OPEN&order=created_at.desc",
-            headers={"apikey":key,"Authorization":f"Bearer {key}"})
-        trades = r.json() if r.status_code == 200 else []
-        if not trades:
-            return "No open positions"
-        out = "OPEN POSITIONS"
-        for t in trades:
-            sym   = t.get("symbol","")
-            dirn  = t.get("direction","")
-            entry = float(t.get("entry_price",0))
-            sl    = float(t.get("sl",0))
-            t1    = float(t.get("target_1",0))
-            out  += f"\n{sym} {dirn} Entry:Rs{entry:.1f} SL:Rs{sl:.1f} T1:Rs{t1:.1f}"
-        return out
+        return positions_text()
 
     elif text in ["/report", "report"]:
         from atlas.reporting.daily_report import generate_and_send

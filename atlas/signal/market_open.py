@@ -1022,6 +1022,11 @@ def cycle(state: Session) -> dict:
                         _fc = _TR.flag_cancel(_rows, _k, _active)
                         rec["cancelled"] += _fc["cancelled"]
                         rec["alerts"].extend(_fc["alerts"])
+                        # THE ROW FOLLOWS THE BROKER: blended qty/cost, and each
+                        # tranche fill recorded as its own event (D-075).
+                        from atlas.execution.long_pilot import sync_ladder as _sync
+                        _sl = _sync(_rows, _k, alert=lambda k_, t_: alert(k_, t_, key=t_[:48]))
+                        rec["alerts"].extend(_sl["alerts"])
                         for _sym, _ch in _fc["flagged"]:
                             alert("LONG +16% — TRANCHES CANCELLED",
                                   f"{_sym} is {_ch:+.1f}% on blended cost. Its remaining "

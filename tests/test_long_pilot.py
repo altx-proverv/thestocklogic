@@ -362,6 +362,110 @@ check("blended cost is ONE definition, shared with the 15:50 report",
 check("market_open runs flag_cancel every cycle",
       "_TR.flag_cancel(_rows, _k, _active)" in (ROOT / "atlas/signal/market_open.py").read_text(), True)
 
+print("\nTHE ROW FOLLOWS THE BROKER; EACH TRANCHE FILL IS ITS OWN EVENT")
+_fillp = [p_[1] for p_ in patches if "exit_legs" in p_[1]]
+check("after_fill keeps T1's own fill in exit_legs",
+      all(k in _fillp[-1]["exit_legs"] for k in ("t1_fill_price", "t1_qty", "t1_filled_at", "t1_order_id"))
+      if _fillp else None, True)
+
+
+class _Kb(Kite):
+    def __init__(self, book=(), orders_raise=False, **kw):
+        super().__init__(**kw); self._book, self._or = list(book), orders_raise
+
+    def orders(self):
+        if self._or:
+            raise RuntimeError("orders down")
+        return self._book
+
+
+LEGS = {"t1_fill_price": 100.0, "t1_qty": 24, "t1_filled_at": "2026-11-12T09:31:00+05:30",
+        "t1_order_id": "OID1", "t2_trigger_id": "11", "t2_trigger": 95.0, "t2_qty": 18,
+        "t3_trigger_id": "12", "t3_trigger": 89.0, "t3_qty": 20}
+ROW = {"id": 501, "symbol": "TESTSYM", "status": "OPEN", "qty": 24, "entry_price": 100.0,
+       "order_id": "OID1", "exit_legs": dict(LEGS)}
+NOW = datetime(2026, 11, 17, 14, 0, tzinfo=IST)
+pt, lg = [], []
+patcher = lambda url, headers=None, json=None, timeout=None: (pt.append(json) or type("R", (), {"status_code": 204})())
+ledg = lambda rows: (lg.extend(rows) or True)
+k = _Kb(holdings=[{"tradingsymbol": "TESTSYM", "quantity": 24, "t1_quantity": 0, "average_price": 100.0}])
+o = LP.sync_ladder([dict(ROW)], k, ledger=ledg, patcher=patcher, now=NOW)
+check("day 2, nothing new: no patch, no event", (len(pt), len(lg)), (0, 0))
+# T2 fills on 17 Nov at 95.10 for 18: today's book has the GTT's order
+k = _Kb(book=[{"order_id": "OID1", "tradingsymbol": "TESTSYM", "transaction_type": "BUY", "product": "CNC",
+               "status": "COMPLETE", "filled_quantity": 24, "average_price": 100.0, "order_timestamp": "2026-11-12 09:31:00"},
+              {"order_id": "G2", "tradingsymbol": "TESTSYM", "transaction_type": "BUY", "product": "CNC",
+               "status": "COMPLETE", "filled_quantity": 18, "average_price": 95.10,
+               "order_timestamp": "2026-11-17 11:02:13", "exchange_timestamp": "2026-11-17 11:02:13"}],
+        positions=[{"tradingsymbol": "TESTSYM", "product": "CNC", "quantity": 18, "average_price": 95.10}],
+        holdings=[{"tradingsymbol": "TESTSYM", "quantity": 24, "t1_quantity": 0, "average_price": 100.0}])
+o = LP.sync_ladder([dict(ROW)], k, ledger=ledg, patcher=patcher, now=NOW)
+ev = o["fills"][0] if o["fills"] else {}
+check("T2 fill found in the order book: price, qty, time", (ev.get("tranche"), ev.get("fill_price"), ev.get("fill_qty"),
+      ev.get("filled_at")), ("T2", 95.10, 18, "2026-11-17 11:02:13"))
+check("  % below T1 and days after T1", (ev.get("pct_below_t1"), ev.get("days_after_t1")), (-4.9, 5))
+check("  ledgered as its own event (T2_FILLED)", [r["computed_values"]["status"] for r in lg], ["T2_FILLED"])
+blended = round((24 * 100.0 + 18 * 95.10) / 42, 4)
+check("  row now holds the BLENDED position", (pt[-1]["qty"], pt[-1]["entry_price"]), (42, blended))
+check("  and T1's own fill is untouched", (pt[-1]["exit_legs"]["t1_fill_price"], pt[-1]["exit_legs"]["t1_qty"]), (100.0, 24))
+check("  T2's fill is on the row", pt[-1]["exit_legs"]["t2_fill_price"], 95.10)
+# realised P&L, the outcome checker's arithmetic (exit - entry_price) x qty, at +16% on blended
+ex = round(blended * 1.16, 2)
+check("P&L at +16%% on blended: T1-only row books Rs%.0f, synced row Rs%.0f" % ((ex - 100) * 24, (ex - blended) * 42),
+      (ex - blended) * 42 > (ex - 100) * 24, True)
+
+pt.clear(); lg.clear()
+row2 = dict(ROW, qty=42, entry_price=blended, exit_legs=dict(LEGS, t2_fill_price=95.10, t2_fill_qty=18,
+                                                                   t2_fill_order_id="G2"))
+k = _Kb(book=[], holdings=[{"tradingsymbol": "TESTSYM", "quantity": 62, "t1_quantity": 0,
+                            "average_price": round((42 * blended + 20 * 89.0) / 62, 4)}])
+o = LP.sync_ladder([row2], k, ledger=ledg, patcher=patcher, now=NOW)
+ev = o["fills"][0] if o["fills"] else {}
+check("T3 not in today's book -> price DERIVED from the blended change (89.0)",
+      (ev.get("tranche"), round(ev.get("fill_price") or 0, 1)), ("T3", 89.0))
+check("  and labelled as derived, time = detection", "derived" in str(ev.get("price_source")), True)
+
+pt.clear(); lg.clear()
+k = _Kb(book=[], holdings=[{"tradingsymbol": "TESTSYM", "quantity": 62, "t1_quantity": 0,
+                            "average_price": round((24 * 100 + 18 * 95 + 20 * 89) / 62, 4)}])
+o = LP.sync_ladder([dict(ROW)], k, ledger=ledg, patcher=patcher, now=NOW)
+check("T2 and T3 both between two looks -> ONE combined event, both marked",
+      ([e["tranche"] for e in o["fills"]], "t3_fill_price" in pt[-1]["exit_legs"]), (["T2+T3"], True))
+
+pt.clear()
+k = _Kb(book=[], holdings=[{"tradingsymbol": "TESTSYM", "quantity": 100, "average_price": 90.0}])
+o = LP.sync_ladder([dict(ROW)], k, ledger=ledg, patcher=patcher, now=NOW)
+check("broker holds more than the ladder could buy -> NOT synced, said so",
+      (len(pt), any("more than the ladder" in a for a in o["alerts"])), (0, True))
+k = _Kb(holdings_none=True)
+o = LP.sync_ladder([dict(ROW)], k, ledger=ledg, patcher=patcher, now=NOW)
+check("books unreadable -> nothing patched, said so", (len(pt), len(o["alerts"])), (0, 1))
+check("market_open runs sync_ladder every cycle",
+      "_sync(_rows, _k" in (ROOT / "atlas/signal/market_open.py").read_text(), True)
+
+print("\n/positions")
+import atlas.reporting.directives as DIRS                        # noqa: E402
+
+
+class _G:
+    def __init__(self, code, body=None):
+        self.status_code, self._b = code, body
+
+    def json(self):
+        return self._b
+
+
+check("HTTP 500 -> UNREADABLE, not 'no positions'",
+      "UNREADABLE" in DIRS.positions_text(lambda *a, **k: _G(500)), True)
+check("exception -> UNREADABLE", "UNREADABLE" in DIRS.positions_text(
+      lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))), True)
+check("a real empty read says it read OK", DIRS.positions_text(lambda *a, **k: _G(200, [])),
+      "No open positions (read OK)")
+txt = DIRS.positions_text(lambda *a, **k: _G(200, [{"symbol": "TESTSYM", "direction": "LONG", "product": "CNC",
+      "qty": 42, "entry_price": 97.857, "stop_price": 96.0, "target_price": None, "exit_legs": LEGS}]))
+check("pilot row: blended, T1, published levels; no Rs0.0", ("Rs0.0" in txt, "T1 Rs100.00" in txt, "target —" in txt),
+      (False, True, True))
+
 print("\nTHE 15:50 REPORT")
 import atlas.reporting.session_report as SR                    # noqa: E402
 SR.live_prices = lambda syms: {"TESTSYM": 117.0}
