@@ -126,7 +126,7 @@ Each is now **counted** in `order_path_events` (273bded) without changing what i
 ### D-024 · `order_path_events` table not created
 - **Status** open — needs you · **Found** 2026-11-09
 - **Evidence** VERIFIED: applying `migrations/PENDING_order_path_events.sql` was refused by the session permission classifier. Until applied, events go only to `reports/order_path_events.jsonl` on the box.
-
+- **Applied 2026-11-10** (MCP, operator-approved), with the pilot's event types ORDER_SENT / GTT_SENT / GTT_CANCELLED / WOULD_PLACE / PREFLIGHT. VERIFIED: anon has no SELECT, authenticated no INSERT, RLS on, append-only triggers present, 0 rows. Dated copy: migrations/20261110_order_path_events.sql.
 
 ### Failed reads that return the same value as an empty answer (pattern sweep, 2026-11-09)
 Rule: a failed read must never return the same value as a successful empty read (CHARTER). AST sweep of `atlas/`, `engine/`, `radar/`: 156 except/non-200 branches returning an empty or default value. Most are distinguishable (a `(readable, value)` pair, an `ok: False` dict, `None` meaning failure where `[]` means none, or a success flag). The ones that are not:
@@ -258,9 +258,38 @@ Rule: a failed read must never return the same value as a successful empty read 
 - **Status** built 2026-11-10 (b60ed50) · wiring into atlas_entry not started -- needs your go, it is the order path
 - atlas/sizing.py; tests/test_long_sizing.py (8 mutants caught). Universe on 2026-11-09: 681/718 sized, 37 refused (28 history_discontinuity, 3 no share count, 2 stale count, 2 split after the count, 1 no parquet, MRF at Rs 1 cr capital buys no share).
 - **Open questions it raises:** total capital is not in config (demo used Rs 1 cr); "70% max deployed" read as 70% of the long book; supports are capped at 15% below price by the zone rules, so a deep T3 support beyond that is never used.
+- **Wired 2026-11-10** (678897b, 2433d1b) as the long pilot: Gate 5 sizes LONG via size_pilot on LONG_PILOT_CAPITAL (Rs2,00,000). See D-072..D-076.
 
 ### D-069 · TDPOWERSYS: NSE's own bhavcopy disagrees with itself
 - **Status** open · **Found** 2026-11-10 · VERIFIED: cm06Nov2026bhav.csv ClsPric 576.50; cm09Nov2026bhav.csv PrvsClsgPric 609.85 (5.8% apart, under the 15% feed-continuity tolerance so unflagged). Cause unknown. Its 8.3% ATR is real (5-6 Nov fell -8.1% and -13.9% on ~4x volume); it is refused by sizing anyway (24-Aug split inside 252 sessions).
+
+
+### D-070 · Comments and code that disagree, found building the pilot
+- **Status** partly fixed 2026-11-10 · VERIFIED in code:
+  - atlas/config.py ALLOW_AUTOMATED_STOP_LOSS comment said a position that cannot get a stop "is exited at market". False since 2026-10-16 (protect_or_flag keeps it open; emergency_exit is only called by the MIS square-off). **Fixed** -- and it drove a wrong warning to the operator on 2026-11-10.
+  - daily_report footer said ATLAS "exits immediately" if a stop fails. **Fixed** (per-book sentence).
+  - atlas_entry._complete_intent docstring says entry_price "HERE IS THE FILL"; it is called right after the order is sent, before await_fill, so the row gets the pre-fill quote and the post-fill fields (target, legs, stop_confirmed) set in `intent` are never written for the stop book. Not fixed (the long book patches the row after its fill itself).
+  - broker.get_holdings() returns [] on a failed read. Not fixed (the pilot reads holdings itself and treats failure as unknown).
+  - exits.reconcile_exits decides "flat" from positions()['net'] only. A CNC long held past settlement is in holdings, so it reads as flat and its GTT legs are deleted. No CNC position is open today, so nothing was hit now; whether it fired historically was not checked. The long book is kept out of it.
+
+### D-071 · The sector map is not an NSE classification and has no recorded source
+- **Status** open -- no per-sector rule may read it until fixed · **Found** 2026-11-10 (operator) · audited 2026-11-10
+- **Evidence** VERIFIED against NSE index constituent lists (Nifty Total Market + 10 others): of 718, 491 match NSE's Industry, **4 contradict it** (COALINDIA METAL/Oil Gas, PRECWIRE METAL/Capital Goods, RAILTEL IT/Telecom, SUNDRMFAST INFRA/Auto), 13 banks sit in FINANCE (3 verified from NSE's PSU bank index), 145 cannot be judged because the 12-label vocabulary has no home for NSE's Consumer Durables/Services, Textiles, Media, Chemicals (tools/nse_sectors.py maps Durables/Services/Textiles/Media -> FMCG and Chemicals -> METAL by design: FMCG holds 141, only 40 of them NSE FMCG), 78 are in no fetched NSE list.
+- **Provenance** engine/universe.py SYMBOL_SECTOR_MAP, a hand-edited literal dict. Created a7bca58 (2026-05-26, no source recorded); rewritten 084f1b0 (2026-05-27) whose header claims "Source: NSE ... Auto-generated" -- no generator exists, and that version put NTPC/ONGC/IOC/COALINDIA under DEFENCE, which NSE's file cannot produce; relabels 6782207 + 94e5e3b (2026-09-13, Hemal); 246 added c13c7a1 via tools/nse_sectors.py (2026-09-28). 451 lines still date from 084f1b0.
+- **Consumers** engine/upstox_ws.py (the live intraday sector heatmap; shorts come from the bottom sectors), engine/07_sector_momentum.py -> sector_heatmap, engine/03b_score.py sector bias, session_selector no-duplicate-sector, fundamentals, radar, home.html's embedded copy. rbe_engine does not read it.
+
+### D-072 · Ledger types for ATLAS: migration written, NOT applied
+- **Status** open -- needs you · migrations/20261110_observation_types_atlas.sql (adds atlas_entry, atlas_decision; atlas_decision never scored). Applying it was refused by the permission check on 2026-11-10. **Until it is applied the pilot places nothing**: the decision must be in the ledger before an order, so every candidate that passes all gates ends BLOCKED_PILOT_NO_EVIDENCE, and the ledger's own refusal alert goes to Telegram (held 60 min).
+
+### D-073 · At Rs2,00,000, T2/T3 round to zero shares for higher-priced names
+- **Status** open -- decision needed · VERIFIED (box, 2026-11-10, 9 Nov closes): TATAELXSI (3% band, Rs6,000 ceiling) T1 rounds up to 1 share at Rs3,890, T2 and T3 (Rs1,800 each) buy 0 -> no ladder; same for JKCEMENT and GMBREW. A zero-quantity tranche is skipped and recorded REFUSED T2/T3_ZERO_QTY. Rule today: only T1 rounds up.
+
+### D-074 · Pilot behaviour to know
+- The 5-entry cap counts atlas_trades rows with sizing_basis long_pilot_2026_11 (any status but CANCELLED) -- the pilot's lifetime, not per day. In watch-only, today's WOULD_PLACE symbols count too.
+- Funds must cover the whole ladder (T1 + T2 + T3) at entry, since T2/T3 rest the moment T1 fills.
+- "Fits inside the ceiling" for the T1 round-up is read against the position bound (the tighter of ceiling and liquidity cap).
+- A resting BUY GTT is not cancelled by Zerodha when the position is sold; tranches.cleanup() cancels it within one reconcile cycle (60s in session) once positions AND holdings show no shares. A trigger that fires inside that window still buys. Outside market hours nothing runs, but a GTT cannot fire then either.
+- T2/T3 GTT placement failure: recorded and alerted; not retried automatically.
 
 ---
 
