@@ -197,6 +197,10 @@ def _row_for(quotes: dict, key: str) -> dict:
 # never served from the cache and always fetches.
 _CYCLE = {"n": None, "read": None}
 
+# THE LAST VALUE SEEN PER CONTRACT, AND WHEN WE SAW IT CHANGE. In-process, so a
+# restart starts with no history -- which is what refuses the first read.
+_SEEN: dict = {}
+
 
 def set_cycle(n) -> None:
     """Start a new cycle: the next read() fetches, later ones reuse it."""
@@ -219,6 +223,23 @@ def read(max_age_seconds: float = None) -> dict:
     if _CYCLE["n"] is not None:
         _CYCLE["read"] = dict(out)
     return out
+
+
+def read_settled(wait_seconds: float = 5.0, tries: int = 4) -> dict:
+    """For ONE-SHOT callers (the session report, tools): a single read has
+    nothing to difference against, so it is always "age unknown". This reads,
+    waits, and reads again until the value is seen to change or `tries` run
+    out. A frozen feed still fails -- it never changes. Not for the engine,
+    which reads once per cycle and already has history. NEVER RAISES."""
+    import time as _t
+    r = _read_uncached()
+    for _ in range(max(0, tries - 1)):
+        if r.get("ok") or (r.get("detail") and "first read" not in r["detail"]
+                           and "has not changed" not in r["detail"]):
+            return r
+        _t.sleep(wait_seconds)
+        r = _read_uncached()
+    return r
 
 
 def _read_uncached(max_age_seconds: float = None) -> dict:
@@ -286,23 +307,39 @@ def _read_uncached(max_age_seconds: float = None) -> dict:
     if out["index_spot"]:
         out["basis"] = round(float(last) - float(out["index_spot"]), 2)
 
-    # AGE. The quote carries its own timestamp; a feed that has stopped
-    # updating looks identical to a quiet market from the price alone.
+    # AGE COMES FROM THE VALUE, ON OUR CLOCK (OPEN D-015). This used to be
+    # now minus the quote's own `timestamp` -- and Upstox stamps the REQUEST
+    # time on a quote (verified 2026-11-09: a quote fetched at 21:07 IST, hours
+    # after the close, carried 21:07:08). So a frozen price always looked
+    # seconds old: the CLAUDE.md lesson ("live_sentiment logged [quote 0.0s
+    # old] for all 360 cycles of a dead feed"), still in the code.
+    #
+    # Now the age is how long since WE last saw the quote change -- price,
+    # VWAP or traded volume, which moves on every trade even when the price
+    # does not. The first read of a contract in this process has nothing to
+    # difference against, so it has no age and is refused: unknown is not a
+    # pass. The vendor timestamp is kept for display only.
     if ts:
-        try:
-            tq = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-            out["as_of"] = tq.astimezone(IST).isoformat(timespec="seconds")
-            out["age_seconds"] = round((_now_ist() - tq.astimezone(IST))
-                                       .total_seconds(), 1)
-        except Exception:
-            out["as_of"] = str(ts)
-    if out["age_seconds"] is None:
-        out["detail"] = f"{fut['symbol']} quote carries no usable timestamp"
+        out["as_of"] = str(ts)
+    now = _now_ist()
+    fp = (float(last), float(vwap), row.get("volume"))
+    seen = _SEEN.get(fut["key"])
+    if seen is None or seen["fp"] != fp:
+        _SEEN[fut["key"]] = {"fp": fp, "changed_at": now,
+                             "first": seen is None}
+        seen = _SEEN[fut["key"]]
+    if seen["first"]:
+        out["detail"] = (f"{fut['symbol']}: first read of this contract in this "
+                         f"process -- no change observed yet, so its age is "
+                         f"unknown. Not a live read until the value moves.")
+        out["age_seconds"] = None
         return out
+    out["age_seconds"] = round((now - seen["changed_at"]).total_seconds(), 1)
     if out["age_seconds"] > max_age:
-        out["detail"] = (f"{fut['symbol']} quote is {out['age_seconds']:.0f}s "
-                         f"old, past the {max_age:.0f}s limit -- the feed is "
-                         f"not current")
+        out["detail"] = (f"{fut['symbol']} has not changed for "
+                         f"{out['age_seconds']:.0f}s (price, VWAP and volume all "
+                         f"identical), past the {max_age:.0f}s limit -- the feed "
+                         f"is not current, whatever its own timestamp says")
         return out
 
     out.update({"above_prev_close": out["last"] > out["prev_close"],

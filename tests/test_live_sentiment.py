@@ -103,27 +103,68 @@ def main() -> int:
         check("a zero open is not a price", r["ok"], False)
         check("  and it is named", "ohlc.open" in r["detail"], True)
 
-        # a stale quote is not a live read
-        LS._quote = lambda keys: {fk: {"instrument_token": TOK,
-                                       "last_price": 22860.0, "net_change": 473.5,
-                                       "ohlc": {"open": 22400.1},
-                                       "average_price": 22680.66,
-                                       "timestamp": "2020-01-01T09:20:00+05:30"}}
+        # AGE IS READ FROM THE VALUE, NOT THE VENDOR'S TIMESTAMP (OPEN D-015).
+        # Upstox stamps the request time on a quote, so the old test -- a
+        # years-old timestamp is refused -- tested a field that is never old.
+        # The rule now: how long since WE saw price, VWAP or volume change.
+        import datetime as dt
+        clock = {"t": dt.datetime(2026, 11, 10, 10, 0, tzinfo=LS.IST)}
+        LS._now_ist = lambda: clock["t"]
+        LS._SEEN.clear()
+
+        def q(last=22860.0, vwap=22680.66, vol=1000, ts=None):
+            ts = ts or clock["t"].isoformat()
+            return lambda keys: {
+                fk: {"instrument_token": TOK, "last_price": last,
+                     "net_change": 473.5, "ohlc": {"open": 22400.1},
+                     "average_price": vwap, "volume": vol, "timestamp": ts},
+                "NSE_INDEX:Nifty 50": {"instrument_token": LS.NIFTY_INDEX_KEY,
+                                       "last_price": 22721.95}}
+
+        LS._quote = q(vol=1000)
         r = LS.read()
-        check("a years-old quote is refused", r["ok"], False)
-        check("  for being stale, and it says so",
-              "old" in r["detail"] and "limit" in r["detail"], True)
+        check("the first read of a process has no age -- refused", r["ok"], False)
+        check("  and says so", "first read" in r["detail"], True)
+
+        # THE DEFECT: a fresh vendor timestamp on a frozen value.
+        clock["t"] += dt.timedelta(seconds=30)
+        LS._quote = q(vol=1001)                      # one change, then frozen
+        check("a value that changed reads ok", LS.read()["ok"], True)
+        clock["t"] += dt.timedelta(seconds=300)
+        LS._quote = q(vol=1001)                      # identical, fresh ts
+        r = LS.read()
+        check("frozen for 300s with a FRESH vendor timestamp -> refused", r["ok"], False)
+        check("  for not changing, and it says so",
+              "has not changed" in r["detail"] and "limit" in r["detail"], True)
+        check("  the age is ours: 300s", r["age_seconds"], 300.0)
+
+        # and an ancient vendor timestamp does not matter if the value moves
+        clock["t"] += dt.timedelta(seconds=30)
+        LS._quote = q(vol=1002, ts="2020-01-01T09:20:00+05:30")
+        check("a moving value with an ancient vendor timestamp -> ok",
+              LS.read()["ok"], True)
+
+        # ONE-SHOT CALLERS: read_settled waits for the value to move.
+        import time as _time
+        _saved_sleep = _time.sleep
+        _time.sleep = lambda s: clock.__setitem__("t", clock["t"] + dt.timedelta(seconds=s))
+        try:
+            LS._SEEN.clear()
+            vols = iter([5000, 5001, 5002, 5003])
+            LS._quote = lambda keys: q(vol=next(vols))(keys)
+            check("read_settled: a moving value is ok on the second read",
+                  LS.read_settled(wait_seconds=5, tries=4)["ok"], True)
+            LS._SEEN.clear()
+            LS._quote = q(vol=7777)
+            r2 = LS.read_settled(wait_seconds=60, tries=4)
+            check("read_settled: a frozen value is still refused", r2["ok"], False)
+        finally:
+            _time.sleep = _saved_sleep
 
         # and the happy path, with the arithmetic verified against real numbers
         # pulled from the live feed on 2026-10-14
-        import datetime as dt
-        now = dt.datetime.now(LS.IST).isoformat(timespec="seconds")
-        LS._quote = lambda keys: {
-            fk: {"instrument_token": TOK, "last_price": 22860.0,
-                 "net_change": 473.5, "ohlc": {"open": 22400.1},
-                 "average_price": 22680.66, "timestamp": now},
-            "NSE_INDEX:Nifty 50": {"instrument_token": LS.NIFTY_INDEX_KEY,
-                                   "last_price": 22721.95}}
+        clock["t"] += dt.timedelta(seconds=30)
+        LS._quote = q(vol=1003)
         r = LS.read()
         check("a complete, fresh quote reads ok", r["ok"], True)
         check("  previous close is last - net_change",

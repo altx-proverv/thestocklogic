@@ -276,7 +276,7 @@ def _live_sentiment():
             inside = in_window()
         except Exception:
             pass
-        r = LS.read()
+        r = LS.read_settled()
         legs = ""
         if r["ok"]:
             legs = (f"prev close {'Y' if r['above_prev_close'] else 'n'} / "

@@ -184,7 +184,7 @@ def gate_state() -> list:
 
     try:
         from atlas.execution import live_sentiment as LS
-        s = LS.read()
+        s = LS.read_settled()      # one-shot: needs to see the value move
         v = s.get("verdict") or "?"
         out.append(f"sentiment    {v}  ({LS.legs_line(s)})")
     except Exception as e:
