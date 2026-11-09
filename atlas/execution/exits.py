@@ -1423,6 +1423,13 @@ def emergency_exit(symbol: str, direction: str, qty: int, product: str,
         # the position as unprotected and lets the caller alert a human.
         log.critical(f"{symbol}: EMERGENCY EXIT CANNOT PRICE ITSELF — no LTP. "
                      f"POSITION IS OPEN AND UNPROTECTED")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("REFUSED", "exits.emergency_exit", symbol, "NO_PRICE",
+                 "emergency exit could not read an LTP to price a limit order",
+                 {"direction": direction})
+        except Exception as _e:
+            log.error(f"order event not recorded: {_e}")
         return {"ok": False, "order_id": None,
                 "reason": "emergency exit could not read an LTP to price a limit "
                           "order — POSITION IS OPEN AND UNPROTECTED"}

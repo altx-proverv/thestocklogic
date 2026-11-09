@@ -454,16 +454,29 @@ def regime_allows_side(ctx: dict, direction: str) -> tuple:
 
 
 def get_today_entry_count() -> int:
-    """New LIVE entries recorded today."""
+    """New LIVE entries recorded today. RAISES RiskDataUnavailable if unreadable.
+
+    It returned 0 on any failure, which is a count that cannot be told apart
+    from "no entries today". Nothing gates on it now (the per-day cap is gone,
+    see Gate 3), and it has no caller -- but a read failure must never come back
+    as a number that would widen a limit if one is ever reattached to it. Same
+    rule as atlas/risk/kill_switch.py.
+    """
+    from atlas.risk.kill_switch import RiskDataUnavailable
     today = datetime.now(IST).date().isoformat()
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/atlas_trades"
             f"?entry_date=eq.{today}&agent_mode=eq.LIVE&select=id",
             headers=_headers(), timeout=10)
-        return len(r.json()) if r.status_code == 200 else 0
-    except Exception:
-        return 0
+    except Exception as e:
+        raise RiskDataUnavailable(f"today's entry count: {type(e).__name__}: {e}") from e
+    if r.status_code != 200:
+        raise RiskDataUnavailable(f"today's entry count: HTTP {r.status_code} {r.text[:150]}")
+    try:
+        return len(r.json())
+    except Exception as e:
+        raise RiskDataUnavailable(f"today's entry count: unreadable body ({e})") from e
 
 
 def get_open_position(symbol: str) -> tuple:
@@ -595,6 +608,26 @@ def check_entry_range(direction: str, ltp: float, lo_in: float, hi_in: float,
 # ENTRY
 # ─────────────────────────────────────────────────────────────────────
 
+def _num(v) -> float:
+    """A price, or 0.0 if it is not a number. 0.0 is then REFUSED by the caller,
+    never used."""
+    try:
+        f = float(v)
+        return f if f == f else 0.0          # NaN -> 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _order_event(*a, **k) -> bool:
+    """atlas/execution/order_events.record; never raises into the order path."""
+    try:
+        from atlas.execution.order_events import record
+        return record(*a, **k)
+    except Exception as e:
+        log.error(f"order event could not be recorded: {e}")
+        return False
+
+
 def _settle_unfilled_limit(order_id: str, symbol: str) -> dict:
     """A LIMIT that did not fill in the window: cancel it and find out what happened.
 
@@ -623,15 +656,41 @@ def _settle_unfilled_limit(order_id: str, symbol: str) -> dict:
 
     cancelled = cancel_order(order_id)
     status = get_order_status(order_id) or {}
+
+    # UNREADABLE IS UNKNOWN, NEVER "NOT FILLED". These three reads used to
+    # default to filled=0 / avg=0 / status="", and `cancelled and st == ""` then
+    # returned NO_FILL: a cancel call that returned plus a status that could not
+    # be read was recorded as "no position". An order placed today is in
+    # today's order book whatever happened to it, so an empty status after our
+    # own cancel is not "gone", it is unknown. UNKNOWN leaves the row PENDING,
+    # places no stop, and alerts FILL UNCONFIRMED -- the caller's existing path.
+    def _unknown(why):
+        log.error(f"{symbol}: entry LIMIT {order_id} — {why}; position MAY EXIST")
+        _order_event("REFUSED", "atlas_entry._settle_unfilled_limit", symbol,
+                     "ORDER_STATE_UNREADABLE", why,
+                     {"order_id": order_id, "cancel_ok": bool(cancelled),
+                      "status": status})
+        return {"outcome": "UNKNOWN", "filled_qty": 0, "avg_price": 0.0,
+                "reason": f"{why} (cancel_ok={cancelled})"}
+
+    if not status:
+        return _unknown("order status unreadable, or the order is missing from "
+                        "today's book after cancel")
     st = str(status.get("status", "")).upper()
     try:
-        filled = int(float(status.get("filled_quantity") or 0))
-    except (TypeError, ValueError):
-        filled = 0
-    try:
-        avg = float(status.get("average_price") or 0)
-    except (TypeError, ValueError):
-        avg = 0.0
+        filled = int(float(status["filled_quantity"]))
+    except (KeyError, TypeError, ValueError):
+        return _unknown(f"filled_quantity unreadable "
+                        f"({status.get('filled_quantity')!r}, status {st or '?'})")
+    avg = 0.0
+    if filled > 0:
+        try:
+            avg = float(status["average_price"])
+        except (KeyError, TypeError, ValueError):
+            avg = 0.0
+        if not avg > 0:
+            return _unknown(f"filled {filled} but average_price unreadable "
+                            f"({status.get('average_price')!r})")
 
     if filled > 0:
         # It filled, wholly or partly, despite the cancel. A position exists.
@@ -640,7 +699,7 @@ def _settle_unfilled_limit(order_id: str, symbol: str) -> dict:
         return {"outcome": "FILLED", "filled_qty": filled, "avg_price": avg,
                 "reason": f"filled {filled} @ {avg} during cancellation"}
 
-    if st in ("CANCELLED", "REJECTED") or (cancelled and st in ("", "CANCELLED")):
+    if st in ("CANCELLED", "REJECTED"):
         log.info(f"{symbol}: entry LIMIT {order_id} did not fill and was "
                  f"cancelled — no position, no entry")
         return {"outcome": "NO_FILL", "filled_qty": 0, "avg_price": 0.0,
@@ -882,7 +941,29 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     # Zerodha again here would be one broker call per candidate per cycle for a
     # number we already have. Zerodha stays the execution broker; Upstox is the
     # price feed. get_ltp remains the fallback for a one-shot caller.
-    ltp = float(signal.get("ltp") or 0) or get_ltp(symbol) or entry_ref
+    #
+    # NO PRICE, NO ORDER -- the same rule as exits.py's emergency exit. This
+    # line ended `or entry_ref`, so a missing quote was replaced by the zone's
+    # own reference price, which check_entry_range() then passed by
+    # construction: a missing price did not block an order, it guaranteed one.
+    # Recorded as PRICE_USED below so every order says where its price came from.
+    _sig_ltp = _num(signal.get("ltp"))
+    if _sig_ltp > 0:
+        ltp, ltp_source = _sig_ltp, "signal.ltp (caller's Upstox batch)"
+    else:
+        ltp, ltp_source = _num(get_ltp(symbol)), "broker.get_ltp (Kite)"
+    if not ltp > 0:
+        why = (f"no usable price: signal.ltp={signal.get('ltp')!r}, "
+               f"get_ltp returned {ltp!r}")
+        log.critical(f"{symbol}: ENTRY REFUSED — {why}")
+        if _order_event("REFUSED", "atlas_entry.enter_trade", symbol,
+                        "NO_PRICE", why, {"entry_ref": entry_ref,
+                                          "entry_low": entry_low,
+                                          "entry_high": entry_high}):
+            _alert("ENTRY REFUSED — NO PRICE",
+                   f"{symbol} {direction}: {why}. No order placed. Repeats for "
+                   f"this symbol are recorded, not re-alerted, this session.")
+        return {"status": "SKIPPED_NO_PRICE", "reason": why}
     in_range, range_reason = check_entry_range(direction, ltp, entry_low,
                                               entry_high, stop_price,
                                               entry_ref=entry_ref)
@@ -1159,6 +1240,13 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
                            f"refusing to open a position that cannot be "
                            f"protected"),
                 "blocked_by": REASON_NO_TICK}
+    # THE PRICE THIS ORDER WAS GATED ON, AND WHERE IT CAME FROM -- recorded
+    # for every order, so "was this entry priced on a real quote?" is a query.
+    _order_event("PRICE_USED", "atlas_entry.enter_trade", symbol, "ENTRY_PRICE",
+                 f"gated on {ltp} from {ltp_source}",
+                 {"ltp": ltp, "ltp_source": ltp_source, "entry_px": entry_px,
+                  "entry_ref": entry_ref, "order_type": ENTRY_ORDER_TYPE},
+                 trade_id=row_id)
     order = place_order(symbol=symbol, direction=direction, qty=sizing["qty"],
                         order_type=ENTRY_ORDER_TYPE, price=entry_px,
                         tag=f"ATLAS:{row_id}", product=sizing["product"],
