@@ -52,7 +52,9 @@ def _headers(extra=None):
     return h
 
 
-def open_positions() -> list:
+def open_positions():
+    """Open ATLAS rows, or None when they cannot be read (OPEN D-053). It
+    returned [] and run() then printed "no open positions" and exited 0."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/atlas_trades"
         f"?status=in.({','.join(OPEN_STATUSES)})"
@@ -61,7 +63,7 @@ def open_positions() -> list:
     if r.status_code != 200:
         log.error(f"open positions read failed: HTTP {r.status_code} "
                   f"{r.text[:160]}")
-        return []
+        return None
     return r.json() or []
 
 
@@ -71,6 +73,10 @@ def run() -> int:
     from atlas.execution.protection import broker_protection, confirm_legs
 
     rows = open_positions()
+    if rows is None:
+        print("open positions UNREADABLE — nothing published; this is not "
+              "'no open positions'")
+        return 1
     if not rows:
         print("no open positions")
         return 0

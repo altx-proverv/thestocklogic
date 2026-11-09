@@ -211,20 +211,47 @@ class RBEngine:
         self.index_prev = {}
         log.info(f"Range map loaded: {len(self.ranges)} stocks | "
                  f"generated {self.generated_at or 'unknown'} | "
-                 f"Already fired today: {len(self.fired)}")
+                 f"Already fired today: "
+                 f"{'UNKNOWN (unreadable)' if self.fired is None else len(self.fired)}")
 
-    def _load_fired_today(self) -> set:
-        """One signal per stock per direction per day — restore state."""
+    def _load_fired_today(self):
+        """One signal per stock per direction per day — restore state.
+
+        None when it cannot be read, never set(). An empty set means "nothing
+        fired yet today"; after a restart, that turned a failed read into
+        permission to fire every signal again (OPEN D-053). With the state
+        unknown, nothing fires until a reload succeeds -- fewer observations,
+        never duplicates.
+        """
         today = now_ist().date().isoformat()
         try:
             r = requests.get(
                 f"{SUPABASE_URL}/rest/v1/live_signals"
                 f"?signal_date=eq.{today}&session=eq.rbe&select=symbol,direction",
                 headers=_headers(), timeout=10)
+            if r.status_code != 200:
+                log.error(f"fired state UNREADABLE: HTTP {r.status_code} — "
+                          f"no breakout will fire until it can be read")
+                return None
             return {f"{x['symbol']}:{x['direction']}" for x in r.json()}
         except Exception as e:
-            log.warning(f"Could not load fired state: {e}")
-            return set()
+            log.error(f"fired state UNREADABLE ({e}) — no breakout will fire "
+                      f"until it can be read")
+            return None
+
+    def _fired_known(self) -> bool:
+        """Retry an unreadable fired state, at most once a minute."""
+        if self.fired is not None:
+            return True
+        now = time.time()
+        if now - getattr(self, "_fired_retry_at", 0) < 60:
+            return False
+        self._fired_retry_at = now
+        self.fired = self._load_fired_today()
+        if self.fired is not None:
+            log.warning(f"fired state now readable ({len(self.fired)} already "
+                        f"fired today) — breakouts resume")
+        return self.fired is not None
 
     def on_ticks(self, ws, ticks):
         # EQUITY TICKS ONLY. tick_count is what the feed-dead monitor differences
@@ -281,6 +308,10 @@ class RBEngine:
         # Time-normalized RVOL
         expected_vol = r["avg_vol_20d"] * volume_bucket(self.curve)
         rvol = round(vol / expected_vol, 2) if expected_vol > 0 else 0
+
+        # NOTHING FIRES WHILE TODAY'S FIRED STATE IS UNKNOWN.
+        if not self._fired_known():
+            return
 
         # LONG breakout
         if ltp > rh * (1 + BREAKOUT_BUFFER) and f"{sym}:LONG" not in self.fired:

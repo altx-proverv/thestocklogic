@@ -228,6 +228,10 @@ def scan_symbol(symbol: str, on: date, cfg) -> list:
         vol = float(row["volume"])
         close = float(row["close"])
     except (TypeError, ValueError):
+        # Was silent: an unparseable session row read as "no extreme".
+        log.warning(f"{symbol}: {on} session row unparseable (volume="
+                    f"{row.get('volume')!r}, close={row.get('close')!r}) — "
+                    f"not scanned")
         return []
     mult = vol / avg
     if mult < cfg.scanner_vol_mult:

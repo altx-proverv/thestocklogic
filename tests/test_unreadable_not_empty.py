@@ -181,6 +181,36 @@ tr = PG.trail({"symbol": "TESTSYM", "direction": "LONG", "qty": 5, "stop_price":
 check("trail: ok (stop held), but evaluated False",
       (tr.get("ok"), tr.get("evaluated"), tr.get("moved")), (True, False, False))
 
+print("\nD-053 confirmed items")
+sys.path.insert(0, str(ROOT / "engine"))
+import engine.rbe_engine as RBE                                 # noqa: E402
+_rg = RBE.requests.get
+RBE.requests.get = lambda *a, **k: R(503, {"message": "down"})
+eng = RBE.RBEngine.__new__(RBE.RBEngine)
+check("rbe fired state, HTTP 503 -> None (not set())", eng._load_fired_today(), None)
+RBE.requests.get = lambda *a, **k: (_ for _ in ()).throw(OSError("x"))
+check("rbe fired state, network error -> None", eng._load_fired_today(), None)
+eng.fired = None
+eng._fired_retry_at = 0
+check("unknown fired state: nothing may fire", eng._fired_known(), False)
+RBE.requests.get = lambda *a, **k: R(200, [{"symbol": "AAA", "direction": "LONG"}])
+eng._fired_retry_at = 0
+check("readable again: fires resume with the real state",
+      (eng._fired_known(), eng.fired), (True, {"AAA:LONG"}))
+RBE.requests.get = _rg
+
+import engine.publish_protection as PP                          # noqa: E402
+_pg = PP.requests.get
+PP.requests.get = lambda *a, **k: R(500, "down")
+check("publish_protection: unreadable -> None", PP.open_positions(), None)
+check("  run() exits non-zero, not 'no open positions'", PP.run(), 1)
+PP.requests.get = _pg
+
+import radar.detect as RD                                       # noqa: E402
+src_rd = (ROOT / "radar/detect.py").read_text()
+check("radar: an unparseable session row is logged, not silent",
+      "session row unparseable" in src_rd, True)
+
 print("\nTHE CYCLE (structure -- the 700-line cycle is not driven here)")
 src = (ROOT / "atlas/signal/market_open.py").read_text()
 import re                                                      # noqa: E402
