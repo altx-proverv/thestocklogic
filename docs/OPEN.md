@@ -218,12 +218,32 @@ Rule: a failed read must never return the same value as a successful empty read 
 
 ### D-060 · Test suites can delete production state when run on the box
 - **Status** open · **Evidence** VERIFIED: `tick_map.reset_for_tests()` unlinks whatever TICK_MAP_FILE points at; `symbol_block.reset_for_tests()` likewise for its file. A suite run on the box without redirecting the env would remove the live file. VERIFIED 2026-11-09: the exit-suite runs on the box changed nothing under /var/lib/atlas (all mtimes predate the runs). The exit suites now use a temp fixture; the others still rely on env redirection.
+- **Fixed 2026-11-10** (4dbb3b4): atlas/disposable.py refuses any destructive test-helper path outside the temp dir (symlinks resolved, no override); a script under tests/ is a drill however started; order_events never POSTs under a drill; mutate_gate_bypass mutates a temp copy (it rewrote live source and rmtree'd the venv's caches). Swept every suite, run_all and direct, behind a record-only fs/HTTP hook: nothing writes outside temp except engine modules appending their own reports/*.log at import. VERIFIED on the box: full suite, 0 changes under /var/lib/atlas and data/reference.
 
 ### D-061 · test_page_claims was red on main from 71f1b3d to b05196a
 - **Status** fixed-verified · My miss: the pause fix changed normalise_mode and I did not run that suite. Repointed to the new ruling in b05196a.
 
 ### D-062 · test_data_rights is red on main and was before 2026-11-09
 - **Status** open · **Evidence** VERIFIED: fails at 2f6c91b; 21 datasets in use against 16 register rows (NSE announcements/XBRL/holiday master/sec_list, Upstox candles/instruments/option chain, Kite account data/instruments/quotes/ticker). Also: test_calendar_source fails on a dev machine whose holiday cache is older than 7 days (environment, not code).
+
+
+### D-063 · Market cap: a licence question, not yet a data question
+- **Status** open — needs you (stopped here by instruction) · **Found** 2026-11-10
+- **Evidence** VERIFIED: every NSE row in compliance/data_rights.csv is "unconfirmed: rights request emailed to NSE; no reply on file" -- the daily bhavcopy included. The natural source of shares outstanding, NSE's shareholding-pattern master (api/corporate-share-holdings-master and the SHP XBRL it links), is already read by engine/tier1_fetch.py and has NO register row (D-062).
+- **Data side, for when the licence is settled:** tier1_sources.json keeps each quarter's SHP XBRL URL and its as-of date (RELIANCE: 30-SEP-2026); those filings state the total share count, which tier1_fetch does not parse today. Shares outstanding with an as-of date is therefore a small parse of files we already fetch -- not built.
+
+### D-064 · "The next two supports below price": near the 52-week low there usually are none
+- **Status** open — decision needed before sizing · **Found** 2026-11-10
+- **Evidence** VERIFIED, 717 universe symbols, session 2026-11-09, using engine/active_zones.py's own _collect/_mitigated (unmitigated demand OB + bullish FVG below the close):
+  - current rules (MAX_ZONE_AGE 60 sessions, MAX_ZONE_DIST_PCT 15%): all 0/1/2+ = 219/157/341; within 5% of the 252-session low 30/2/1 (n=33); within 10% 79/32/20 (n=131)
+  - no age or distance limit (history since 2023): all 45/34/638; within 5% of the low 13/2/18
+- **Proposed shape, not built:** supports_below(df, n=2) beside add_active_zones, same rules, nearest first, each with source/age/distance, and an explicit count and reason ("none: price is below every unmitigated demand zone on file") -- never a level invented to make two. What sizing does with 0 or 1 is your rule to set.
+
+### D-065 · Order of work recorded 2026-11-10
+- The eleven decided substitutions (D-001..D-012 less D-008), D-001 change_pct first -- the root of three visible lies (D-001, D-002, D-003) on pages meant to be sold -- come AFTER the backtest machinery. Screener critical path, not ATLAS's. Not to be dropped.
+
+### D-066 · The box deploys main without running the suite (D4)
+- **Status** open · Bit twice in two days: test_page_claims red from 71f1b3d to b05196a (D-061), and nine suites written 2026-11-09/10 never registered in run_all (fixed in 4dbb3b4, with a check that fails run_all on an unregistered test). Nothing gates the five-minute `git reset --hard origin/main` on a green suite.
 
 ---
 
