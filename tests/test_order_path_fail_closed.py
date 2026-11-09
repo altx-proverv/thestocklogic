@@ -185,6 +185,34 @@ try:
 finally:
     AE.requests.get = saved_g
 
+print("\nFAIL-OPEN PATHS ARE NOW COUNTED (behaviour unchanged)")
+import atlas.reporting.directives as DIR                       # noqa: E402
+OE._seen.clear()
+bad = Path(tempfile.mkdtemp()) / "block.json"
+bad.write_text("{not json")
+_saved_bf = SB.BLOCK_FILE
+SB.BLOCK_FILE = bad
+try:
+    check("unreadable symbol-block file still blocks nothing", SB.is_blocked("ANY")[0], False)
+finally:
+    SB.BLOCK_FILE = _saved_bf
+check("  and is recorded as CHECK_SKIPPED",
+      any(e["code"] == "SYMBOL_BLOCK_UNREADABLE" and e["event"] == "CHECK_SKIPPED"
+          for e in events()), True)
+check("an unknown mode still reads NORMAL", DIR.normalise_mode("PAUSE"), "NORMAL")
+check("  and is recorded as SUBSTITUTED",
+      any(e["code"] == "MODE_DEFAULTED" for e in events()), True)
+check("a known mode is not recorded", DIR.normalise_mode("PAUSED"), "PAUSED")
+check("  (one MODE_DEFAULTED row, not two)",
+      len([e for e in events() if e["code"] == "MODE_DEFAULTED"]), 1)
+
+print("\nA SIGNAL WITH NO DIRECTION, AND AN ESTIMATED MARGIN, ARE RECORDED")
+src = Path(ROOT / "atlas/execution/atlas_entry.py").read_text()
+check("DIRECTION_DEFAULTED recorded where LONG is assumed",
+      'if not signal.get("direction"):' in src and "DIRECTION_DEFAULTED" in src, True)
+check("MARGIN_ESTIMATED recorded on the estimate path",
+      src.index("MARGIN_ESTIMATED") < src.index("using ESTIMATED margin"), True)
+
 print("\nNOTHING WAS POSTED ANYWHERE REAL")
 check("every event went to the stub poster", all(isinstance(p, dict) for p in posted), True)
 

@@ -203,6 +203,20 @@ def settle(now=None) -> dict:
 
         if status == "COMPLETE":
             fill = order.get("average_price") or row.get("entry_price")
+            if not order.get("average_price") or not order.get("filled_quantity"):
+                try:
+                    from atlas.execution.order_events import record as _rec
+                    _rec("SUBSTITUTED", "reconcile", row.get("symbol"),
+                         "FILL_FROM_ROW",
+                         f"COMPLETE order {order.get('order_id')} without "
+                         f"average_price/filled_quantity; the row's pre-order "
+                         f"values were written as the fill",
+                         {"average_price": order.get("average_price"),
+                          "filled_quantity": order.get("filled_quantity"),
+                          "row_entry_price": row.get("entry_price"),
+                          "row_qty": row.get("qty")}, trade_id=rid)
+                except Exception:
+                    pass
             if _patch(rid, {"status": "OPEN",
                             "order_id": str(order.get("order_id") or ""),
                             "entry_price": fill,

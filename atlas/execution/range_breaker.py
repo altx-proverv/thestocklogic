@@ -608,6 +608,11 @@ def _blocked_load() -> dict:
         # FAIL OPEN, same reasoning as the box: an unreadable file cannot prove
         # a symbol broke, and the stop-loss is the real protection.
         log.error(f"could not read {path} ({e}) — no symbols treated as blocked")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("CHECK_SKIPPED", "range_breaker._blocked_load", None, "RANGE_BLOCK_UNREADABLE", f"range-break block file unreadable, every symbol treated as unblocked: {e}")
+        except Exception:
+            pass
     return blank
 
 

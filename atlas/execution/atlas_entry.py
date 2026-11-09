@@ -725,6 +725,11 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
     """
     symbol     = signal.get("symbol", "")
     direction  = signal.get("direction", "LONG").upper()
+    if not signal.get("direction"):
+        _order_event("SUBSTITUTED", "atlas_entry.enter_trade", symbol,
+                     "DIRECTION_DEFAULTED",
+                     "signal carried no direction; LONG was assumed",
+                     {"signal_keys": sorted(signal)[:40]})
     entry_ref  = float(signal.get("entry_ref", signal.get("entry", 0)) or 0)
     entry_low  = float(signal.get("entry_low", 0) or 0)
     entry_high = float(signal.get("entry_high", 0) or 0)
@@ -995,6 +1000,10 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         log.warning(f"{symbol}: stock breaker could not evaluate — "
                     f"{_sb['detail'][:160]}; proceeding, the stop-loss is the "
                     f"protection")
+        _order_event("CHECK_SKIPPED", "atlas_entry.enter_trade", symbol,
+                     "STOCK_BREAKER_UNEVALUATED",
+                     f"Gate 4b could not evaluate and the entry proceeded: "
+                     f"{_sb['detail'][:300]}")
 
     # GATE 5 -- sizing. Rs3,000 risk / Rs1,00,000 notional, qty a multiple of 5,
     # AND capped by what the account can actually pay for.
@@ -1106,6 +1115,11 @@ def enter_trade(signal: dict, dry_run: bool = False) -> dict:
         sizing["capital_required"] = need
         sizing["margin_source"] = "broker"
     else:
+        _order_event("SUBSTITUTED", "atlas_entry.enter_trade", symbol,
+                     "MARGIN_ESTIMATED",
+                     f"broker margin unavailable ({marg.get('reason')}); "
+                     f"sized on the estimate Rs{need:,.0f}",
+                     {"estimate": need, "broker_reason": str(marg.get("reason"))[:300]})
         log.warning(f"{symbol}: using ESTIMATED margin Rs{need:,.0f} "
                     f"({marg.get('reason')})")
         sizing["margin_source"] = "estimate"

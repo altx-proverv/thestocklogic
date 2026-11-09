@@ -70,6 +70,11 @@ def _load() -> dict:
         # FAIL OPEN. An unreadable file cannot prove a symbol should be
         # blocked, and the stop order is the real protection.
         log.error(f"could not read {BLOCK_FILE} ({e}) — no symbols blocked")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("CHECK_SKIPPED", "symbol_block._load", None, "SYMBOL_BLOCK_UNREADABLE", f"block file unreadable, every symbol treated as unblocked: {e}")
+        except Exception:
+            pass
     return blank
 
 

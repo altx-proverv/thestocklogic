@@ -32,6 +32,9 @@ EVENTS
                 substitution left in place can be counted rather than guessed.
   PRICE_USED    the price an entry was gated on, and where it came from, for
                 every order that is about to be placed
+  CHECK_SKIPPED a gate that fails open went ahead without its input (an
+                unreadable block file, an unevaluable breaker, an unreadable
+                position or trigger list). Behaviour unchanged; now countable.
 """
 from __future__ import annotations
 
@@ -46,7 +49,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 ROOT = Path(__file__).resolve().parent.parent.parent
 LOCAL = Path(os.environ.get("TSL_ORDER_EVENTS_FILE",
                             ROOT / "reports" / "order_path_events.jsonl"))
-EVENTS = ("REFUSED", "SUBSTITUTED", "PRICE_USED")
+EVENTS = ("REFUSED", "SUBSTITUTED", "PRICE_USED", "CHECK_SKIPPED")
 
 _seen: dict = {}
 

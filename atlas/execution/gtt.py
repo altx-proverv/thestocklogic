@@ -60,6 +60,11 @@ def list_active_gtts() -> list:
         return [g for g in (kite.get_gtts() or []) if g.get("status") == "active"]
     except Exception as e:
         log.warning(f"GTT list failed: {e}")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("CHECK_SKIPPED", "gtt.list_active_gtts", None, "GTT_LIST_UNREADABLE", f"broker GTT list unreadable ({e}); returned []")
+        except Exception:
+            pass
         return []
 
 
@@ -88,10 +93,20 @@ def list_atlas_gtts() -> list:
                      "Authorization": f"Bearer {SUPABASE_KEY}"}, timeout=10)
         if r.status_code != 200:
             log.warning(f"could not read recorded trigger ids: HTTP {r.status_code}")
+            try:
+                from atlas.execution.order_events import record as _rec
+                _rec("CHECK_SKIPPED", "gtt.list_atlas_gtts", None, "GTT_LIST_UNREADABLE", f"recorded trigger ids unreadable (HTTP {r.status_code}); returned [] -- orphan-trigger cleanup sees none")
+            except Exception:
+                pass
             return []
         known = {str(x["gtt_trigger_id"]) for x in r.json() if x.get("gtt_trigger_id")}
     except Exception as e:
         log.warning(f"could not read recorded trigger ids: {e}")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("CHECK_SKIPPED", "gtt.list_atlas_gtts", None, "GTT_LIST_UNREADABLE", f"recorded trigger ids unreadable ({e}); returned [] -- orphan-trigger cleanup sees none")
+        except Exception:
+            pass
         return []
 
     return [g for g in active if str(g.get("id")) in known]

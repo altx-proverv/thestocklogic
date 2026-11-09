@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS public.order_path_events (
   id            bigserial    PRIMARY KEY,
   at            timestamptz  NOT NULL,
   session_date  date         NOT NULL,
-  event         text         NOT NULL CHECK (event IN ('REFUSED', 'SUBSTITUTED', 'PRICE_USED')),
+  event         text         NOT NULL CHECK (event IN ('REFUSED', 'SUBSTITUTED', 'PRICE_USED', 'CHECK_SKIPPED')),
   source        text         NOT NULL,
   symbol        text,
   code          text         NOT NULL,

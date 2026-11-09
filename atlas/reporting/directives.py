@@ -65,6 +65,13 @@ def normalise_mode(mode: str) -> str:
         log.warning(f"atlas_state.mode is {m!r}, which is not one of "
                     f"{AGENT_MODES} — reporting NORMAL. It was almost certainly "
                     f"set before the retired modes were removed.")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("SUBSTITUTED", "directives.normalise_mode", None, "MODE_DEFAULTED",
+                 f"atlas_state.mode {m!r} is not a known mode; NORMAL (trading "
+                 f"allowed) was used", {"mode": m})
+        except Exception:
+            pass
     return DEFAULT_AGENT_MODE
 
 

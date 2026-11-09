@@ -661,6 +661,13 @@ def open_positions_for_reconcile() -> list:
             if r2.status_code != 200:
                 log.error(f"open positions read failed: HTTP {r2.status_code} "
                           f"{r2.text[:200]}")
+                try:
+                    from atlas.execution.order_events import record as _rec
+                    _rec("CHECK_SKIPPED", "market_open.open_positions_for_reconcile", None,
+                         "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned [] -- "
+                         "reconcile AND the protection sweep saw no positions this cycle")
+                except Exception:
+                    pass
                 return []
             rows = r2.json() or []
             for row in rows:
@@ -675,9 +682,23 @@ def open_positions_for_reconcile() -> list:
 
         log.error(f"open positions read failed: HTTP {r.status_code} "
                   f"{r.text[:200]}")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("CHECK_SKIPPED", "market_open.open_positions_for_reconcile", None,
+                 "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned [] -- "
+                 "reconcile AND the protection sweep saw no positions this cycle")
+        except Exception:
+            pass
         return []
     except Exception as e:
         log.error(f"open positions read failed: {type(e).__name__}: {e}")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("CHECK_SKIPPED", "market_open.open_positions_for_reconcile", None,
+                 "OPEN_POSITIONS_UNREADABLE", "open positions unreadable; returned [] -- "
+                 "reconcile AND the protection sweep saw no positions this cycle")
+        except Exception:
+            pass
         return []
 
 
