@@ -113,6 +113,33 @@ st = DIR.handle_directive("/status")
 check("an unknown mode is not shown as NORMAL", "NORMAL" in st, False)
 check("  and says entries are stopped", "ENTRIES STOPPED" in st, True)
 
+print("\nD-055: A SIGNAL WITH NO CAPITAL FIGURE IS BLOCKED")
+import atlas.risk.funds as FUNDS                               # noqa: E402
+KS.get_agent_state = lambda: row("NORMAL")
+_ca = FUNDS.can_afford
+FUNDS.can_afford = lambda c: (True, "", {"data_available": True})
+for cap in (None, 0, "x", -5):
+    check(f"capital_required {cap!r} -> blocked",
+          bool(KS.check({"symbol": "T", "capital_required": cap})), False)
+check("a positive figure is checked and allowed",
+      bool(KS.check({"symbol": "T", "capital_required": 10000})), True)
+FUNDS.can_afford = lambda c: (False, "insufficient", {"data_available": True})
+check("  and refused when funds say no",
+      bool(KS.check({"symbol": "T", "capital_required": 10000})), False)
+FUNDS.can_afford = _ca
+check("no signal (the broker-layer copy) is a mode check only",
+      bool(KS.check()), True)
+
+print("\nD-054: AN UNEVALUATED MARKET BREAKER MEANS NO ENTRY (structure)")
+mo_src = (ROOT / "atlas/signal/market_open.py").read_text()
+check("the breaker block no longer 'fails open' for entries",
+      "Fail open: the breakers are a refinement" in mo_src, False)
+check("CANNOT_EVALUATE and a raise both set the refusal",
+      mo_src.count("_breaker_unevaluated = ") >= 3, True)
+check("the refusal is checked before the entry loop",
+      0 < mo_src.index("    if _breaker_unevaluated:") <
+      mo_src.index("    for sym, direction, sig, ltp in candidates:"), True)
+
 print("\nONLY KNOWN MODES ARE EVER WRITTEN")
 writes.clear()
 check("update_agent_mode('HALT') refused", DIR.update_agent_mode("HALT"), False)

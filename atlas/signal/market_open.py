@@ -868,10 +868,18 @@ def cycle(state: Session) -> dict:
     # THE MARKET BREAKER runs once per cycle on the NIFTY future and can stand
     # the day down. THE STOCK BREAKER runs here on every OPEN POSITION, and in
     # atlas_entry at Gate 4b for candidates. Neither ever exits a position.
+    # THE MARKET BREAKER MUST HAVE RUN FOR AN ENTRY TO BE TAKEN (OPEN D-054).
+    # A failure here used to "fail open: the breakers are a refinement" --
+    # entries carried on with a stand-down check that had not happened. Fail
+    # toward less exposure: an unevaluated breaker means no entry this cycle.
+    # Exits and protection are unaffected; nothing here ever exits.
+    _breaker_unevaluated = None
     try:
         from atlas.execution import range_breaker as _RB
         _mb = _RB.market_check()
         out["breaker"] = _mb["state"]
+        if _mb.get("state") == _RB.REASON_CANNOT_EVALUATE:
+            _breaker_unevaluated = f"market breaker could not evaluate: {_mb.get('detail')}"
         log.info(f"cycle {state.cycle_n}: {_RB.line(_mb)}")
         if _mb["fired"]:
             log.error(f"cycle {state.cycle_n}: RANGE BREAK — the day is stood "
@@ -890,12 +898,14 @@ def cycle(state: Session) -> dict:
                 log.error(f"cycle {state.cycle_n}: {_sym} RANGE BREAK — "
                           f"{_sc['detail']}")
     except Exception as e:
-        # A FAILURE HERE MUST NOT SKIP THE CYCLE, and must not fire anything.
-        # Fail open: the breakers are a refinement on top of the stop-loss, not
-        # a replacement for it.
+        # A FAILURE HERE MUST NOT SKIP THE CYCLE, and must not fire anything --
+        # reconcile and protection below still run. But it is not a pass for
+        # ENTRIES: an unevaluated breaker means no entry this cycle (OPEN
+        # D-054), refused just before the entry loop.
         log.error(f"cycle {state.cycle_n}: range breakers did not run "
-                  f"({type(e).__name__}: {e}) — nothing fired; the stop-loss "
-                  f"remains the protection")
+                  f"({type(e).__name__}: {e}) — no entry this cycle; the "
+                  f"stop-loss remains the protection for open positions")
+        _breaker_unevaluated = f"range breakers raised {type(e).__name__}: {e}"
 
 
     # ── WATCH-ONLY: A HALTED ATLAS STILL OBSERVES ───────────────────────
@@ -1217,6 +1227,23 @@ def cycle(state: Session) -> dict:
         # No entries are possible on this path, so this IS after the entry
         # decisions. A session where nothing reaches a zone is exactly when the
         # page most needs to show what the engine is looking at.
+        out["live_view"] = push_live_zones(state, live_rows, set())
+        return out
+
+    if _breaker_unevaluated:
+        out["entries_refused"] = _breaker_unevaluated
+        log.error(f"cycle {state.cycle_n}: {len(candidates)} candidate(s) NOT "
+                  f"entered — {_breaker_unevaluated}")
+        try:
+            from atlas.execution.order_events import record as _rec
+            _rec("REFUSED", "market_open.cycle", None, "BREAKER_UNEVALUATED",
+                 _breaker_unevaluated, {"candidates": len(candidates)})
+        except Exception:
+            pass
+        alert("ENTRIES REFUSED — BREAKER NOT EVALUATED",
+              f"{_breaker_unevaluated}. No entry is taken while the market "
+              f"breaker cannot run. Open positions keep their stops.",
+              key="breaker_unevaluated")
         out["live_view"] = push_live_zones(state, live_rows, set())
         return out
 

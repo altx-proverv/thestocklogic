@@ -46,8 +46,11 @@ watch-only until resumed.
 ### Reads and controls (2026-11-09, operator)
 - **A failed read must never return the same value as a successful empty read.**
 - **A control that cannot be read is not satisfied.**
-- **A gate whose input is missing fails closed, on every path, without
-  exception.** (Exit clause pending — OPEN D-056.)
+- **Fail in the direction of less exposure, not the direction of less
+  action.** For an entry that means do not enter. For an exit it means exit,
+  or alert without stopping until a human acts. (2026-11-09, operator --
+  replaces "a gate whose input is missing fails closed", which told an exit
+  that could not price itself to do nothing. OPEN D-056.)
 - **Only an exact NORMAL permits an entry.** Any other agent mode, including
   one nobody recognises, is stopped. (OPEN D-016, D-047.)
 

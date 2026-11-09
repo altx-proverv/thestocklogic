@@ -128,15 +128,30 @@ def check(signal: dict = None) -> KillSwitchResult:
     #
     # can_afford() returns False on BOTH insufficient funds and any failure to
     # read them, so an unreadable broker blocks rather than defaults.
+    #
+    # A SIGNAL WITH NO CAPITAL FIGURE IS NOT A PASS (OPEN D-055). This ran the
+    # funds check only `if capital_required > 0`, so a missing or zero figure
+    # skipped it. With a signal, the figure must be a positive number or the
+    # entry is blocked. Called with NO signal (broker.place_order's copy) the
+    # switch is a mode check only -- by design: funds are checked at Gate 6 and
+    # here at Gate 7, where enter_trade sets capital_required just before.
     if signal:
-        capital_required = float(signal.get("capital_required") or 0)
-        if capital_required > 0:
-            from atlas.risk.funds import can_afford
-            ok, reason, detail = can_afford(capital_required)
-            details.update(detail)
-            if not ok:
-                log.warning(f"KILL SWITCH: {reason}")
-                return KillSwitchResult(False, reason, details)
+        try:
+            capital_required = float(signal.get("capital_required"))
+        except (TypeError, ValueError):
+            capital_required = 0.0
+        if not capital_required > 0:
+            reason = (f"capital_required is {signal.get('capital_required')!r} — "
+                      f"funds cannot be checked, so the entry is blocked")
+            log.warning(f"KILL SWITCH: {reason}")
+            details["funds_checked"] = False
+            return KillSwitchResult(False, reason, details)
+        from atlas.risk.funds import can_afford
+        ok, reason, detail = can_afford(capital_required)
+        details.update(detail)
+        if not ok:
+            log.warning(f"KILL SWITCH: {reason}")
+            return KillSwitchResult(False, reason, details)
 
     # REMOVED: daily loss cap, weekly drawdown, max open positions, conviction
     # gates. Drawdown is managed by the operator, who also manages every exit;
