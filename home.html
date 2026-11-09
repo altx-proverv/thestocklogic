@@ -1082,8 +1082,14 @@ function changeFeedDead(){
   return S.covered===0;
 }
 
+/* THE SAME RULE AS THE HEATMAPS (engine/sector_rank.py, OPEN D-071): a group
+   with fewer than five priced members is not ranked. With NSE's industries
+   some groups hold one stock (Diversified, Forest Materials); "Utilities led"
+   on four names is those names, not a sector. They are still drawn in the
+   grid -- they are just never named as leading, lagging or counted here. */
+var MIN_RANKED_MEMBERS=5;
 function renderReading(){
-  var secs=S.sectors;
+  var secs=(S.sectors||[]).filter(function(s){return s.counted>=MIN_RANKED_MEMBERS;});
   if(changeFeedDead()){
     document.getElementById('reading').textContent=
       'No price data is available for the market right now.';

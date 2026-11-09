@@ -97,6 +97,9 @@ check("ranked: groups with >= 5 members, not UNKNOWN/OTHER", sorted(r.sector), [
 check("unranked: the 4-member group, UNKNOWN, OTHER", sorted(u.sector), ["B", "OTHER", "UNKNOWN"])
 for f in ("engine/upstox_ws.py", "engine/07_sector_momentum.py"):
     check(f"{f} ranks only split_rankable's groups", "split_rankable(sector_df)" in (ROOT / f).read_text(), True)
+_home = (ROOT / "home.html").read_text()
+check("home.html's reading uses the same minimum", "var MIN_RANKED_MEMBERS=5;" in _home
+      and "s.counted>=MIN_RANKED_MEMBERS" in _home, True)
 from atlas.execution import session_selector as SS                # noqa: E402
 import inspect                                                     # noqa: E402
 check("session_selector does not treat two UNKNOWNs as one sector",
