@@ -1,5 +1,9 @@
 # Open questions, and what would answer them
 
+> **Superseded as the item list by [OPEN.md](OPEN.md)** (2026-11-09). This file
+> stays until its sections are folded in; OPEN D-031 records that its note on
+> the market-hours timer is out of date.
+
 Live state as at **2026-10-02**: ATLAS paused, market-hours timer disabled, the
 nightly chain still publishing and marking. The record grows with no capital at
 risk.
