@@ -43,6 +43,14 @@ watch-only until resumed.
 - **Never place, modify or cancel a broker order from any page or script written
   outside ATLAS's own order path.** (Standing, CLAUDE.md.)
 
+### Reads and controls (2026-11-09, operator)
+- **A failed read must never return the same value as a successful empty read.**
+- **A control that cannot be read is not satisfied.**
+- **A gate whose input is missing fails closed, on every path, without
+  exception.** (Exit clause pending — OPEN D-056.)
+- **Only an exact NORMAL permits an entry.** Any other agent mode, including
+  one nobody recognises, is stopped. (OPEN D-016, D-047.)
+
 ### Alerts and checks
 - **HTTP 200 is not delivery.** A message counts only with a `message_id`.
 - **Silence must mean breakage.** Every scheduled check speaks on a quiet day,

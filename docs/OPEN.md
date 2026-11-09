@@ -16,64 +16,64 @@ where it ran) · Related.
 ## 1. WAITING ON YOU — decisions
 
 ### D-001 · `live_prices.change_pct` is structurally 0
-- **Status** open · **Found** 2026-11-09, substitution sweep
+- **Status** decided 2026-11-09 · **Found** 2026-11-09, substitution sweep
 - **Evidence** VERIFIED: `engine/upstox_ws.py:557` divides by Upstox `ohlc.close`, which intraday is the current price; 744/744 rows read 0.0 on 2026-11-09 (CHOLAFIN 1773.40 vs prior close 1785.00 is −0.65%, stored 0.0).
 - **Impact** every consumer shows an unmeasured 0: D-002, D-003.
-- **Recommendation** real value with age — compute against our own prior close (`daily_closes`); store NULL until then.
+- **Decision** (2026-11-09, adopted from the recommendation) real value with age — compute against our own prior close (`daily_closes`); store NULL until then.
 - **Related** D-002, D-003, D-007
 
 ### D-002 · The ORB tape prints 0.00% for every break
-- **Status** open · **Found** 2026-11-09
+- **Status** decided 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED: `engine/publish_orb.py:117` copies D-001; 23/23 `orb_breaks` rows ever published carry 0.
-- **Recommendation** follows D-001.
+- **Decision** (2026-11-09, adopted from the recommendation) follows D-001.
 
 ### D-003 · signals.html "● LIVE" badge: `change_pct||0`, no age read
-- **Status** open · **Found** 2026-11-09
+- **Status** decided 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED: `signals.html:663`; `:630` selects `symbol,ltp,change_pct` — no `updated_at`.
-- **Recommendation** real value with age: LIVE only for a row from this session, else "as of HH:MM"; change % blank until D-001.
+- **Decision** (2026-11-09, adopted from the recommendation) real value with age: LIVE only for a row from this session, else "as of HH:MM"; change % blank until D-001.
 
 ### D-004 · BTST: missing/zero price → previous close, unlabelled; "live" is ~3h old
-- **Status** open · **Found** 2026-11-09
+- **Status** decided 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED: `engine/btst_engine.py:137, 299`; `reports/btst.log`: 147 of 212 runs loaded 0 live prices (49 sessions, 2026-06-05..08-12). INFERRED from the schedule: BTST runs 09:00 UTC, the last live_prices write before it is 06:00 UTC.
-- **Recommendation** labelled substitute ("last close, no live quote") plus the price's age.
+- **Decision** (2026-11-09, adopted from the recommendation) labelled substitute ("last close, no live quote") plus the price's age.
 
 ### D-005 · upstox_ws writes `ltp = 0` for a quote with no last_price
-- **Status** open · **Found** 2026-11-09
+- **Status** decided 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED: `engine/upstox_ws.py:556`; was CHOLAFIN's row 2026-09-22..11-06.
-- **Recommendation** show nothing: skip the row so the old one keeps its honest timestamp.
+- **Decision** (2026-11-09, adopted from the recommendation) show nothing: skip the row so the old one keeps its honest timestamp.
 
 ### D-006 · 167 published outcomes scored on an invented ±0.2% zone
-- **Status** open · **Found** 2026-11-09
+- **Status** decided 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED: `engine/update_outcomes.py:111-112` (also `engine/trade_review.py:60-61`); 167 pre-October `signals` rows with no entry band, all in `signal_outcomes`. None after October.
-- **Recommendation** labelled substitute: mark those outcomes as scored on a synthetic zone. It is the published record.
+- **Decision** (2026-11-09, adopted from the recommendation) labelled substitute: mark those outcomes as scored on a synthetic zone. It is the published record.
 - **Related** [signal record defects]
 
 ### D-007 · `upstox_ws.day_ret` is structurally 0 (no reader)
-- **Status** open · **Evidence** VERIFIED: `engine/upstox_ws.py:174`; 9/9 rows in `live_longs_closing.parquet`. Nothing reads it.
-- **Recommendation** drop or compute with D-001.
+- **Status** decided 2026-11-09 · **Evidence** VERIFIED: `engine/upstox_ws.py:174`; 9/9 rows in `live_longs_closing.parquet`. Nothing reads it.
+- **Decision** (2026-11-09, adopted from the recommendation) drop or compute with D-001.
 
 ### D-008 · 03b fills missing scoring inputs with plausible values
-- **Status** open — scoring file, out of scope unless you open it
+- **Status** decided 2026-11-09: IN SCOPE. A missing ATR defaulting to 2% of close sets stops and targets, so it is a risk number. Own task; not started
 - **Evidence** VERIFIED: `engine/03b_score.py:411` VIX→15, `:490` %-from-52w→−5, `:578` ATR→2% of close (sets stops and targets), `:577` close→0. How often: NOT MEASURED.
 
 ### D-009 · market_open's entry Telegram shows a signal price or ₹0 as the fill
-- **Status** open · **Evidence** VERIFIED: `atlas/signal/market_open.py:1251-1253`.
-- **Recommendation** labelled: "fill unknown, signal ₹x".
+- **Status** decided 2026-11-09 · **Evidence** VERIFIED: `atlas/signal/market_open.py:1251-1253`.
+- **Decision** (2026-11-09, adopted from the recommendation) labelled: "fill unknown, signal ₹x".
 
 ### D-010 · trade_outcome_checker writes daily/weekly P&L 0 on a failed read
-- **Status** open · **Evidence** VERIFIED: `atlas/execution/trade_outcome_checker.py:238, 245`; PATCH result unchecked. VERIFIED no gate reads `atlas_state.daily_pnl` (`kill_switch.py:141`, caps removed) and no page does.
-- **Recommendation** show nothing: skip the write, log.
+- **Status** decided 2026-11-09 · **Evidence** VERIFIED: `atlas/execution/trade_outcome_checker.py:238, 245`; PATCH result unchecked. VERIFIED no gate reads `atlas_state.daily_pnl` (`kill_switch.py:141`, caps removed) and no page does.
+- **Decision** (2026-11-09, adopted from the recommendation) show nothing: skip the write, log.
 
 ### D-011 · signals.html ORB ticker: `ltp||entry`; missing PDH counts as confirmed
-- **Status** open · **Evidence** VERIFIED: `signals.html:1230, 1244`.
-- **Recommendation** no PDH flag without a price.
+- **Status** decided 2026-11-09 · **Evidence** VERIFIED: `signals.html:1230, 1244`.
+- **Decision** (2026-11-09, adopted from the recommendation) no PDH flag without a price.
 
 ### D-012 · atlas.html `riskOf` → 0 when the stop is missing
-- **Status** open · **Evidence** VERIFIED: `atlas.html:472`.
-- **Recommendation** count "n without a stop" beside the total.
+- **Status** decided 2026-11-09 · **Evidence** VERIFIED: `atlas.html:472`.
+- **Decision** (2026-11-09, adopted from the recommendation) count "n without a stop" beside the total.
 
 ### D-013 · 13 "< 250 sessions" exclusions no longer hold
-- **Status** open · **Found** 2026-11-09
+- **Status** decided 2026-11-09: lift all 13 as one dated change; boundary date 2026-11-09 (row counts measured through that session). Not yet applied — held with the other code changes after the operator asked for only the pause fix on the night of 2026-11-09 · **Found** 2026-11-09
 - **Evidence** VERIFIED (parquet row counts, 2026-11-09): CANHLIFE 268, GROWW 253, JAINREC 279, LENSKART 255, LGEINDIA 271, OLAELEC 564, PINELABS 251, PIRAMALFIN 256, SCHNEIDER 967, TATACAP 272, TMCV 253, TMPV 265, URBANCO 289. Still true: EMMVEE, ICICIAMC, JSWDULUX, LTM, MEESHO, PWL, TENNIND. INFERRED: SCHNEIDER was short only because its BE sessions were not ingested before 2026-10-15.
 - **Also checked** price < ₹50: all 14 still true; HFCL, MOREPENLAB still BE. NOT checked: CEMPRO, CPPLUS (band), SPLPETRO (value), HEGAM (deliberate review).
 
@@ -90,6 +90,7 @@ Each is now **counted** in `order_path_events` (273bded) without changing what i
 
 ### D-016 · An unrecognised or missing agent mode becomes NORMAL
 - **Evidence** VERIFIED: `atlas/reporting/directives.py` `normalise_mode`; `HALT_MODES = ("PAUSED",)`. "PAUSE", "HALT", or a NULL mode all allow trading. `market_open.paused()` likewise matches only the exact string.
+- **Status** fixed-verified 2026-11-09 (71f1b3d): only an exact NORMAL permits entries in `paused()`, the kill switch and `status()`; unknown is reported UNKNOWN and recorded REFUSED. Verified on the box against the real row: `paused()` True, `check()` blocks, `status().halted` True.
 
 ### D-017 · A signal with no direction is entered as LONG
 - **Evidence** VERIFIED: `atlas/execution/atlas_entry.py` `signal.get("direction", "LONG")`; `check_entry_range` treats anything but SHORT as long.
@@ -116,6 +117,38 @@ Each is now **counted** in `order_path_events` (273bded) without changing what i
 - **Status** open — needs you · **Found** 2026-11-09
 - **Evidence** VERIFIED: applying `migrations/PENDING_order_path_events.sql` was refused by the session permission classifier. Until applied, events go only to `reports/order_path_events.jsonl` on the box.
 
+
+### Failed reads that return the same value as an empty answer (pattern sweep, 2026-11-09)
+Rule: a failed read must never return the same value as a successful empty read (CHARTER). AST sweep of `atlas/`, `engine/`, `radar/`: 156 except/non-200 branches returning an empty or default value. Most are distinguishable (a `(readable, value)` pair, an `ok: False` dict, `None` meaning failure where `[]` means none, or a success flag). The ones that are not:
+
+### D-048 · Radar cards say "no disclosed trigger found" when NSE could not be asked
+- **Status** open · **Evidence** VERIFIED: `radar/documents.py` `fetch_filings` returns [] on any failure; `attribute()` sets `checked = bool(docs) or True` — always True. The `fetch_filings` docstring says the distinction is "kept in the returned ok flag on attribute()"; there is no such flag. A comment asserting the opposite of its code.
+
+### D-049 · `reconcile.stale_pending` returns [] on a failed read
+- **Status** open · **Evidence** VERIFIED: `atlas/execution/reconcile.py:86, 90`; `settle()` then reports 0 checked. Rows stay PENDING (which blocks entries, the safe direction) but nothing says reconcile did not run.
+
+### D-050 · daily_report shows "no positions" when the broker is unreadable
+- **Status** open · **Evidence** VERIFIED: `broker.get_positions` [] on failure (`broker.py:181, 188`), read at `atlas/reporting/daily_report.py:438`.
+
+### D-051 · An unreadable signal batch is alerted as "EOD pipeline down?"
+- **Status** open · **Evidence** VERIFIED: `market_open.get_latest_batch_date` returns '' on HTTP != 200 (`:294`); `load_zone_map` alerts "no published signals at all". Fails closed; the alert names the wrong cause.
+
+### D-052 · No bars → "stop held" for trailing
+- **Status** open (safe direction) · **Evidence** VERIFIED: `preclose_gtt._bars_for` [] on failure; `trail()` holds the stop and reports ok.
+
+### D-053 · publish_protection, rbe, excursions, 03b, 01b, fundamentals, radar.detect
+- **Status** open · **Evidence** sites VERIFIED by the sweep; consequences INFERRED, callers not read: `engine/publish_protection.py:64` open_positions [] (page may show none open); `engine/rbe_engine.py:227` fired-today set() after a restart (a signal may fire twice); `engine/excursions.py:153, 187` []; `engine/03b_score.py:83, 93` sector bias / sector map {} (scoring inputs — with D-008); `engine/01b_download_bhavcopy.py:392, 407` delivery {}; `engine/fundamentals.py:936, 1046` cache {}; `radar/detect.py:231` one symbol's scan error reads as "no extreme".
+
+### Found by the three CHARTER rules, not by the decision list
+### D-054 · The day's range breakers fail open when they error
+- **Status** open · **Evidence** VERIFIED: `atlas/signal/market_open.py` cycle — "A FAILURE HERE MUST NOT SKIP THE CYCLE ... Fail open: the breakers are a refinement". Rule 3 says a gate with missing input fails closed.
+
+### D-055 · The kill switch's funds check is skipped when `capital_required` is absent
+- **Status** open · **Evidence** VERIFIED: `kill_switch.check` runs `can_afford` only `if signal` and `capital_required > 0`; `broker.place_order` calls `kill_switch_check()` with no signal. Funds are checked earlier at Gate 6, so the broker-layer copy checks only the mode. Rule 3.
+
+### D-056 · Rule 3 needs an exit clause
+- **Status** open — wording decision · An exit that cannot price itself (no tick map, no LTP) places nothing, which leaves the position open; it alerts (`exits.emergency_exit`). "Fails closed" for an entry means no order; for an exit it cannot mean that silently. Proposed: "for an exit, failing closed means refusing the unsafe order AND alerting until a human acts."
+
 ---
 
 ## 2. OPEN DEFECTS
@@ -137,9 +170,11 @@ Each is now **counted** in `order_path_events` (273bded) without changing what i
 
 ### D-030 · The exit test suites are red on main
 - **Status** open · **Found** 2026-11-09 · **Evidence** VERIFIED: `tests/test_exits.py` ("emergency exit places and reports ok" False, then IndexError at :345) and `tests/test_exit_path_rebuild.py` (IndexError); failures identical before and after ab67fd8/273bded.
+- **Diagnosis** 2026-11-09: STALE TEST, not a code defect. Both suites read the production tick map (`atlas.config.TICK_MAP_FILE`, `/var/lib/atlas/tick_map.json`); without it `price_for` raises NO_TICK_SIZE_CANNOT_PRICE and the code correctly refuses to place. VERIFIED: both pass on the box (exit 0) and pass locally with `ATLAS_TICK_MAP_FILE` pointed at a copy of the box map. Not hermetic; would also fail on the box if that file were missing. Not fixed, by instruction.
 
 ### D-031 · docs/open_questions.md says the market-hours timer is disabled
 - **Status** open · **Evidence** VERIFIED 2026-11-09: `atlas-market-hours.timer` active; the engine runs every session in WATCH-ONLY because of the operator /pause of 2026-10-28 15:22 IST.
+- **Detail** the pause is `atlas_state.mode = 'PAUSED'` (row id 1, the only row), enforced by `market_open.paused()`, `broker.place_order` and the kill switch.
 
 ### D-032 · No ISIN in raw bhavcopy before 2026-05-08
 - **Status** won't fix (data we hold) · **Evidence** VERIFIED: 858 of 977 files are the legacy layout; renames before May cannot be checked from disk.
@@ -170,4 +205,5 @@ Each is now **counted** in `order_path_events` (273bded) without changing what i
 | D-043 | Entry with no quote used `entry_ref` (`atlas_entry.py` was :885) | ab67fd8 | fixed-unverified in production (ATLAS paused); tests + mutants |
 | D-044 | Unreadable order state after cancel recorded as NO_FILL (was :628-634) | ab67fd8 | fixed-unverified in production; tests + mutants |
 | D-045 | Entry count returned 0 on a failed read (was :466) | ab67fd8 | fixed-unverified; no caller today |
+| D-047 | `/approve` could lift the pause on a failed read (`directives.get_agent_state` answered NORMAL; `/approve` wrote it back; `/pause` reply named `/approve` as a resume) | 71f1b3d | fixed-verified: tests + 4 mutants; real row reads paused on the box |
 | D-046 | Was any order priced on a substituted `entry_ref`? | — | answered 2026-11-09: no evidence of one. Engine path (2026-09-12 on): fallback unreachable (every candidate carried an Upstox ltp; code at ad1ddc4, 0146641, HEAD). Pre-engine (2026-08-19..09-04): 0 of 14 ENTERED decisions at entry_ref. Engine logs before 2026-10-19 rotated out. |
