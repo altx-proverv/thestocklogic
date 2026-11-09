@@ -395,7 +395,9 @@ MAILTO=""
 # entry, NOT joined to the && chain: it must speak when the chain has failed.
 # 14:20 UTC = 19:50 IST, after radar (done by ~13:52) and the chain (~13:18).
 # A quiet day still sends one line; silence means the job did not run.
-20 14 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.volume_alerts >> /home/ubuntu/thestocklogic/reports/volume_alerts.log 2>&1
+# Saturday too (1-6, 2026-11-10): its exit-alarm line is where a Friday
+# problem is seen before Monday. Saturday sends the non-session line + alarms.
+20 14 * * 1-6 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m engine.volume_alerts >> /home/ubuntu/thestocklogic/reports/volume_alerts.log 2>&1
 # EXIT ALARMS (OPEN D-058): no overnight repeat -- removed 2026-11-10 by
 # decision. Outstanding alarms appear in the 19:50 IST volume_alerts message;
 # immediate alerts come from the engine during market hours.

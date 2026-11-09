@@ -202,6 +202,7 @@ SUITES = [
     ("disposable paths",    [sys.executable, "tests/test_disposable.py"]),
     ("exit alarms",         [sys.executable, "tests/test_exit_alarms.py"]),
     ("shares outstanding",  [sys.executable, "tests/test_shares_outstanding.py"]),
+    ("long sizing",         [sys.executable, "tests/test_long_sizing.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
 ]

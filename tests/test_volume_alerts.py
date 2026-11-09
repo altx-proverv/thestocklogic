@@ -201,6 +201,7 @@ sat = D + timedelta(days=(5 - D.weekday()) % 7)
 h = Box()
 check(f"{sat} (Saturday) exits 0", V.run(sat, sender=h, getter=G, symbols=U), 0)
 check("  and says it was not a session", "not an NSE trading session" in h.msgs[0], True)
+check("  and still carries the exit-alarm line", "Exit alarms:" in h.msgs[0], True)
 
 print("\nHTTP 200 IS NOT DELIVERY")
 from engine import ledger_alerts as LA                       # noqa: E402

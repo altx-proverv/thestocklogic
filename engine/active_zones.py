@@ -141,6 +141,48 @@ def _active_series(df: pd.DataFrame, zones: list, is_demand: bool):
     return a_hi, a_lo, a_age
 
 
+def supports_below(df: pd.DataFrame, i: int | None = None) -> list:
+    """Every demand zone that is valid support at row i, NEAREST FIRST.
+
+    THE SAME RULES AS _active_series, which keeps only the nearest one: demand
+    order blocks and bullish FVGs, formed at or before i, at most MAX_ZONE_AGE
+    sessions old, top at or below the close, not mitigated (no low through the
+    zone's low after it formed), and top within MAX_ZONE_DIST_PCT of the close.
+    The age limit stays at 60 by decision (2026-11-10): near a 52-week low
+    there is usually nothing below price, and loosening the age to find
+    something would be manufacturing support, not finding it.
+
+    -> [{"top", "low", "age", "source"}], top descending. [] is a real answer:
+    no support below price. ATLAS sizing (atlas/sizing.py) places tranches on
+    these; anything nearer than its minimum spacing is skipped there.
+    """
+    if df is None or not len(df):
+        return []
+    n = len(df)
+    i = n - 1 if i is None else int(i)
+    c = float(df["close"].iloc[i])
+    if not c or np.isnan(c):
+        return []
+    lows, highs = df["low"].to_numpy(), df["high"].to_numpy()
+    out = []
+    for src, zones in (("demand_ob", _collect(df, "is_demand_ob", "ob_high", "ob_low")),
+                       ("bull_fvg", _collect(df, "bullish_fvg", "fvg_high", "fvg_low"))):
+        for z in zones:
+            if z["idx"] > i:
+                break
+            age = i - z["idx"]
+            if age > MAX_ZONE_AGE or z["high"] > c:
+                continue
+            if z["idx"] + 1 <= i and _mitigated(z["low"], z["high"],
+                                                lows[z["idx"] + 1:i + 1],
+                                                highs[z["idx"] + 1:i + 1], True):
+                continue
+            if (c - z["high"]) / c * 100.0 > MAX_ZONE_DIST_PCT:
+                continue
+            out.append({"top": z["high"], "low": z["low"], "age": age, "source": src})
+    return sorted(out, key=lambda z: -z["top"])
+
+
 def add_active_zones(df: pd.DataFrame) -> pd.DataFrame:
     """Adds forward-filled active zone columns. Expects 02b's OB/FVG columns."""
     if df is None or df.empty:

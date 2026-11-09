@@ -233,6 +233,63 @@ def session_vwap(symbol: str, on: date) -> float | None:
     return None
 
 
+
+_tv_cache: dict = {}
+
+
+def session_traded_value(symbol: str, on: date) -> float | None:
+    """NSE's own traded value (rupees) for one symbol-day, or None.
+
+    The same raw file and the same two layouts as session_vwap:
+        legacy layout   TURNOVER_LACS x 1e5
+        2026 layout     TtlTrfVal
+    EQ and BE series, as session_vwap.
+
+    THE FILE'S OWN DATE MUST BE `on`. cm14Sep2026bhav.csv holds 11-Sep data
+    (OPEN bhavcopy archive defects); read by name it would count one session
+    twice and another not at all. A file whose date column disagrees with its
+    name returns None, and the caller treats the session as unknown.
+    Used by ATLAS sizing's liquidity cap (atlas/sizing.py).
+    """
+    if on not in _tv_cache:
+        p = _raw_path(on)
+        frame = None
+        if p.exists():
+            try:
+                df = pd.read_csv(p)
+                df.columns = [c.strip() for c in df.columns]
+                if "SYMBOL" in df.columns:
+                    for c in ("SYMBOL", "SERIES", "DATE1"):
+                        df[c] = df[c].astype(str).str.strip()
+                    ok = df["DATE1"].map(lambda v: pd.to_datetime(v, format="%d-%b-%Y",
+                                                                  errors="coerce"))
+                    df = df[df["SERIES"].isin(("EQ", "BE"))]
+                    frame = {"date_ok": bool(len(df)) and bool((ok.dropna().dt.date == on).all()),
+                             "tv": dict(zip(df["SYMBOL"],
+                                            pd.to_numeric(df["TURNOVER_LACS"], errors="coerce") * 1e5))}
+                elif "TckrSymb" in df.columns:
+                    for c in ("TckrSymb", "SctySrs", "TradDt"):
+                        df[c] = df[c].astype(str).str.strip()
+                    ok = pd.to_datetime(df["TradDt"], errors="coerce")
+                    df = df[df["SctySrs"].isin(("EQ", "BE"))]
+                    frame = {"date_ok": bool(len(df)) and bool((ok.dropna().dt.date == on).all()),
+                             "tv": dict(zip(df["TckrSymb"],
+                                            pd.to_numeric(df["TtlTrfVal"], errors="coerce")))}
+                else:
+                    log.warning(f"{p.name}: neither bhavcopy layout recognised")
+            except Exception as e:
+                log.warning(f"raw bhavcopy {p.name} unreadable ({e})")
+        _tv_cache[on] = frame
+    f = _tv_cache[on]
+    if not f or not f["date_ok"]:
+        return None
+    v = f["tv"].get(symbol)
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 and v == v else None
+
 # ── DERIVED SERIES THE TRIGGERS NEED ──────────────────────────────
 
 # ── CORPORATE ACTIONS ─────────────────────────────────────────────

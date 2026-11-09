@@ -384,7 +384,11 @@ def run(on: date, *, dry_run=False, sender=None, getter=None, symbols=None,
         return 1
     if not tc.is_trading_day(on):
         msg = (f"📊 <b>VOLUME ≥{VOL_MULT:g}× — {on.isoformat()} ({on.strftime('%a')})</b>: "
-               f"not an NSE trading session. Nothing to measure.")
+               f"not an NSE trading session. Nothing to measure."
+               # The exit-alarm line rides this message on EVERY day it runs,
+               # session or not: it is where outstanding alarms are seen
+               # outside market hours (D-058), and Saturday exists for that.
+               f"\n{html.escape(_exit_alarms())}")
         if dry_run:
             printer(msg)
             return 0
