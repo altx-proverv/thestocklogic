@@ -75,8 +75,6 @@ def fetch_signals() -> pd.DataFrame:
 
     Candidates (publication_kind='candidate') are the loop's watchlist and are NOT
     scored: see the query below for why that has to be explicit."""
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/signals"
         # publication_kind=eq.signal EXCLUDES THE WATCHLIST. Candidates are valid
         # setups the loop watches but that were not actionable at publish time, and
         # there are roughly 90 a session against 3 signals. Scoring them would
@@ -96,13 +94,22 @@ def fetch_signals() -> pd.DataFrame:
         # that describes a different population from the one
         # traded. publication_kind is selected so the two can
         # still be reported apart.
-        f"?publication_kind=in.(signal,candidate)"
-        f"&select=signal_date,symbol,direction,setup_name,entry_ref,sl,target_1&limit=20000",
-        headers=_headers(), timeout=60)
-    if r.status_code != 200:
-        log.error(f"signal fetch failed: HTTP {r.status_code} {r.text[:200]}")
+    # PAGED since 2026-11-10 (audit D-T1D-24). One GET with limit=20000 returned
+    # an arbitrary 1,000 of 8,431 rows (no order): 6,745 signals dated
+    # 2026-10-05..11-09 got no marks while every run logged success.
+    try:
+        from engine.supabase_read import get_all, ReadFailed
+    except ImportError:
+        from supabase_read import get_all, ReadFailed
+    try:
+        rows = get_all(SUPABASE_URL, _headers(), "signals",
+                       "publication_kind=in.(signal,candidate)"
+                       "&select=signal_date,symbol,direction,setup_name,entry_ref,sl,target_1"
+                       "&order=signal_date.asc,id.asc")
+    except ReadFailed as e:
+        log.error(f"signal fetch failed: {e}")
         sys.exit(1)
-    df = pd.DataFrame(r.json())
+    df = pd.DataFrame(rows)
     if df.empty:
         return df
     df["signal_date"] = pd.to_datetime(df["signal_date"])

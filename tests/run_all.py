@@ -209,6 +209,7 @@ SUITES = [
     ("iv from bhavcopy",    [sys.executable, "tests/test_iv_bhav.py"]),
     ("claims registry",     [sys.executable, "tests/test_claims.py"]),
     ("close message",       [sys.executable, "tests/test_close_message.py"]),
+    ("paged reads",         [sys.executable, "tests/test_supabase_read.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
     # position_sizing's __main__ was registered here as a suite. It prints a table
     # and asserts nothing, so it could not fail -- removed 2026-11-10 (audit

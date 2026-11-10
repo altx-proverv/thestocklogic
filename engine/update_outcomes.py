@@ -52,18 +52,26 @@ def sb_headers():
     }
 
 
+def _get_all(path, params):
+    """Every row, paged (PostgREST caps a response at 1,000; audit D-T1D-21).
+    A failed page exits non-zero rather than scoring a partial set."""
+    try:
+        from engine.supabase_read import get_all, ReadFailed
+    except ImportError:
+        from supabase_read import get_all, ReadFailed
+    try:
+        return get_all(SUPABASE_URL, sb_headers(), path, params)
+    except ReadFailed as e:
+        log.error(f"could not read {path} completely: {e}")
+        sys.exit(1)
+
+
 def fetch_all_signals():
-    r = requests.get(
-        # publication_kind=eq.signal: candidates are the loop's watchlist, not
-        # calls, and computing outcomes for them would put ~90 rows a session into
-        # a record that describes published signals.
-        f"{SUPABASE_URL}/rest/v1/signals"
-        # CANDIDATES INCLUDED 2026-10-16 -- see mark_signals.
-        f"?publication_kind=in.(signal,candidate)"
-        f"&order=signal_date.asc&select=*&limit=5000",
-        headers=sb_headers()
-    )
-    return r.json()
+    # PAGED since 2026-11-10. The single GET below returned the OLDEST 1,000 of
+    # 8,431 rows, so signal_outcomes stopped at 2026-10-12 while every run
+    # logged success. Ordered by signal_date then id so paging is stable.
+    return _get_all("signals", "publication_kind=in.(signal,candidate)"
+                               "&order=signal_date.asc,id.asc&select=*")
 
 
 DECIDED = ("WIN_T1", "WIN_T2", "LOSS", "MISSED", "INVALIDATED")
@@ -83,16 +91,11 @@ def nat_key(row) -> tuple:
 
 def fetch_existing_outcomes():
     """Natural keys already decided. Anything else is re-scored and upserted."""
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/signal_outcomes"
-        f"?select=signal_date,symbol,direction,outcome",
-        headers=sb_headers(), timeout=30
-    )
-    if r.status_code != 200:
-        log.error(f"could not read existing outcomes: HTTP {r.status_code} {r.text[:200]}")
-        sys.exit(1)
-    decided = {nat_key(row) for row in r.json() if (row.get("outcome") or "") in DECIDED}
-    return decided
+    # PAGED: unpaged this saw 1,000 of the table's rows, so outcomes already
+    # decided past that point were re-scored and re-upserted every night.
+    rows = _get_all("signal_outcomes", "select=signal_date,symbol,direction,outcome"
+                                       "&order=signal_date.asc,symbol.asc,direction.asc")
+    return {nat_key(row) for row in rows if (row.get("outcome") or "") in DECIDED}
 
 
 def load_stock(symbol):

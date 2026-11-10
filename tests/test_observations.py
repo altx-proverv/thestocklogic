@@ -303,11 +303,11 @@ PUBLISHERS = {
 }
 # Writers to those tables that publish no new observation, with the reason.
 NOT_PUBLISHERS = {
-    "engine/mark_signals.py":
-        "reads signals; posts signal_marks / market_marks -- outcomes of "
-        "published signals, not new observations",
-    "engine/update_outcomes.py":
-        "reads signals; posts signal_outcomes",
+    # engine/mark_signals.py and engine/update_outcomes.py were listed here: they
+    # matched only through the literal rest/v1/signals of their READ. Since
+    # 2026-11-10 that read goes through engine/supabase_read.get_all, so neither
+    # mentions a rendered table; both post only signal_marks / market_marks /
+    # signal_outcomes. Removed as dead entries, per the check below.
     "atlas/signal/market_open.py":
         "reads signals; posts atlas_entry_log and atlas_live_zones -- ATLAS's "
         "live view of a batch already recorded when 06_push published it",
