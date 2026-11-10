@@ -331,6 +331,33 @@ Rule: a failed read must never return the same value as a successful empty read 
 - Rules agreed: IV only from strikes that TRADED that session (untraded -> UNKNOWN, never a number); Black-76 on the same-expiry future; for index weeklies the forward backed out of traded call/put parity; lot size per contract. Rebuild one year from the archive; keep meridian/iv_recorder.py running until bhavcopy IV is validated against its 27 overlapping sessions. Blocked on D-078.
 
 
+### D-081 · Weekly-structure gate has never fired (operator, 2026-11-10) -- record, do not fix yet
+- VERIFIED 2026-11-10: weekly_trend = "ranging" on all 661,381 rows in the box's 743 SMC parquets. 02b_smc_signals.py:825-834 resamples to weekly bars dated SUNDAY and merges them on `date` against weekday rows, so nothing matches and fillna("ranging") fills every row; 03b's weekly_structure_misaligned gate can therefore never fire. Unchanged since 2026-06-11.
+- **Before any fix (operator):** measure what the gate WOULD have done -- how many published signals it would have blocked, by date and direction -- because every historical outcome was produced without it. Then decide.
+
+### D-082 · Licence register: re-verify every row against what the surfaces render (operator, 2026-11-10)
+- compliance/data_rights.csv has 25 rows (22 unconfirmed, 3 provisional link-only education sources), not 21.
+- At least one classification is wrong: the Kite tick stream says "nothing displayed", but rbe_engine writes breadth_snapshots, intraday_prices and heavy_quiet from those ticks and home.html renders all three with the anon key.
+- To do: for each row, list the surfaces (page + table + column) that render data derived from it and correct the display/redistribution fields. The file is also served publicly at /compliance/data_rights.csv.
+
+### D-083 · A holiday run of the EOD chain deleted the 9 Nov watchlist (found 2026-11-10)
+- VERIFIED from cron.log and the signals table: the 13:05 UTC chain ran on 2026-11-10 (NSE holiday; cron is Mon-Fri) and re-published 2026-11-09. Signals: the same 78 deleted and re-inserted. Candidates: refused by the observation ledger (HTTP 400 PGRST102 "All object keys must match"), after the signal step had already deleted the previous night's 167 candidates.
+- Two defects: (1) 06_push_supabase.py:405-408 collects EVERY row for the date as "superseded" (no publication_kind filter), so the signal step deletes the candidates and relies on the candidate step to replace them; (2) engine/observations.py:267-274 builds a batch mixing plain rows with correction rows (extra keys corrects_observation_id, correction_reason), which PostgREST rejects as a bulk insert.
+- Effect: 2026-11-09 has 0 candidates. market_open.get_signals reads every row for the latest batch date, so the 2026-11-11 session sees 78 signals and no watchlist. Restoring needs the ledger fix and a re-publish (a production write): operator decision.
+- Root: weekday cron, not trading-day cron. 01b logged "not an NSE trading day" and the chain continued.
+
+### D-084 · Reads truncated at PostgREST's 1,000-row cap (measured 2026-11-10)
+- The cap is measured, not assumed: signals?limit=20000 returns 1,000.
+- FIXED: update_outcomes (signals, signal_outcomes) and mark_signals (signals) now go through engine/supabase_read.get_all (99fee2b).
+- STILL TRUNCATING, each measured against the table:
+  - home.html:2437 daily_closes limit=1600: gets 1,000; 744 rows/session, so the second session arrives with 256 rows.
+  - signals.html:545 signals, 30-day window: 2,617 rows exist, page gets 1,000.
+  - signals.html:627 signal_outcomes, no limit and no order: 1,000 of 2,318, an arbitrary subset.
+  - session_report.py:129 (limit=5000), daily_report.py:244 and engine_report.py:105 atlas_entry_log for one day: 21 of 48 days exceed 1,000 (max 13,745).
+  - engine/trade_review.py:36 signals limit=2000: 1,000 of 3,585.
+- Within the cap today but unbounded: every atlas_trades read (71 rows), live_prices (746, read with limit=2000), live_signals per day (max 240), signals per batch date (max ~330).
+- Already paged before tonight: excursions, learning_loop, score_live_outcomes, radar.store, observations, score_observations: six hand-rolled pagers, now a seventh shared one.
+
 ### D-080 · Box disk headroom
 - **Status** open · VERIFIED 2026-11-10: 1.1 GB free of 6.7 GB (84%) after the F&O backfill (274 MB) and IV rebuild (~2 MB); disk alarm at 500 MB. The F&O fetch keeps a zstd parquet only (~1.25 MB/session, ~310 MB/year) -- the raw CSV (~7.5 MB) is validated and dropped, because a year of raw files (~1.9 GB) does not fit. At that rate the alarm fires in roughly two years of F&O alone, sooner with everything else growing. Not addressed.
 
