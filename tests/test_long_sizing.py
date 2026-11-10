@@ -6,6 +6,7 @@ hand in the comment beside it -- not read back from the code. Nothing is
 fetched; the share store, the price frame and the traded values are planted.
 """
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -151,6 +152,18 @@ fr4.loc[i + 1:, "prev_close"] = 50.0
 check("a split after the count's quarter -> refused",
       "after the" in (Z.size_symbol("X", 1e8, today=date(2026, 11, 10), store=store("X", 1e9),
                                     frame=fr4)["refused"] or ""), True)
+
+print("\nNO HISTORY FILE IS A REFUSAL, NOT A CRASH")
+_orig = Z.SMC_DIR
+Z.SMC_DIR = Path(tempfile.mkdtemp())
+r = Z.size_symbol("NOFILE", 1e8, today=date(2026, 11, 10), store=store("NOFILE", 1e9))
+check("a symbol with no SMC parquet is refused, not raised", "no price history file" in (r.get("refused") or ""), True)
+(Z.SMC_DIR / "BAD.parquet").write_text("not a parquet")
+r = Z.size_symbol("BAD", 1e8, today=date(2026, 11, 10), store=store("BAD", 1e9))
+check("an unreadable parquet is refused, not raised", "unreadable" in (r.get("refused") or ""), True)
+r = Z.size_symbol("E", 1e8, today=date(2026, 11, 10), store=store("E", 1e9), frame=fr.iloc[0:0])
+check("an empty frame is refused", r.get("refused"), "price history is empty")
+Z.SMC_DIR = _orig
 
 if failures:
     print(f"FAILED — {len(failures)}")

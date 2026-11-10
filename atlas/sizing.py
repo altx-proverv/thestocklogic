@@ -231,7 +231,23 @@ def size_symbol(symbol: str, total_capital: float | None, entry: float | None = 
     from engine.price_basis import discontinuities
     from radar.bars import session_traded_value
 
-    df = frame if frame is not None else pd.read_parquet(SMC_DIR / f"{symbol}.parquet")
+    # NO HISTORY FILE IS A REFUSAL, NOT AN EXCEPTION. A universe symbol can have
+    # no SMC parquet (a rename such as HEGAM, ICICIPRULI -> ICICILIFE): it raised
+    # FileNotFoundError here, which the entry path happened to catch. The sizer
+    # says so itself rather than relying on every caller to.
+    if frame is None:
+        p = SMC_DIR / f"{symbol}.parquet"
+        try:
+            df = pd.read_parquet(p)
+        except FileNotFoundError:
+            return {"symbol": symbol, "entry": entry, "refused": f"no price history file ({p.name})"}
+        except Exception as e:
+            return {"symbol": symbol, "entry": entry,
+                    "refused": f"price history unreadable ({p.name}: {type(e).__name__})"}
+    else:
+        df = frame
+    if df is None or not len(df) or "date" not in df.columns:
+        return {"symbol": symbol, "entry": entry, "refused": "price history is empty"}
     df = df.sort_values("date").reset_index(drop=True)
     last = df.iloc[-1]
     asof = pd.Timestamp(last["date"]).date()
