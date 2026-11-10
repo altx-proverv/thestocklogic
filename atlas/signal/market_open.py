@@ -1707,8 +1707,24 @@ def serve() -> int:
     state.write()
     log.info(f"window closed — {state.summary()}")
     send(f"<b>ATLAS ENGINE DOWN [{mode}]</b>\n{state.summary()}\n"
-         + ("\n".join(state.entered[:10]) if state.entered else "no entries"))
+         + entered_lines(state.entered))
     return 0
+
+
+def entered_lines(entered: list) -> str:
+    """The close message's entry list. state.entered holds DICTS (see the append
+    in cycle()); joining them raised TypeError at the close on any day with an
+    entry, after state.write() and before the message was sent (audit D-T1A-6)."""
+    if not entered:
+        return "no entries"
+    out = []
+    for e in entered[:10]:
+        if isinstance(e, dict):
+            out.append(f"{e.get('symbol', '?')} {e.get('direction', '?')} "
+                       f"{e.get('qty', '?')} @ {e.get('entry', '?')} ({e.get('at', '?')})")
+        else:
+            out.append(str(e))
+    return "\n".join(out)
 
 
 def run() -> None:
