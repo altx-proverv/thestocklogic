@@ -298,11 +298,7 @@ def push_to_supabase(sector_df: pd.DataFrame):
 
     signal_date = sector_df["date"].max().strftime("%Y-%m-%d")
 
-    # Delete existing for this date
-    requests.delete(
-        f"{url}/rest/v1/sector_heatmap?signal_date=eq.{signal_date}",
-        headers=headers
-    )
+    # Replaced below once the new rows are stored, not deleted first (D-083).
 
     records = []
     for _, row in sector_df.iterrows():
@@ -322,16 +318,12 @@ def push_to_supabase(sector_df: pd.DataFrame):
             "market_direction": row["market_direction"],
         })
 
-    r = requests.post(
-        f"{url}/rest/v1/sector_heatmap",
-        headers=headers,
-        json=records
-    )
-
-    if r.status_code in (200, 201):
+    from engine.supabase_replace import replace_rows
+    if replace_rows(url, headers, "sector_heatmap",
+                    f"signal_date=eq.{signal_date}", records):
         log.info(f"✓ Pushed {len(records)} sector records to Supabase")
     else:
-        log.error(f"Push failed: {r.status_code} — {r.text}")
+        log.error("sector heatmap push failed — previous rows kept")
 
 
 def print_heatmap(sector_df: pd.DataFrame):

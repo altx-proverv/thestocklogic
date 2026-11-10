@@ -417,9 +417,18 @@ def push_signals(target_date: str = None):
     day_str  = d.strftime("%Y-%m-%d")
     base_url = f"{SUPABASE_URL}/rest/v1/signals"
 
+    # SCOPED TO THIS STEP'S OWN ROWS (D-083). This read had no publication_kind
+    # filter, so the ids it collected -- and the delete below -- included the
+    # date's CANDIDATES. The delete was conditional on the SIGNAL insert, never on
+    # the candidates being replaced; push_candidates was trusted to put them back.
+    # On 2026-11-10 the candidate step was refused and 167 watchlist rows for
+    # 9 Nov were gone. Each step now deletes only its own kind, and only after its
+    # own replacement is stored. NULL is the pre-publication_kind era: signals.
+    OWN_SIGNALS = "or=(publication_kind.is.null,publication_kind.eq.signal)"
     old_ids = []
     try:
-        r_old = requests.get(f"{base_url}?signal_date=eq.{day_str}&select=id",
+        r_old = requests.get(f"{base_url}?signal_date=eq.{day_str}&{OWN_SIGNALS}"
+                             f"&select=id",
                              headers=headers, timeout=30)
         if r_old.status_code == 200:
             old_ids = [row["id"] for row in r_old.json()]
@@ -447,7 +456,8 @@ def push_signals(target_date: str = None):
 
     if old_ids:
         del_r = requests.delete(
-            f"{base_url}?signal_date=eq.{day_str}&id=in.({','.join(map(str, old_ids))})",
+            f"{base_url}?signal_date=eq.{day_str}&{OWN_SIGNALS}"
+            f"&id=in.({','.join(map(str, old_ids))})",
             headers=headers, timeout=30)
         if del_r.status_code in (200, 204):
             log.info(f"Superseded {len(old_ids)} previous row(s) for {day_str}")
@@ -822,6 +832,20 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
 
     # Insert BEFORE deleting, same order as the signal path: a failed insert must
     # leave the previous watchlist intact rather than emptying it.
+    #
+    # THE IDS TO SUPERSEDE ARE TAKEN BEFORE THE INSERT (D-083). This used to list
+    # every candidate id for the date AFTER inserting and drop the last len(recs),
+    # i.e. it assumed the new rows held the highest ids. Taking them first means
+    # the delete names exactly the rows that existed before this run, and runs only
+    # once the replacement is stored. An unreadable list deletes nothing.
+    old_c = requests.get(
+        f"{base_url}?signal_date=eq.{day_str}&publication_kind=eq.candidate"
+        f"&select=id", headers=headers, timeout=30)
+    if old_c.status_code != 200:
+        log.error(f"could not list existing candidates for {day_str} "
+                  f"({old_c.status_code}) — not publishing, nothing deleted")
+        return 0
+    old_cids = [x["id"] for x in old_c.json()]
     _refuse_if_excluded(recs, "candidates")
     from engine import observations
     if not observations.record(observations.from_rows(
@@ -835,16 +859,16 @@ def push_candidates(d, headers: dict, base_url: str) -> int:
         return 0
     log.info(f"✓ Published {len(recs)} candidate(s) for {day_str}")
 
-    old = requests.get(
-        f"{base_url}?signal_date=eq.{day_str}&publication_kind=eq.candidate"
-        f"&select=id&order=id.asc", headers=headers, timeout=30)
-    if old.status_code == 200:
-        ids = [x["id"] for x in old.json()][:-len(recs)] if len(old.json()) > len(recs) else []
-        if ids:
-            requests.delete(
-                f"{base_url}?id=in.({','.join(map(str, ids))})"
-                f"&publication_kind=eq.candidate", headers=headers, timeout=30)
-            log.info(f"  removed {len(ids)} superseded candidate row(s)")
+    if old_cids:
+        d_r = requests.delete(
+            f"{base_url}?signal_date=eq.{day_str}&publication_kind=eq.candidate"
+            f"&id=in.({','.join(map(str, old_cids))})", headers=headers, timeout=30)
+        if d_r.status_code in (200, 204):
+            log.info(f"  removed {len(old_cids)} superseded candidate row(s)")
+        else:
+            log.error(f"DUPLICATE CANDIDATES: new watchlist inserted but the "
+                      f"{len(old_cids)} previous row(s) could not be deleted "
+                      f"({d_r.status_code} {d_r.text[:120]})")
     return len(recs)
 
 

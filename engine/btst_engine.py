@@ -374,25 +374,15 @@ def push_btst_signals(signals: list) -> bool:
         log.error("BTST not published: observation ledger refused it")
         return False
 
-    # Clear existing BTST signals for today from live_signals
-    requests.delete(
-        f"{SUPABASE_URL}/rest/v1/live_signals"
-        f"?signal_date=eq.{today}&session=eq.btst",
-        headers=_headers()
-    )
-
-    r = requests.post(
-        f"{SUPABASE_URL}/rest/v1/live_signals",
-        headers=_headers(),
-        json=records
-    )
-
-    if r.status_code in (200, 201):
+    # REPLACE, NOT DELETE-THEN-INSERT (D-083): the old BTST rows go only once
+    # the new ones are stored. engine/supabase_replace.py has the reasoning.
+    from engine.supabase_replace import replace_rows
+    if replace_rows(SUPABASE_URL, _headers(), "live_signals",
+                    f"signal_date=eq.{today}&session=eq.btst", records):
         log.info(f"Pushed {len(records)} BTST signals to live_signals")
         return True
-    else:
-        log.error(f"Push failed: {r.status_code} {r.text[:100]}")
-        return False
+    log.error("BTST push failed — see the error above; previous rows kept")
+    return False
 
 
 def main():

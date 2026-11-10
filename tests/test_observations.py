@@ -322,6 +322,10 @@ def writes_in(fn):
                 and n.func.attr in ("post", "delete", "patch", "put") \
                 and getattr(n.func.value, "id", None) == "requests":
             out.append(n.lineno)
+        # engine.supabase_replace.replace_rows inserts and deletes (D-083); a
+        # publisher routed through it still writes, and must still record first.
+        elif isinstance(n, ast.Call) and getattr(n.func, "id", None) == "replace_rows":
+            out.append(n.lineno)
     return out
 
 
@@ -369,6 +373,7 @@ for (path, name), what in sorted(PUBLISHERS.items()):
 # classified, or the next publisher is born unrecorded.
 POSTS = re.compile(r"requests\.post\(")
 TABLE = re.compile(r"rest/v1/(" + "|".join(RENDERED) + r")\b")
+REPLACES = re.compile(r"replace_rows\(.{0,200}?[\"'](" + "|".join(RENDERED) + r")[\"']", re.S)
 found = set()
 for d in ("engine", "atlas", "radar", "meridian", "tools"):
     for f in sorted((ROOT / d).rglob("*.py")):
@@ -378,7 +383,7 @@ for d in ("engine", "atlas", "radar", "meridian", "tools"):
             src = executable_source(f)
         except SyntaxError:
             continue
-        if TABLE.search(src) and POSTS.search(src):
+        if (TABLE.search(src) and POSTS.search(src)) or REPLACES.search(src):
             found.add(str(f.relative_to(ROOT)))
 classified = {p for p, _ in PUBLISHERS} | set(NOT_PUBLISHERS)
 check("every module that posts to a rendered table is classified",
@@ -391,10 +396,11 @@ check("  and nothing classified has stopped matching",
 _probe = ast.parse(
     "def a():\n    requests.post(u)\n"
     "def b():\n    requests.post(u)\n    observations.record(x)\n"
-    "def c():\n    observations.record(x)\n    requests.delete(u)\n    requests.post(u)\n")
+    "def c():\n    observations.record(x)\n    requests.delete(u)\n    requests.post(u)\n"
+    "def d():\n    replace_rows(u, h, 'live_signals', s, r)\n    observations.record(x)\n")
 _fns = {(f"p{n.name}", n.name): n for n in _probe.body}
 check("BITE: missing record, and record after the post, are both caught",
-      len(ordering_violations({k: "" for k in _fns}, _fns)), 2)
+      len(ordering_violations({k: "" for k in _fns}, _fns)), 3)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -419,6 +425,13 @@ check("different values on a 'correct' type append a correction of the original"
 ex2 = ex + [{"observation_id": "c1", "natural_key": r1["natural_key"],
              "values_sha256": r2["values_sha256"], "corrects_observation_id": "o1"}]
 check("  and repeating the corrected values is nothing", obs.plan([r2], ex2), [])
+# D-083: a batch mixing an original with a correction must be one shape, or
+# PostgREST refuses the whole insert (PGRST102). The 9 Nov watchlist died here.
+r_new = obs.build("signal", symbol="Y", session_date="2026-10-16", direction="LONG",
+                  computed_values={"a": 1}, source_file="t")
+mixed = obs.plan([r2, r_new], ex)
+check("a mixed original+correction batch has one key set (PGRST102)",
+      (len(mixed), len({tuple(sorted(x)) for x in mixed})), (2, 1))
 h1, h2 = row("heavy_quiet", {"r": 1}), row("heavy_quiet", {"r": 2})
 exh = [{"observation_id": "o", "natural_key": h1["natural_key"],
         "values_sha256": h1["values_sha256"], "corrects_observation_id": None}]

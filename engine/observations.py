@@ -265,7 +265,13 @@ def plan(batch: list, existing: list) -> list:
             continue
         seen.add(k)
         if k not in originals:
-            out.append(row)
+            # EVERY ROW CARRIES THE SAME KEYS (D-083). PostgREST refuses a bulk
+            # insert whose objects differ in their keys (PGRST102, "All object
+            # keys must match"). Originals lacked the two correction fields that
+            # corrections carry, so any batch mixing a new symbol with a changed
+            # one was refused whole -- the 2026-11-10 holiday run's watchlist.
+            out.append({**row, "corrects_observation_id": None,
+                        "correction_reason": None})
             continue
         if current.get(k) == row["values_sha256"]:
             continue

@@ -534,13 +534,16 @@ for mod in sorted(GATED):
 # list. This is the assertion that stops the next writer being forgotten --
 # without it, the eleven unguarded publishers would simply have become twelve.
 POST = re.compile(r"requests\.(post|patch|put|delete)|session\.(post|patch)")
+REPLACE = re.compile(r"(?<!def )\breplace_rows\(")
 discovered = []
 for d in ("atlas", "engine", "radar"):
     for f in sorted((ROOT / d).rglob("*.py")):
         if "legacy" in f.parts or "__pycache__" in f.parts:
             continue
         txt = f.read_text(encoding="utf-8", errors="replace")
-        if "rest/v1" in txt and POST.search(txt):
+        # A write routed through engine.supabase_replace (D-083) names no
+        # rest/v1 URL of its own; the call is the write.
+        if ("rest/v1" in txt and POST.search(txt)) or REPLACE.search(txt):
             discovered.append(str(f.relative_to(ROOT)))
 
 classified = set(GATED) | set(EXEMPT)

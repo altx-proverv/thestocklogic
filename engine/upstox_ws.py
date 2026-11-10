@@ -355,17 +355,14 @@ def push_live_signals(signals: list, session: str):
         log.error(f"live signals ({session}) not published: ledger refused them")
         return
 
-    # Delete existing live signals for today's session -- AFTER the ledger, so
-    # a refused ledger leaves the previous rows rather than an empty session.
-    requests.delete(
-        f"{url}/rest/v1/live_signals?signal_date=eq.{today}&session=eq.{session}",
-        headers=headers
-    )
-    r = requests.post(f"{url}/rest/v1/live_signals", headers=headers, json=records)
-    if r.status_code in (200, 201):
+    # Replace AFTER the ledger, so a refused ledger leaves the previous rows; and
+    # replace rather than delete-then-insert, so a refused INSERT does too (D-083).
+    from engine.supabase_replace import replace_rows
+    if replace_rows(url, headers, "live_signals",
+                    f"signal_date=eq.{today}&session=eq.{session}", records):
         log.info(f"Pushed {len(records)} live signals for session: {session}")
     else:
-        log.error(f"Push failed: {r.status_code} — {r.text[:100]}")
+        log.error(f"live signals push failed ({session}) — previous rows kept")
 
 
 
@@ -385,11 +382,8 @@ def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
         "Prefer":        "resolution=merge-duplicates",
     }
 
-    # Delete existing live sector data for today's session
-    requests.delete(
-        f"{supabase_url}/rest/v1/sector_heatmap?signal_date=eq.{today}",
-        headers=headers, timeout=HTTP_TIMEOUT
-    )
+    # Today's rows are replaced below, after the new ones are built and stored
+    # (D-083) -- this used to delete them first, unconditionally.
 
     records = []
     for _, row in sector_df.iterrows():
@@ -409,22 +403,17 @@ def push_live_regime(sector_df: pd.DataFrame, session: str, stock_df=None):
             "market_direction": row.get("market_direction", "mixed"),
         })
 
-    r = requests.post(
-        f"{supabase_url}/rest/v1/sector_heatmap",
-        headers=headers, json=records, timeout=HTTP_TIMEOUT
-    )
-    if r.status_code in (200, 201):
+    from engine.supabase_replace import replace_rows
+    if replace_rows(supabase_url, headers, "sector_heatmap",
+                    f"signal_date=eq.{today}", records, timeout=HTTP_TIMEOUT):
         log.info(f"Live regime pushed to Supabase — session: {session}")
         regime = sector_df.iloc[0].get("market_direction","mixed").upper()
         top2   = sector_df[sector_df["trade_bias"]=="long"]["sector"].tolist()[:2]
         bot2   = sector_df[sector_df["trade_bias"]=="short"]["sector"].tolist()[:2]
         log.info(f"Regime: {regime} | Long: {top2} | Short: {bot2}")
     else:
-        # Body, not just the status. This function already checked its response
-        # -- which is why the regime feed works and live_prices did not -- but a
-        # bare status code would not name the next PGRST failure either.
-        log.error(f"Live regime push failed: HTTP {r.status_code} "
-                  f"{(r.text or '').strip()[:300] or '(empty body)'}")
+        # replace_rows has already logged the status and body.
+        log.error(f"Live regime push failed ({session}) — previous rows kept")
 
 
 def run_session_update():
