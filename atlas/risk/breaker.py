@@ -565,7 +565,19 @@ if __name__ == "__main__":
     SENTINEL = Path(tempfile.mkdtemp()) / "halt"
     requests.patch = lambda *a, **k: type("R", (), {"status_code": 204, "text": ""})()
     import atlas.reporting.telegram as _tg
-    _tg.send = lambda *a, **k: True
+    SENT = []
+    _tg.send = lambda msg, *a, **k: SENT.append(str(msg)) or True
+
+    # THE RULING THESE CASES ENCODE (ad1ddc4, 2026-10-16): a self-detected fault
+    # FLAGS -- it alerts, fails THAT cycle closed by returning False, and does
+    # not stand the day down. Only the operator's /pause and the kill switch
+    # halt. These cases expected halts until 2026-11-10 and printed DEFECTIVE
+    # while the process still exited 0, so the gate passed them (audit D-T1C-5).
+    def flagged(fn):
+        """-> (halted, flag alert sent, return value) for one call."""
+        SENT.clear()
+        rv = fn()
+        return (is_halted()[0], any("ATLAS FLAG" in m for m in SENT), rv)
 
     def fresh():
         SENTINEL.unlink(missing_ok=True)
@@ -573,13 +585,16 @@ if __name__ == "__main__":
 
     cases, ok = [], True
 
-    fresh(); record_ledger_write(False, 400, "PGRST204 missing column", phase="reserve")
-    cases.append(("4xx ledger rejection (deterministic)", is_halted()[0], True))
+    fresh()
+    cases.append(("4xx ledger rejection: flags, refuses, no halt",
+                  flagged(lambda: record_ledger_write(False, 400, "PGRST204", phase="reserve")),
+                  (False, True, False)))
 
     fresh(); record_ledger_write(False, 503, "gateway", phase="reserve")
     cases.append(("1 transient write failure", is_halted()[0], False))
-    record_ledger_write(False, 503, "gateway", phase="reserve")
-    cases.append(("2 consecutive transient writes", is_halted()[0], True))
+    cases.append(("2 consecutive transient writes: flag, no halt",
+                  flagged(lambda: record_ledger_write(False, 503, "gateway", phase="reserve")),
+                  (False, True, False)))
 
     fresh()
     record_ledger_write(False, 503, "x", phase="reserve")
@@ -587,32 +602,35 @@ if __name__ == "__main__":
     record_ledger_write(False, 503, "x", phase="reserve")
     cases.append(("a success breaks the run", is_halted()[0], False))
 
-    fresh(); record_ledger_write(False, None, "trade 7", phase="complete")
-    cases.append(("completion failed (position may exist)", is_halted()[0], True))
+    fresh()
+    cases.append(("completion failed: flag, no halt",
+                  flagged(lambda: record_ledger_write(False, None, "trade 7", phase="complete")),
+                  (False, True, False)))
 
     fresh()
     for _ in range(MAX_CONSECUTIVE_READ_FAILURES - 1):
         record_read(False, "positions", "timeout")
     cases.append((f"{MAX_CONSECUTIVE_READ_FAILURES - 1} consecutive read failures",
                   is_halted()[0], False))
-    record_read(False, "positions", "timeout")
-    cases.append((f"{MAX_CONSECUTIVE_READ_FAILURES} consecutive read failures",
-                  is_halted()[0], True))
+    _h, _f, _ = flagged(lambda: record_read(False, "positions", "timeout"))
+    cases.append((f"{MAX_CONSECUTIVE_READ_FAILURES} read failures: flag, no halt",
+                  (_h, _f), (False, True)))
 
     fresh()
     for _ in range(MAX_CONSECUTIVE_ORDER_REJECTS - 1):
         record_order_reject("X", "margin")
     cases.append((f"{MAX_CONSECUTIVE_ORDER_REJECTS - 1} order rejections",
                   is_halted()[0], False))
-    record_order_reject("X", "margin")
-    cases.append((f"{MAX_CONSECUTIVE_ORDER_REJECTS} order rejections",
-                  is_halted()[0], True))
+    cases.append((f"{MAX_CONSECUTIVE_ORDER_REJECTS} order rejections: flag, refuse, no halt",
+                  flagged(lambda: record_order_reject("X", "margin")),
+                  (False, True, False)))
 
     # The halt outlives the process, or a supervisor with Restart=always
     # simply resumes into the same failure.
-    fresh(); record_ledger_write(False, 400, "deterministic", phase="reserve")
+    # halt() is still what /pause and the kill switch use, and IT must persist.
+    fresh(); halt("SELFTEST", "operator-equivalent halt")
     _consecutive.clear()                       # everything in memory is gone
-    cases.append(("halt survives losing all memory", is_halted()[0], True))
+    cases.append(("halt() survives losing all memory", is_halted()[0], True))
 
     # A REPORTING WRITE MUST NEVER HALT, however long it fails for. The live view
     # was unwritable for a month because its failure was silent; the fix for that
@@ -644,7 +662,9 @@ if __name__ == "__main__":
     for label, got, want in cases:
         good = got == want
         ok &= good
-        print(f"  {label:<44} halts={str(got):<6} "
+        print(f"  {label:<52} got={str(got):<22} "
               f"{'ok' if good else '** expected ' + str(want) + ' **'}")
     SENTINEL.unlink(missing_ok=True)
     print("\nBREAKER:", "correct" if ok else "*** DEFECTIVE ***")
+    # A SELF-TEST THAT PRINTS DEFECTIVE AND EXITS 0 IS A GREEN GATE ON A RED TEST.
+    raise SystemExit(0 if ok else 1)

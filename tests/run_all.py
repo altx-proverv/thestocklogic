@@ -210,7 +210,13 @@ SUITES = [
     ("claims registry",     [sys.executable, "tests/test_claims.py"]),
     ("close message",       [sys.executable, "tests/test_close_message.py"]),
     ("breaker",        [sys.executable, "-m", "atlas.risk.breaker"]),
-    ("position sizing", [sys.executable, "-m", "atlas.risk.position_sizing"]),
+    # position_sizing's __main__ was registered here as a suite. It prints a table
+    # and asserts nothing, so it could not fail -- removed 2026-11-10 (audit
+    # D-T1C-5). The sizer is tested by tests/test_long_sizing.py and the gate
+    # bypass mutations below.
+    # THE MUTATION PROOF. It was in tests/ and never run: unregistered() only
+    # looked at test_*.py. It breaks shipped code on purpose and restores it.
+    ("gate-bypass mutations", [sys.executable, "tests/mutate_gate_bypass.py"]),
 ]
 
 # THE PAGE'S OWN LOGIC, run under node. Registered conditionally rather than
@@ -232,12 +238,23 @@ else:
                  "tests/home_freshness.js did not run')"])]
 
 
+# Files in tests/ that are deliberately not suites, each with the reason.
+NOT_A_SUITE = {
+    "run_all.py": "this runner",
+    "_srcutil.py": "a helper the suites import",
+    "__init__.py": "package marker",
+}
+
+
 def unregistered() -> list:
-    """tests/test_*.py files that no suite runs. A suite that is never run is
-    not a test -- nine written on 2026-11-09 sat here unrun until this check."""
+    """Every .py / .js in tests/ that no suite runs and NOT_A_SUITE does not
+    explain. A suite that is never run is not a test -- nine written on
+    2026-11-09 sat here unrun, and mutate_gate_bypass.py sat unrun until
+    2026-11-10 because this check looked only at test_*.py."""
     named = " ".join(" ".join(map(str, argv)) for _, argv in SUITES)
-    return sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
-                  if p.name not in named)
+    files = list((ROOT / "tests").glob("*.py")) + list((ROOT / "tests").glob("*.js"))
+    return sorted(p.name for p in files
+                  if p.name not in named and p.name not in NOT_A_SUITE)
 
 
 def main() -> int:
@@ -264,7 +281,14 @@ def main() -> int:
     if failed:
         print(f"FAILED: {', '.join(failed)}")
         return 1
-    print(f"All {len(SUITES)} suites passed.")
+    # A SKIPPED SUITE IS NOT A PASSED ONE. Absent node the page suites do not
+    # run; saying "all passed" over them is a green that covers nothing.
+    skipped = [l for l, _ in SUITES if "SKIPPED" in l]
+    if skipped:
+        print(f"{len(SUITES) - len(skipped)} suites passed; {len(skipped)} SKIPPED "
+              f"and NOT run: {', '.join(skipped)}")
+    else:
+        print(f"All {len(SUITES)} suites passed.")
     return 0
 
 
