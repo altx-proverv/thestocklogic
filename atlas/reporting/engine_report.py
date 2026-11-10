@@ -70,6 +70,10 @@ MAX_ENTRIES_SHOWN = 10
 # Two trading days: one holiday or one failed night is not an alarm,
 # two consecutive is. Short on purpose -- IV history is unrecoverable.
 MERIDIAN_MAX_AGE_DAYS = 2
+# The recorder was STOPPED by the operator on this date (D-079: it stored IVs for
+# untraded ATM strikes and wrote rows on NSE holidays). Its rows are kept, in its
+# own table. After this date a NEW row is the alarm, not an old one.
+MERIDIAN_RECORDER_STOPPED = "2026-11-10"
 MAX_SKIP_REASONS_SHOWN = 8
 TELEGRAM_LIMIT = 4000
 
@@ -214,6 +218,13 @@ def meridian_iv_health() -> tuple:
                     "A year of IV history cannot be back-filled — every night "
                     "missed is gone."), True
         last = str(rows[0].get("trade_date"))[:10]
+        if MERIDIAN_RECORDER_STOPPED:
+            if last >= MERIDIAN_RECORDER_STOPPED:
+                return (f"  ⚠️ WRITING AFTER ITS STOP: newest row {last}, but the "
+                        f"recorder was stopped {MERIDIAN_RECORDER_STOPPED} (D-079)."), True
+            return (f"  stopped {MERIDIAN_RECORDER_STOPPED} by the operator (D-079); "
+                    f"newest recorder row {last}, kept. IV now comes from the "
+                    f"F&O bhavcopy."), False
         age = (now_ist().date() - date.fromisoformat(last)).days
         if age > MERIDIAN_MAX_AGE_DAYS:
             return (f"  ⚠️ STALE. Newest IV row is {last}, {age} day(s) old. "

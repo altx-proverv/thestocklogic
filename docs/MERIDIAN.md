@@ -2,13 +2,15 @@
 
 **v2 · 28 Aug 2026 · runs parallel to ATLAS**
 
-> **STATUS (corrected 2026-11-10) — ONE PART IS BUILT AND RUNNING**
+> **STATUS (2026-11-10) — THE IV RECORDER IS STOPPED**
 >
-> This banner used to say nothing here was built. That was false from 2 Oct
-> 2026: meridian/iv_recorder.py and meridian/fno_universe.py run from cron
-> twice each session (15:45 and 18:35 IST) and have written
-> meridian_iv_daily / meridian_iv_strikes / meridian_recorder_runs every
-> session since (27 sessions, 222 underlyings, all runs OK, as of 9 Nov).
+> meridian/iv_recorder.py ran from cron twice each session (15:45 and 18:35
+> IST) from 2 Oct to 9 Nov 2026, writing meridian_iv_daily /
+> meridian_iv_strikes / meridian_recorder_runs. The operator stopped it on
+> 10 Nov (OPEN D-079): it stored IVs for ATM strikes that did not trade
+> (median 50%, up to 401%) and wrote 217 rows on each of two NSE holidays.
+> Its rows are kept, in those tables, as recorder-sourced. IV is now computed
+> from the NSE F&O bhavcopy (meridian/iv_bhav.py), traded strikes only.
 > Everything else below is design intent. MERIDIAN no longer places orders:
 > the F&O books are signal generators (operator, 2026-11-10).
 >

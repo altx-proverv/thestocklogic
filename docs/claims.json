@@ -35,21 +35,15 @@
  ],
  "claims": [
   {
-   "id": "meridian-recorder-running",
+   "id": "meridian-recorder-stopped",
    "where": "docs/MERIDIAN.md",
-   "text": "ONE PART IS BUILT AND RUNNING",
+   "text": "THE IV RECORDER IS STOPPED",
    "checks": [
     {
      "module_exists": "meridian/iv_recorder.py"
     },
     {
-     "module_exists": "meridian/fno_universe.py"
-    },
-    {
-     "cron": "-m meridian.iv_recorder --label close"
-    },
-    {
-     "cron": "-m meridian.iv_recorder --label eod"
+     "not_cron": "-m meridian.iv_recorder"
     }
    ]
   },

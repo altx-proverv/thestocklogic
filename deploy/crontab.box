@@ -139,7 +139,7 @@ MAILTO=""
 # 15:45 IST — MERIDIAN's intraday IV snapshot. Runs at the close, deliberately
 # before the 18:35 EOD comparison snapshot, and both are kept until the better
 # time is settled by the data.
-15 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m meridian.iv_recorder --label close >> /home/ubuntu/logs/meridian_iv_close.log 2>&1
+# STOPPED 2026-11-10 (operator: untraded-strike IVs, holiday rows; D-079): 15 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m meridian.iv_recorder --label close >> /home/ubuntu/logs/meridian_iv_close.log 2>&1
 
 # 15:35 IST — did yesterday's open ATLAS positions hit anything
 5 10 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python3 atlas/execution/trade_outcome_checker.py >> /home/ubuntu/thestocklogic/reports/atlas.log 2>&1
@@ -159,7 +159,7 @@ MAILTO=""
 
 # 18:35 IST — MERIDIAN's EOD snapshot, alongside the chain. Different API, no
 # shared state, and the IV series cannot be back-filled so it does not wait.
-5 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m meridian.iv_recorder --label eod >> /home/ubuntu/logs/meridian_iv_eod.log 2>&1
+# STOPPED 2026-11-10 (operator: untraded-strike IVs, holiday rows; D-079): 5 13 * * 1-5 cd /home/ubuntu/thestocklogic && /home/ubuntu/thestocklogic/venv/bin/python -m meridian.iv_recorder --label eod >> /home/ubuntu/logs/meridian_iv_eod.log 2>&1
 
 # ══════════════════════════════════════════════════════════════════
 # AFTER THE CHAIN — resolve, then measure, then report

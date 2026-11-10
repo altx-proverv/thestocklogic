@@ -8,8 +8,8 @@ MERIDIAN -- implied volatility computed from the F&O bhavcopy (2026-11-10, OPEN 
 WHY. meridian/iv_recorder.py stores Upstox's IV twice a session and was built
 first because "no API sells IV history retrospectively". NSE's archive keeps
 every session's premiums, so a year of IV can be rebuilt from them. The
-recorder keeps running until this is validated against its sessions
-(operator, 2026-11-10).
+recorder was STOPPED on 2026-11-10 (operator, D-079); its rows stay in
+meridian_iv_daily as recorder-sourced.
 
 THE RULES (operator, 2026-11-10):
   * ONLY STRIKES THAT TRADED. An option with TtlTradgVol == 0 has a close NSE

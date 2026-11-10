@@ -202,10 +202,13 @@ print("\n── everything the repo ships is scheduled ──")
 # job that is broken: the table stays empty either way.
 MUST_RUN = ["engine.market_flash", "engine.reject_sample", "engine.excursions",
             "engine.score_live_outcomes", "engine.learning_loop",
-            "meridian.iv_recorder", "engine.tier1_fetch", "engine.fundamentals",
+            "engine.tier1_fetch", "engine.fundamentals",
             "engine.score_observations", "engine.surveillance_snapshot"]
 for mod in MUST_RUN:
     check(f"  {mod} is scheduled", mod in EXEC)
+# Stopped by the operator 2026-11-10 (D-079): it stored IVs for untraded ATM
+# strikes and wrote rows on NSE holidays. IV now comes from the F&O bhavcopy.
+check("meridian.iv_recorder is NOT scheduled (stopped, D-079)", "meridian.iv_recorder" not in EXEC)
 for script in ["engine/rbe_startup.py", "engine/rbe_engine.py",
                "engine/01b_download_bhavcopy.py", "engine/03b_score.py",
                "engine/06_push_supabase.py", "engine/mark_signals.py",

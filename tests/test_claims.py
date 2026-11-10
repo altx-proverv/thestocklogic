@@ -109,6 +109,11 @@ def run_check(root: Path, c: dict):
         cron = (root / "deploy" / "crontab.box").read_text()
         live = [l for l in cron.splitlines() if l.strip() and not l.lstrip().startswith("#")]
         return None if any(c["cron"] in l for l in live) else f"no crontab.box line runs {c['cron']!r}"
+    if "not_cron" in c:
+        cron = (root / "deploy" / "crontab.box").read_text()
+        live = [l for l in cron.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+        hit = [l for l in live if c["not_cron"] in l]
+        return None if not hit else f"a crontab.box line still runs {c['not_cron']!r}"
     if "called_only_in" in c:
         x = c["called_only_in"]
         bad = [str(p.relative_to(root)) for p in _py_files(root, x["scope"])
@@ -196,6 +201,9 @@ check("an unregistered NOT BUILT banner is caught", any("docs/X.md" in x for x i
 check("an unregistered 'Auto-generated' header is caught", any("pkg/a.py" in x for x in s["generated"]), True)
 check("a cron claim only in a COMMENT does not count",
       run_check(t, {"cron": "-m pkg.job"}) is not None, True)
+check("a job claimed stopped but still scheduled fails not_cron",
+      run_check(t, {"not_cron": "-m pkg.other"}) is not None, True)
+check("  and one only in a comment passes it", run_check(t, {"not_cron": "-m pkg.job"}), None)
 check("a called symbol fails called_only_in",
       run_check(t, {"called_only_in": {"symbol": "secret_fn", "allowed": [], "scope": ["pkg"]}}) is not None, True)
 check("an imported module fails not_imported",

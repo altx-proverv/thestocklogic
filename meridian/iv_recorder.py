@@ -1,6 +1,10 @@
 """
 MERIDIAN — the IV recorder.
 
+STOPPED 2026-11-10 by the operator (OPEN D-079): no cron line runs it. It stored
+IVs for ATM strikes that did not trade and wrote rows on NSE holidays. Its rows
+are kept as recorder-sourced; IV now comes from meridian/iv_bhav.py.
+
     python3 -m meridian.iv_recorder --label close      # 15:45 IST
     python3 -m meridian.iv_recorder --label eod        # 18:35 IST
     python3 -m meridian.iv_recorder --dry-run --limit 6
